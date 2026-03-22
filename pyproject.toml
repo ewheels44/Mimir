@@ -1,0 +1,36 @@
+[project]
+name = "mimir"
+version = "0.1.0"
+description = "Three-Layer AI Context System"
+requires-python = ">=3.10"
+dependencies = [
+    "kuzu>=0.6.0",
+    "mem0ai>=0.1.0",
+    "qdrant-client>=1.9.0",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.29.0",
+    "pytest>=8.0.0",
+    "mcp>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.3.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = ["E501"]

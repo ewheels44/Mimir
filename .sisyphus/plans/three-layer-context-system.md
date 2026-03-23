@@ -300,7 +300,7 @@ Max Concurrent: 5 (Waves 1, 2, 5)
 
 ### Wave 2: Core Clients (After Wave 1 — Max Parallel)
 
-- [ ] **T6. Memory Client (Mem0 Library)**
+- [x] **T6. Memory Client (Mem0 Library)**
   - What: Create `mimir/memory/client.py` wrapping Mem0 OSS. Implement: `add(messages, user_id, metadata)`, `search(query, user_id, limit, threshold)`, `delete(memory_id)`. Store custom types as metadata on Mem0 memories. Integrate with local Qdrant for vector storage.
   - Depends: T2, T4, T5
   - Blocks: T8, T10, T12, T18
@@ -308,7 +308,7 @@ Max Concurrent: 5 (Waves 1, 2, 5)
   - Skills: []
   - QA: `pytest tests/test_memory_client.py -v` passes
 
-- [ ] **T7. Graph Client (Kuzu + Qdrant Embeddings)**
+- [x] **T7. Graph Client (Kuzu + Qdrant Embeddings)**
   - What: Create `mimir/graph/client.py` with Kuzu embedded DB. Implement: `create_node(table, properties)`, `create_edge(from_id, to_id, rel_type, properties)`, `get_neighbors(node_id, depth)`, `find_path(from_id, to_id)`, `semantic_search(query, top_k)`. Sync embeddings to Qdrant collection `{project}_graph_nodes`.
   - Depends: T2, T3, T5
   - Blocks: T12, T13, T14, T15
@@ -316,7 +316,7 @@ Max Concurrent: 5 (Waves 1, 2, 5)
   - Skills: []
   - QA: `pytest tests/test_graph_client.py -v` passes
 
-- [ ] **T8. Memory Formatter**
+- [x] **T8. Memory Formatter**
   - What: Create `mimir/memory/formatter.py`. Takes raw Mem0 memories, formats compact context block. Target: < 250 tokens. Handles different memory types with different formatting.
   - Depends: T6
   - Blocks: T12
@@ -324,7 +324,7 @@ Max Concurrent: 5 (Waves 1, 2, 5)
   - Skills: []
   - QA: `python -c "from mimir.memory.formatter import format_memories; print(len(format_memories([...])) < 250)"` returns True
 
-- [ ] **T9. Relevance Ranker**
+- [x] **T9. Relevance Ranker**
   - What: Create `mimir/context/ranker.py`. Scores retrieved memories and graph nodes by relevance to current message. Only top-K make it into context.
   - Depends: None
   - Blocks: T12
@@ -332,7 +332,7 @@ Max Concurrent: 5 (Waves 1, 2, 5)
   - Skills: []
   - QA: `pytest tests/test_ranker.py -v` passes
 
-- [ ] **T10. Confidence Scoring Module**
+- [x] **T10. Confidence Scoring Module**
   - What: Create `mimir/extraction/confidence.py`. LLM-based confidence scoring for extracted facts. Returns 0.0-1.0 score. < 0.70 → reject, 0.70-0.85 → review queue, > 0.85 → auto-stage.
   - Depends: T6
   - Blocks: T18

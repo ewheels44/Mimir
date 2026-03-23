@@ -11,6 +11,7 @@ dependencies = [
     "uvicorn>=0.29.0",
     "pytest>=8.0.0",
     "mcp>=1.0.0",
+    "pyyaml>=6.0.0",
 ]
 
 [project.optional-dependencies]
@@ -19,6 +20,9 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "ruff>=0.3.0",
 ]
+
+[tool.setuptools.packages.find]
+include = ["mimir*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

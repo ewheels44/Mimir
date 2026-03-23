@@ -92,3 +92,48 @@
 - No requirements.txt created (uv manages this)
 - No Docker files created (as per requirements)
 - pyproject.toml includes pytest config and ruff linting config
+---
+
+# T9: Relevance Ranker
+
+## Completed
+- Created `mimir/context/__init__.py` exporting `Ranker`
+- Created `mimir/context/ranker.py` with `Ranker` class and `ScoredItem` dataclass
+- Created `tests/test_ranker.py` with 31 tests (all passing)
+- Fixed `pyproject.toml` to add `[tool.setuptools.packages.find]` with `include = ["mimir*"]` to resolve multi-top-level-package discovery error
+
+## Implementation
+- `_cosine_similarity(vec_a, vec_b)` — pure Python, no numpy; handles zero vectors (returns 0.0), raises ValueError on length mismatch
+- `Ranker.score_memory(memory, query_embedding)` — reads `memory["embedding"]`, delegates to cosine similarity
+- `Ranker.score_graph_node(node, query_embedding)` — reads `node["embedding"]`, delegates to cosine similarity
+- `Ranker.rank_items(items, query_embedding, top_k, item_type)` — scores all items, sorts descending, slices top_k; validates item_type ("memory" | "graph_node")
+- `ScoredItem` dataclass holds `item: Any` and `score: float`
+
+## Notes
+- No numpy/scipy dependency — stdlib `math` only
+- `pyproject.toml` needed `[tool.setuptools.packages.find]` because `schema/` directory was being picked up as a top-level package
+- `asyncio_mode = "auto"` in pytest config causes a warning (pytest-asyncio not installed), but tests pass fine
+
+---
+
+# T10: Confidence Scoring Module
+
+## Completed
+- Created `mimir/extraction/` package with `__init__.py` and `confidence.py`
+- `ConfidenceScorer` class uses OpenAI chat completions API (gpt-4o-mini by default)
+- `score_extraction(fact, context)` returns `ScoredFact` dataclass with score, threshold, reasoning
+- `ConfidenceThreshold` enum: REJECT / REVIEW / AUTO_STAGE
+- Threshold logic: < 0.70 → REJECT, 0.70–0.85 → REVIEW, > 0.85 → AUTO_STAGE
+- Score clamped to [0.0, 1.0] regardless of LLM output
+- Markdown code fence stripping in response parser (LLMs sometimes wrap JSON in ```json)
+- 39 tests, all passing — fully mocked (no real API calls)
+
+## Design Decisions
+- `openai.OpenAI` client injected via constructor for testability (no global state)
+- `temperature=0.0` default for deterministic scoring
+- `classify()` public helper for re-classifying a score without LLM call
+- `ScoredFact` is a dataclass (not TypedDict) to match `ScoredItem` pattern in ranker.py
+
+## Notes
+- openai package is installed (v2.29.0) but Pyright reports false-positive import error (venv not on Pyright path)
+- Pre-existing LSP errors in graph/client.py and memory/__init__.py are unrelated to this task

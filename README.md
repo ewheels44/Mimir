@@ -50,6 +50,7 @@ Your Project/                         # Any project directory
 | `PROJECT_ROOT` | Auto-detected | Override project root detection |
 | `KNOWLEDGE_DIR` | `.knowledge/llamaindex` | Vector index storage |
 | `DOCS_DIR` | `docs/` | Documents to index |
+| `CODE_DIRS` | (none) | Comma-separated code directories to index (e.g., `src,tests,lib`) |
 | `EMBEDDING_MODEL` | `text-embedding-3-small` | OpenAI-compatible embedding model |
 | `OPENROUTER_API_KEY` | From `~/.local/share/opencode/auth.json` | API key for embeddings |
 | `OPENAI_BASE_URL` | `https://openrouter.ai/api/v1` | API base URL |
@@ -100,6 +101,44 @@ python .opencode/setup.py
 
 # Or force reindex:
 python .opencode/setup.py --force
+```
+
+### Index Source Code
+
+By default, Mimir only indexes your `docs/` directory. To also index your source code:
+
+```bash
+# Index docs + src directory
+export CODE_DIRS=src
+python ~/Documents/Mimir/mcp_server_llamaindex.py --reindex
+
+# Index multiple directories
+export CODE_DIRS=src,tests,lib
+python ~/Documents/Mimir/mcp_server_llamaindex.py --reindex
+```
+
+**With OpenCode**: Add to your `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "mcp": {
+    "mimir-knowledge": {
+      "environment": {
+        "PROJECT_ROOT": "${workspaceFolder}",
+        "CODE_DIRS": "src,tests",
+        "DOCS_DIR": "${workspaceFolder}/docs"
+      }
+    }
+  }
+}
+```
+
+Now you can search both documentation and code:
+
+```
+"Find where the authentication middleware is defined"
+"How does the error handling work in src/utils?"
+"Show me all functions that use the database"
 ```
 
 ### CLI Queries

@@ -915,6 +915,58 @@ python ~/Documents/Mimir/mcp_server_llamaindex.py --stats
 python ~/Documents/Mimir/mcp_server_llamaindex.py --reindex
 ```
 
+### Indexing Your Source Code
+
+By default, Mimir only indexes your `docs/` directory. But you can also index your source code to enable semantic code search:
+
+```bash
+# Set CODE_DIRS environment variable
+export CODE_DIRS=src
+
+# Reindex to include both docs and code
+python ~/Documents/Mimir/mcp_server_llamaindex.py --reindex
+```
+
+**Multiple directories:**
+```bash
+export CODE_DIRS=src,tests,lib
+python ~/Documents/Mimir/mcp_server_llamaindex.py --reindex
+```
+
+**Now you can search your code:**
+```
+"Find where authentication middleware is defined"
+"How does error handling work in the utils module?"
+"Show me all database query functions"
+"What files import the Config class?"
+```
+
+**How it works:**
+- The `CODE_DIRS` variable accepts comma-separated paths
+- Each directory is recursively indexed along with `docs/`
+- Source files are chunked and embedded just like documentation
+- Semantic search finds code by meaning, not just function names
+
+**OpenCode Integration:**
+
+Add `CODE_DIRS` to your MCP configuration:
+
+```json
+{
+  "mcp": {
+    "mimir-knowledge": {
+      "environment": {
+        "PROJECT_ROOT": "${workspaceFolder}",
+        "CODE_DIRS": "src,tests",
+        "DOCS_DIR": "${workspaceFolder}/docs"
+      }
+    }
+  }
+}
+```
+
+Now your AI assistant understands both your documentation AND your codebase!
+
 ---
 
 ## Future Roadmap

@@ -13,6 +13,7 @@ Environment:
     PROJECT_ROOT: Override auto-detected project root
     KNOWLEDGE_DIR: Vector index storage path
     DOCS_DIR: Documents directory
+    CODE_DIRS: Comma-separated list of code directories to index (e.g., "src,lib,tests")
     EMBEDDING_MODEL: OpenAI-compatible model name (default: text-embedding-3-small)
     OPENAI_API_KEY: API key (can use OPENROUTER_API_KEY instead)
     OPENAI_BASE_URL: API base URL (default: OpenAI, use https://openrouter.ai/api/v1 for OpenRouter)
@@ -45,6 +46,7 @@ class ServerConfig:
     project_root: Path
     knowledge_dir: Path
     docs_dir: Path
+    code_dirs: list[Path]
     embedding_model: str
     api_key: str
     api_base: Optional[str]
@@ -76,6 +78,12 @@ class ServerConfig:
         if api_key and not api_base:
             api_base = "https://openrouter.ai/api/v1"
 
+        code_dirs_env = os.environ.get("CODE_DIRS", "")
+        if code_dirs_env:
+            code_dirs = [Path(d.strip()) for d in code_dirs_env.split(",") if d.strip()]
+        else:
+            code_dirs = []
+
         return cls(
             project_root=project_root,
             knowledge_dir=Path(
@@ -84,6 +92,7 @@ class ServerConfig:
                 )
             ),
             docs_dir=Path(os.environ.get("DOCS_DIR", project_root / "docs")),
+            code_dirs=code_dirs,
             embedding_model=os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small"),
             api_key=api_key,
             api_base=api_base,
@@ -160,13 +169,35 @@ class KnowledgeServer:
         return self._index
 
     def _create_index(self) -> VectorStoreIndex:
-        documents = SimpleDirectoryReader(
-            str(self.config.docs_dir), recursive=True
-        ).load_data()
+        all_documents = []
+
+        if self.config.docs_dir.exists():
+            docs = SimpleDirectoryReader(
+                str(self.config.docs_dir), recursive=True
+            ).load_data()
+            all_documents.extend(docs)
+
+        for code_dir in self.config.code_dirs:
+            if code_dir.exists():
+                try:
+                    code_docs = SimpleDirectoryReader(
+                        str(code_dir),
+                        recursive=True,
+                        filename_as_id=True,
+                    ).load_data()
+                    all_documents.extend(code_docs)
+                except Exception as e:
+                    print(
+                        f"[Knowledge Server] Warning: Could not index {code_dir}: {e}",
+                        file=sys.stderr,
+                    )
+
+        if not all_documents:
+            raise ValueError("No documents found to index")
 
         storage_context = StorageContext.from_defaults()
         index = VectorStoreIndex.from_documents(
-            documents, storage_context=storage_context
+            all_documents, storage_context=storage_context
         )
         index.storage_context.persist(persist_dir=str(self.config.knowledge_dir))
 
@@ -222,17 +253,24 @@ class KnowledgeServer:
             "project_root": str(self.config.project_root),
             "knowledge_dir": str(self.config.knowledge_dir),
             "docs_dir": str(self.config.docs_dir),
+            "code_dirs": [str(d) for d in self.config.code_dirs],
             "has_index": index is not None,
         }
 
         if index is not None:
             stats["document_count"] = len(index.storage_context.docstore.docs)
 
+        total_source_files = 0
         if self.config.docs_dir.exists():
             files = list(self.config.docs_dir.rglob("*"))
-            stats["source_files"] = len([f for f in files if f.is_file()])
-        else:
-            stats["source_files"] = 0
+            total_source_files += len([f for f in files if f.is_file()])
+
+        for code_dir in self.config.code_dirs:
+            if code_dir.exists():
+                files = list(code_dir.rglob("*"))
+                total_source_files += len([f for f in files if f.is_file()])
+
+        stats["source_files"] = total_source_files
 
         return stats
 

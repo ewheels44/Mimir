@@ -72,28 +72,50 @@ class ServerConfig:
         return "", None
 
     @classmethod
+    def _load_project_config(cls, project_root: Path) -> dict:
+        config_path = project_root / ".mimir" / "config.json"
+        if config_path.exists():
+            try:
+                with open(config_path) as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, IOError):
+                pass
+        return {}
+
+    @classmethod
     def from_env(cls) -> "ServerConfig":
         project_root = cls._detect_project_root()
         api_key, api_base = cls._get_api_key()
         if api_key and not api_base:
             api_base = "https://openrouter.ai/api/v1"
 
-        code_dirs_env = os.environ.get("CODE_DIRS", "")
-        if code_dirs_env:
+        project_config = cls._load_project_config(project_root)
+
+        docs_dir = Path(
+            project_config.get("docs_dir")
+            or os.environ.get("DOCS_DIR")
+            or project_root / "docs"
+        )
+
+        code_dirs = []
+        if "code_dirs" in project_config:
+            code_dirs = [Path(d) for d in project_config["code_dirs"]]
+        elif code_dirs_env := os.environ.get("CODE_DIRS", ""):
             code_dirs = [Path(d.strip()) for d in code_dirs_env.split(",") if d.strip()]
-        else:
-            code_dirs = []
+
+        knowledge_dir = Path(
+            project_config.get("knowledge_dir")
+            or os.environ.get("KNOWLEDGE_DIR")
+            or project_root / ".knowledge" / "llamaindex"
+        )
 
         return cls(
             project_root=project_root,
-            knowledge_dir=Path(
-                os.environ.get(
-                    "KNOWLEDGE_DIR", project_root / ".knowledge" / "llamaindex"
-                )
-            ),
-            docs_dir=Path(os.environ.get("DOCS_DIR", project_root / "docs")),
+            knowledge_dir=knowledge_dir,
+            docs_dir=docs_dir,
             code_dirs=code_dirs,
-            embedding_model=os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small"),
+            embedding_model=project_config.get("embedding_model")
+            or os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small"),
             api_key=api_key,
             api_base=api_base,
         )

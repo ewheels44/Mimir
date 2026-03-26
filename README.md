@@ -47,13 +47,14 @@ Your Project/                         # Any project directory
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PROJECT_ROOT` | Auto-detected | Override project root detection |
-| `KNOWLEDGE_DIR` | `.knowledge/llamaindex` | Vector index storage |
-| `DOCS_DIR` | `docs/` | Documents to index |
-| `CODE_DIRS` | (none) | Comma-separated code directories to index (e.g., `src,tests,lib`) |
+| `PROJECT_ROOT` | Auto-detected | Override auto-detected project root |
+| `KNOWLEDGE_DIR` | `.knowledge/llamaindex` | Vector index storage path |
+| `DOCS_DIR` | `docs/` | Documents directory to index |
 | `EMBEDDING_MODEL` | `text-embedding-3-small` | OpenAI-compatible embedding model |
 | `OPENROUTER_API_KEY` | From `~/.local/share/opencode/auth.json` | API key for embeddings |
 | `OPENAI_BASE_URL` | `https://openrouter.ai/api/v1` | API base URL |
+
+**Note:** Per-project configuration is handled via `.mimir/config.json`. Environment variables override config file settings.
 
 ### OpenCode Integration
 
@@ -105,33 +106,31 @@ python .opencode/setup.py --force
 
 ### Index Source Code
 
-By default, Mimir only indexes your `docs/` directory. To also index your source code:
+By default, Mimir only indexes your `docs/` directory. To also index your source code, edit `.mimir/config.json`:
 
 ```bash
-# Index docs + src directory
-export CODE_DIRS=src
-python ~/Documents/Mimir/mcp_server_llamaindex.py --reindex
-
-# Index multiple directories
-export CODE_DIRS=src,tests,lib
-python ~/Documents/Mimir/mcp_server_llamaindex.py --reindex
+# During setup, specify code directories
+python ~/Documents/Mimir/setup_knowledge_mcp.py --code-dirs=src,tests
 ```
 
-**With OpenCode**: Add to your `~/.config/opencode/opencode.json`:
+Or manually create/edit `.mimir/config.json`:
 
 ```json
 {
-  "mcp": {
-    "mimir-knowledge": {
-      "environment": {
-        "PROJECT_ROOT": "${workspaceFolder}",
-        "CODE_DIRS": "src,tests",
-        "DOCS_DIR": "${workspaceFolder}/docs"
-      }
-    }
-  }
+  "docs_dir": "docs",
+  "code_dirs": ["src", "tests", "lib"],
+  "knowledge_dir": ".knowledge/llamaindex",
+  "embedding_model": "text-embedding-3-small"
 }
 ```
+
+Then reindex:
+
+```bash
+python ~/Documents/Mimir/mcp_server_llamaindex.py --reindex
+```
+
+**With OpenCode**: The server automatically reads `.mimir/config.json` from your project root—no environment variables needed!
 
 Now you can search both documentation and code:
 

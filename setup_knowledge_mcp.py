@@ -160,20 +160,43 @@ if __name__ == "__main__":
     return setup_script
 
 
+def create_mimir_config(project_root: Path, code_dirs: list[str] = None) -> Path:
+    mimir_dir = project_root / ".mimir"
+    mimir_dir.mkdir(exist_ok=True)
+
+    config = {
+        "docs_dir": "docs",
+        "knowledge_dir": ".knowledge/llamaindex",
+        "embedding_model": "text-embedding-3-small",
+    }
+
+    if code_dirs:
+        config["code_dirs"] = code_dirs
+
+    config_path = mimir_dir / "config.json"
+    with open(config_path, "w") as f:
+        json.dump(config, f, indent=2)
+
+    return config_path
+
+
 def init_project(project_root: Path, server_script: Path, args) -> bool:
     print(f"🎯 Project root: {project_root}")
 
     knowledge_dir = project_root / ".knowledge" / "llamaindex"
     docs_dir = project_root / "docs"
     opencode_dir = project_root / ".opencode"
+    mimir_dir = project_root / ".mimir"
 
     knowledge_dir.mkdir(parents=True, exist_ok=True)
     docs_dir.mkdir(exist_ok=True)
     opencode_dir.mkdir(exist_ok=True)
+    mimir_dir.mkdir(exist_ok=True)
 
     print(f"📁 Created: {knowledge_dir}")
     print(f"📁 Created: {docs_dir}")
     print(f"📁 Created: {opencode_dir}")
+    print(f"📁 Created: {mimir_dir}")
 
     setup_script = opencode_dir / "setup.py"
     if not setup_script.exists() or args.force:
@@ -181,6 +204,16 @@ def init_project(project_root: Path, server_script: Path, args) -> bool:
         print(f"📝 Created: {setup_script}")
     else:
         print(f"⏭️  Skipped: {setup_script} (exists, use --force to overwrite)")
+
+    config_path = mimir_dir / "config.json"
+    if not config_path.exists() or args.force:
+        code_dirs = args.code_dirs.split(",") if args.code_dirs else None
+        config_path = create_mimir_config(project_root, code_dirs)
+        print(f"📝 Created: {config_path}")
+        if code_dirs:
+            print(f"   Code directories: {code_dirs}")
+    else:
+        print(f"⏭️  Skipped: {config_path} (exists, use --force to overwrite)")
 
     local_server = project_root / "mcp_server_llamaindex.py"
     if not local_server.exists() and not args.server_path:
@@ -243,6 +276,10 @@ def main():
     )
     parser.add_argument(
         "--project-root", help="Project root directory (default: auto-detect)"
+    )
+    parser.add_argument(
+        "--code-dirs",
+        help="Comma-separated list of code directories to index (e.g., 'src,tests,lib')",
     )
 
     args = parser.parse_args()

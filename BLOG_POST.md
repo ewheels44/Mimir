@@ -917,19 +917,26 @@ python ~/Documents/Mimir/mcp_server_llamaindex.py --reindex
 
 ### Indexing Your Source Code
 
-By default, Mimir only indexes your `docs/` directory. But you can also index your source code to enable semantic code search:
+By default, Mimir only indexes your `docs/` directory. But you can also index your source code to enable semantic code search. Mimir uses a per-project configuration file (`.mimir/config.json`) so each project can have its own settings:
 
+**During setup:**
 ```bash
-# Set CODE_DIRS environment variable
-export CODE_DIRS=src
-
-# Reindex to include both docs and code
-python ~/Documents/Mimir/mcp_server_llamaindex.py --reindex
+python ~/Documents/Mimir/setup_knowledge_mcp.py --code-dirs=src,tests
 ```
 
-**Multiple directories:**
+**Or manually create `.mimir/config.json`:**
+
+```json
+{
+  "docs_dir": "docs",
+  "code_dirs": ["src", "tests", "lib"],
+  "knowledge_dir": ".knowledge/llamaindex",
+  "embedding_model": "text-embedding-3-small"
+}
+```
+
+**Then reindex:**
 ```bash
-export CODE_DIRS=src,tests,lib
 python ~/Documents/Mimir/mcp_server_llamaindex.py --reindex
 ```
 
@@ -941,29 +948,25 @@ python ~/Documents/Mimir/mcp_server_llamaindex.py --reindex
 "What files import the Config class?"
 ```
 
+**Why a config file?**
+- **Per-project settings**: Each project has its own `.mimir/config.json`
+- **No environment juggling**: Switch projects without changing env vars
+- **Version controlled**: Commit config to git so your team shares the same settings
+- **Simple**: Just JSON, no complex syntax
+
 **How it works:**
-- The `CODE_DIRS` variable accepts comma-separated paths
-- Each directory is recursively indexed along with `docs/`
-- Source files are chunked and embedded just like documentation
-- Semantic search finds code by meaning, not just function names
+1. Server starts and looks for `.mimir/config.json` in the project root
+2. If found, it reads `code_dirs` (array of directory paths)
+3. Each directory is recursively indexed along with `docs/`
+4. Source files are chunked and embedded just like documentation
+5. Semantic search finds code by meaning, not just function names
 
-**OpenCode Integration:**
+**Priority (highest to lowest):**
+1. `.mimir/config.json` - Project-specific settings
+2. Environment variables - Override for specific sessions
+3. Defaults - `docs/` only, standard paths
 
-Add `CODE_DIRS` to your MCP configuration:
-
-```json
-{
-  "mcp": {
-    "mimir-knowledge": {
-      "environment": {
-        "PROJECT_ROOT": "${workspaceFolder}",
-        "CODE_DIRS": "src,tests",
-        "DOCS_DIR": "${workspaceFolder}/docs"
-      }
-    }
-  }
-}
-```
+**With OpenCode:** The MCP server automatically reads `.mimir/config.json` from your project root—no environment variables needed! Each workspace gets its own configuration automatically.
 
 Now your AI assistant understands both your documentation AND your codebase!
 

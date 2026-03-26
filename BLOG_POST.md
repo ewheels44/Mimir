@@ -241,7 +241,7 @@ The heart of Mimir is its MCP (Model Context Protocol) server:
 ```mermaid
 flowchart TB
     subgraph "MCP Server"
-        FM[FastMCP Instance<br/>"raveneye-knowledge"]
+        FM[FastMCP Instance<br/>raveneye-knowledge]
         
         subgraph "ServerConfig"
             SC1[project_root: Path]
@@ -404,11 +404,7 @@ flowchart TB
     subgraph "Mimir MCP Server"
         MCP[mimir-knowledge]
         CMD["uv run --python 3.11<br/>mcp_server_llamaindex.py"]
-        ENV[
-            PROJECT_ROOT: ${workspaceFolder}
-            KNOWLEDGE_DIR: ${workspaceFolder}/.knowledge/llamaindex
-            DOCS_DIR: ${workspaceFolder}/docs
-        ]
+        ENV[PROJECT_ROOT - KNOWLEDGE_DIR - DOCS_DIR]
     end
     
     subgraph "Workspace-Aware Execution"

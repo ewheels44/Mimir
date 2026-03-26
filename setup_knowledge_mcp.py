@@ -142,9 +142,10 @@ def main():
         print("   Add documentation files and run: python .opencode/setup.py")
     
     print("\\n📖 Next steps:")
-    print("   1. Add documents to docs/")
-    print("   2. Run: python .opencode/setup.py")
-    print("   3. Or let OpenCode auto-index on first use")
+    print("   1. Read AGENTS.md for usage guide")
+    print("   2. Add documents to docs/")
+    print("   3. Run: python .opencode/setup.py")
+    print("   4. Or let OpenCode auto-index on first use")
     
     return 0
 
@@ -178,6 +179,115 @@ def create_mimir_config(project_root: Path, code_dirs: list[str] = None) -> Path
         json.dump(config, f, indent=2)
 
     return config_path
+
+
+def create_agents_md(project_root: Path) -> Path:
+    agents_content = """# Project Knowledge Base (Mimir)
+
+This project includes a semantic knowledge base powered by **LlamaIndex** and exposed via **MCP (Model Context Protocol)**. Your AI assistant (OpenCode) can search and query your project documentation and code.
+
+## Quick Start
+
+```bash
+# Add documentation to docs/
+echo "# My Project" > docs/README.md
+
+# Index the knowledge base
+python .opencode/setup.py
+
+# Query via CLI
+python ~/Documents/Mimir/mcp_server_llamaindex.py --query "How does this work?"
+```
+
+## Available MCP Tools
+
+When using OpenCode, these tools are automatically available:
+
+| Tool | Purpose | Example |
+|------|---------|---------|
+| `search` | Semantic search across docs/code | "Find authentication code" |
+| `query` | Natural language Q&A | "How does the database connection work?" |
+| `stats` | Check knowledge base status | "Show me stats" |
+| `reindex` | Rebuild from docs/ | "Reindex the knowledge base" |
+
+## Configuration (`.mimir/config.json`)
+
+Your project configuration is stored in `.mimir/config.json`:
+
+```json
+{
+  "docs_dir": "docs",
+  "code_dirs": [],
+  "knowledge_dir": ".knowledge/llamaindex",
+  "embedding_model": "text-embedding-3-small"
+}
+```
+
+### Indexing Source Code
+
+By default, only `docs/` is indexed. To also index your source code:
+
+1. Edit `.mimir/config.json`:
+```json
+{
+  "docs_dir": "docs",
+  "code_dirs": ["src", "lib", "tests"],
+  "knowledge_dir": ".knowledge/llamaindex",
+  "embedding_model": "text-embedding-3-small"
+}
+```
+
+2. Reindex:
+```bash
+python ~/Documents/Mimir/mcp_server_llamaindex.py --reindex
+```
+
+Now you can search both documentation and code:
+- "Find where authentication is implemented"
+- "How does error handling work in src/utils?"
+- "Show me all database query functions"
+
+## Project Structure
+
+```
+.
+├── docs/                    # Documentation (indexed)
+├── .mimir/                  # Mimir configuration
+│   └── config.json         # Project settings
+├── .knowledge/             # Vector index (auto-generated)
+│   └── llamaindex/        # Semantic search index
+└── .opencode/              # OpenCode integration
+    └── setup.py           # Indexing script
+```
+
+## How It Works
+
+1. **Documentation** goes in `docs/` (markdown, text files)
+2. **Source code** directories are configured in `.mimir/config.json`
+3. **Indexing** converts text into vector embeddings for semantic search
+4. **Querying** finds relevant content by meaning, not just keywords
+
+## Tips
+
+- **Semantic search** understands concepts, not just exact matches
+- **Reindex** after adding new documentation or changing config
+- **Commit** `.mimir/config.json` to share settings with your team
+- **Don't commit** `.knowledge/` - it's auto-generated
+
+## Learn More
+
+- Full documentation: https://github.com/ewheels44/Mimir
+
+---
+
+*Powered by Mimir - Knowledge that follows you*
+"""
+
+    agents_path = project_root / "AGENTS.md"
+    with open(agents_path, "w") as f:
+        f.write(agents_content)
+
+    return agents_path
 
 
 def init_project(project_root: Path, server_script: Path, args) -> bool:
@@ -214,6 +324,13 @@ def init_project(project_root: Path, server_script: Path, args) -> bool:
             print(f"   Code directories: {code_dirs}")
     else:
         print(f"⏭️  Skipped: {config_path} (exists, use --force to overwrite)")
+
+    agents_path = project_root / "AGENTS.md"
+    if not agents_path.exists() or args.force:
+        agents_path = create_agents_md(project_root)
+        print(f"📝 Created: {agents_path}")
+    else:
+        print(f"⏭️  Skipped: {agents_path} (exists, use --force to overwrite)")
 
     local_server = project_root / "mcp_server_llamaindex.py"
     if not local_server.exists() and not args.server_path:
@@ -252,10 +369,14 @@ def init_project(project_root: Path, server_script: Path, args) -> bool:
 
     print("\n✅ Project initialized successfully!")
     print("\n📖 Next steps:")
-    print("   1. Add documentation files to docs/")
-    print("   2. Run: python .opencode/setup.py")
-    print("   3. Or let OpenCode auto-index on first use")
-    print("   4. The MCP server will automatically use ${workspaceFolder} for paths")
+    print("   1. Read AGENTS.md for complete usage guide")
+    print("   2. Add documentation files to docs/")
+    print("   3. Run: python .opencode/setup.py")
+    print("   4. Or let OpenCode auto-index on first use")
+    print("   5. Edit .mimir/config.json to index source code directories")
+    print("\n💡 Quick start:")
+    print("   echo '# My Project' > docs/README.md")
+    print("   python .opencode/setup.py")
 
     return True
 

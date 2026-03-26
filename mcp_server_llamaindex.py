@@ -1,0 +1,313 @@
+#!/usr/bin/env python3
+"""
+Workspace-aware LlamaIndex MCP server for per-project knowledge bases.
+
+Usage:
+    python mcp_server_llamaindex.py                          # Run MCP server
+    python mcp_server_llamaindex.py --index [DIR]            # Index documents
+    python mcp_server_llamaindex.py --reindex                # Rebuild index
+    python mcp_server_llamaindex.py --query "question"       # One-shot query
+    python mcp_server_llamaindex.py --stats                  # Show statistics
+
+Environment:
+    PROJECT_ROOT: Override auto-detected project root
+    KNOWLEDGE_DIR: Vector index storage path
+    DOCS_DIR: Documents directory
+    EMBEDDING_MODEL: OpenAI-compatible model name (default: text-embedding-3-small)
+    OPENAI_API_KEY: API key (can use OPENROUTER_API_KEY instead)
+    OPENAI_BASE_URL: API base URL (default: OpenAI, use https://openrouter.ai/api/v1 for OpenRouter)
+    OPENROUTER_API_KEY: Alternative to OPENAI_API_KEY for OpenRouter
+"""
+
+import os
+import sys
+import json
+import shutil
+import argparse
+from pathlib import Path
+from typing import Optional
+from dataclasses import dataclass
+
+from mcp.server.fastmcp import FastMCP
+from llama_index.core import (
+    VectorStoreIndex,
+    SimpleDirectoryReader,
+    StorageContext,
+    load_index_from_storage,
+    Settings,
+)
+from llama_index.embeddings.openai import OpenAIEmbedding
+from llama_index.llms.openai_like import OpenAILike
+
+
+@dataclass(frozen=True)
+class ServerConfig:
+    project_root: Path
+    knowledge_dir: Path
+    docs_dir: Path
+    embedding_model: str
+    api_key: str
+    api_base: Optional[str]
+
+    @classmethod
+    def _get_api_key(cls) -> tuple[str, Optional[str]]:
+        api_key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get(
+            "OPENAI_API_KEY", ""
+        )
+        if api_key:
+            return api_key, os.environ.get("OPENAI_BASE_URL")
+
+        auth_path = Path.home() / ".local" / "share" / "opencode" / "auth.json"
+        if auth_path.exists():
+            try:
+                with open(auth_path) as f:
+                    auth_data = json.load(f)
+                if openrouter := auth_data.get("openrouter"):
+                    return openrouter.get("key", ""), "https://openrouter.ai/api/v1"
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+        return "", None
+
+    @classmethod
+    def from_env(cls) -> "ServerConfig":
+        project_root = cls._detect_project_root()
+        api_key, api_base = cls._get_api_key()
+        if api_key and not api_base:
+            api_base = "https://openrouter.ai/api/v1"
+
+        return cls(
+            project_root=project_root,
+            knowledge_dir=Path(
+                os.environ.get(
+                    "KNOWLEDGE_DIR", project_root / ".knowledge" / "llamaindex"
+                )
+            ),
+            docs_dir=Path(os.environ.get("DOCS_DIR", project_root / "docs")),
+            embedding_model=os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small"),
+            api_key=api_key,
+            api_base=api_base,
+        )
+
+    @staticmethod
+    def _detect_project_root() -> Path:
+        for env_var in ["PROJECT_ROOT", "WORKSPACE_FOLDER", "VSCODE_CWD"]:
+            if path := os.environ.get(env_var):
+                resolved = Path(path).resolve()
+                if resolved.exists():
+                    print(
+                        f"[Knowledge Server] Project root from {env_var}: {resolved}",
+                        file=sys.stderr,
+                    )
+                    return resolved
+
+        cwd = Path.cwd().resolve()
+        markers = [
+            ".opencode",
+            "opencode.json",
+            ".git",
+            "pyproject.toml",
+            "package.json",
+            "Cargo.toml",
+        ]
+
+        current = cwd
+        while current != current.parent:
+            for marker in markers:
+                if (current / marker).exists():
+                    print(
+                        f"[Knowledge Server] Project root via {marker}: {current}",
+                        file=sys.stderr,
+                    )
+                    return current
+            current = current.parent
+
+        print(f"[Knowledge Server] Using CWD: {cwd}", file=sys.stderr)
+        return cwd
+
+
+class KnowledgeServer:
+    def __init__(self, config: ServerConfig):
+        self.config = config
+        self._index: Optional[VectorStoreIndex] = None
+
+        embed_kwargs = {"model": config.embedding_model, "api_key": config.api_key}
+        llm_kwargs = {"api_key": config.api_key}
+        if config.api_base:
+            embed_kwargs["api_base"] = config.api_base
+            llm_kwargs["api_base"] = config.api_base
+
+        Settings.embed_model = OpenAIEmbedding(**embed_kwargs)
+        # Use a faster model for query synthesis to avoid timeouts
+        Settings.llm = OpenAILike(
+            model="google/gemini-3.1-flash-lite-preview", **llm_kwargs
+        )
+
+        self.config.knowledge_dir.mkdir(parents=True, exist_ok=True)
+
+    def get_index(self) -> Optional[VectorStoreIndex]:
+        if self._index is not None:
+            return self._index
+
+        if (self.config.knowledge_dir / "index_store.json").exists():
+            storage_context = StorageContext.from_defaults(
+                persist_dir=str(self.config.knowledge_dir)
+            )
+            self._index = load_index_from_storage(storage_context)
+        elif self.config.docs_dir.exists():
+            self._index = self._create_index()
+
+        return self._index
+
+    def _create_index(self) -> VectorStoreIndex:
+        documents = SimpleDirectoryReader(
+            str(self.config.docs_dir), recursive=True
+        ).load_data()
+
+        storage_context = StorageContext.from_defaults()
+        index = VectorStoreIndex.from_documents(
+            documents, storage_context=storage_context
+        )
+        index.storage_context.persist(persist_dir=str(self.config.knowledge_dir))
+
+        return index
+
+    def search(self, query: str, top_k: int = 5) -> str:
+        index = self.get_index()
+        if index is None:
+            return "No knowledge base found. Run with --index to create one."
+
+        nodes = index.as_retriever(similarity_top_k=top_k).retrieve(query)
+
+        if not nodes:
+            return "No relevant documents found."
+
+        results = []
+        for i, node in enumerate(nodes, 1):
+            source = node.metadata.get("file_name", "unknown")
+            score = node.score if hasattr(node, "score") else 0.0
+            text = node.text[:500] + "..." if len(node.text) > 500 else node.text
+            results.append(f"[{i}] {source} (score: {score:.3f})\n{text}")
+
+        return "\n\n".join(results)
+
+    def query(self, question: str) -> str:
+        index = self.get_index()
+        if index is None:
+            return "No knowledge base found. Run with --index to create one."
+
+        try:
+            # Use a shorter timeout-friendly approach
+            query_engine = index.as_query_engine()
+            response = query_engine.query(question)
+            return str(response)
+        except Exception as e:
+            return f"Error querying knowledge base: {e}. Try using 'search' instead for faster results."
+
+    def index_documents(self, docs_dir: Optional[Path] = None) -> str:
+        target_dir = docs_dir or self.config.docs_dir
+
+        if not target_dir.exists():
+            return f"Documents directory not found: {target_dir}"
+
+        try:
+            self._index = self._create_index()
+            return f"Successfully indexed {target_dir}"
+        except Exception as e:
+            return f"Error indexing: {e}"
+
+    def get_stats(self) -> dict:
+        index = self.get_index()
+        stats = {
+            "project_root": str(self.config.project_root),
+            "knowledge_dir": str(self.config.knowledge_dir),
+            "docs_dir": str(self.config.docs_dir),
+            "has_index": index is not None,
+        }
+
+        if index is not None:
+            stats["document_count"] = len(index.storage_context.docstore.docs)
+
+        if self.config.docs_dir.exists():
+            files = list(self.config.docs_dir.rglob("*"))
+            stats["source_files"] = len([f for f in files if f.is_file()])
+        else:
+            stats["source_files"] = 0
+
+        return stats
+
+
+def create_mcp_server(server: KnowledgeServer) -> FastMCP:
+    mcp = FastMCP("raveneye-knowledge")
+
+    @mcp.tool()
+    async def search(query: str, top_k: int = 5) -> str:
+        """Search the project knowledge base using semantic similarity."""
+        return server.search(query, top_k)
+
+    @mcp.tool()
+    async def query(question: str) -> str:
+        """Ask a question about the project."""
+        return server.query(question)
+
+    @mcp.tool()
+    async def reindex() -> str:
+        """Rebuild the knowledge base from the docs directory."""
+        return server.index_documents()
+
+    @mcp.tool()
+    async def stats() -> str:
+        """Get statistics about the knowledge base."""
+        return json.dumps(server.get_stats(), indent=2)
+
+    return mcp
+
+
+def main():
+    parser = argparse.ArgumentParser(description="RavenEye Knowledge MCP Server")
+    parser.add_argument(
+        "--index", metavar="DIR", nargs="?", const=True, help="Index documents"
+    )
+    parser.add_argument(
+        "--reindex", action="store_true", help="Rebuild index from scratch"
+    )
+    parser.add_argument("--query", metavar="QUESTION", help="Query the knowledge base")
+    parser.add_argument(
+        "--stats", action="store_true", help="Show knowledge base statistics"
+    )
+    parser.add_argument(
+        "--transport", choices=["stdio", "http"], default="stdio", help="Transport mode"
+    )
+    parser.add_argument("--port", type=int, default=8000, help="HTTP port")
+
+    args = parser.parse_args()
+
+    config = ServerConfig.from_env()
+    server = KnowledgeServer(config)
+
+    if args.index:
+        docs_dir = Path(args.index) if isinstance(args.index, str) else None
+        print(server.index_documents(docs_dir))
+        return
+
+    if args.reindex:
+        if config.knowledge_dir.exists():
+            shutil.rmtree(config.knowledge_dir)
+            config.knowledge_dir.mkdir(parents=True, exist_ok=True)
+        print(server.index_documents())
+        return
+
+    if args.query:
+        print(server.query(args.query))
+        return
+
+    if args.stats:
+        print(json.dumps(server.get_stats(), indent=2))
+        return
+
+    mcp = create_mcp_server(server)
+    mcp.run(transport=args.transport)
+
+
+if __name__ == "__main__":
+    main()

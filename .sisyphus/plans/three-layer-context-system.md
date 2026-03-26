@@ -342,7 +342,7 @@ Max Concurrent: 5 (Waves 1, 2, 5)
 
 ### Wave 3: MCP Server + Context Assembly (After Wave 2)
 
-- [ ] **T11. MCP Server Core**
+- [x] **T11. MCP Server Core**
   - What: Create `mimir/mcp/server.py` with stdio transport. Implement JSON-RPC handling, tool registration framework, project detection (read CWD → find `.mimir/`), error handling with graceful degradation.
   - Depends: T2
   - Blocks: T16, T17
@@ -350,7 +350,7 @@ Max Concurrent: 5 (Waves 1, 2, 5)
   - Skills: []
   - QA: `echo '{"jsonrpc":"2.0","method":"tools/list","id":1}' | python -m mimir.mcp.server` returns valid tool list
 
-- [ ] **T12. Context Assembler**
+- [x] **T12. Context Assembler**
   - What: Create `mimir/context/assembler.py`. Takes user message, queries Memory Bank (via T6) and Knowledge Graph (via T7), assembles single context block using formatter (T8) and ranker (T9). Target: < 800 tokens total.
   - Depends: T6, T7, T8, T9
   - Blocks: T16, T17
@@ -358,7 +358,7 @@ Max Concurrent: 5 (Waves 1, 2, 5)
   - Skills: []
   - QA: `pytest tests/test_context_assembler.py -v` passes, token count < 800
 
-- [ ] **T13. Map-Codebase: Static Analysis**
+- [x] **T13. Map-Codebase: Static Analysis**
   - What: Create `mimir/ingest/static.py`. Parse Python/JS/TS files. Extract: modules (file paths), imports (dependencies), data models (class definitions), external dependencies. Create corresponding graph nodes.
   - Depends: T7
   - Blocks: T29
@@ -366,7 +366,7 @@ Max Concurrent: 5 (Waves 1, 2, 5)
   - Skills: []
   - QA: `python -m mimir.ingest.static /path/to/test-project` creates graph nodes for all modules
 
-- [ ] **T14. Map-Codebase: LLM Doc Extraction**
+- [x] **T14. Map-Codebase: LLM Doc Extraction**
   - What: Create `mimir/ingest/docs.py`. Feed business plan docs to LLM (cheap model). Extract entities, classify as node types, propose edges. Output: draft node/edge list for review (not auto-commit).
   - Depends: T7
   - Blocks: T29
@@ -374,7 +374,7 @@ Max Concurrent: 5 (Waves 1, 2, 5)
   - Skills: []
   - QA: `python -m mimir.ingest.docs business-plan.md` outputs structured extraction
 
-- [ ] **T15. Map-Codebase: Embedding Generation**
+- [x] **T15. Map-Codebase: Embedding Generation**
   - What: Create `mimir/ingest/embeddings.py`. Generate embeddings for all graph node content. Store in Qdrant `{project}_graph_nodes` collection. Link back to Kuzu via `embedding_id` field.
   - Depends: T7
   - Blocks: T29
@@ -384,7 +384,7 @@ Max Concurrent: 5 (Waves 1, 2, 5)
 
 ### Wave 4: omo Integration + Observer (After Wave 3)
 
-- [ ] **T16. MCP Tool Registration**
+- [x] **T16. MCP Tool Registration**
   - What: Register MCP tools: `mimir_assemble_context`, `mimir_graph_search`, `mimir_memory_search`, `mimir_add_node`, `mimir_add_edge`. All tools use project detection from T11.
   - Depends: T11, T12
   - Blocks: T17, T22
@@ -392,7 +392,7 @@ Max Concurrent: 5 (Waves 1, 2, 5)
   - Skills: []
   - QA: MCP server responds to all tool calls with correct project scoping
 
-- [ ] **T17. omo chat.params Hook**
+- [x] **T17. omo chat.params Hook**
   - What: Create `omo_hooks/context_injector.ts`. Factory pattern hook that calls `mimir_assemble_context` MCP tool, injects result into system context via `chat.params`. Includes timeout (200ms) and graceful fallback.
   - Depends: T11, T12, T16
   - Blocks: T29
@@ -400,7 +400,7 @@ Max Concurrent: 5 (Waves 1, 2, 5)
   - Skills: []
   - QA: TypeScript compiles, hook injects context in OpenCode session
 
-- [ ] **T18. Observer Agent: Extraction**
+- [x] **T18. Observer Agent: Extraction**
   - What: Create `mimir/observer/extraction.py`. Monitors completed sessions. Extracts: new preferences, decisions made, corrections to old info, new entities mentioned. Outputs structured JSON proposals with confidence scores (via T10).
   - Depends: T6, T7, T10
   - Blocks: T20, T22
@@ -408,7 +408,7 @@ Max Concurrent: 5 (Waves 1, 2, 5)
   - Skills: []
   - QA: `pytest tests/test_observer_extraction.py -v` passes
 
-- [ ] **T19. Observer Agent: Hallucination Guard**
+- [x] **T19. Observer Agent: Hallucination Guard**
   - What: Create `mimir/observer/hallucination.py`. Validates that extracted facts are grounded in actual conversation transcript. Rejects extractions not traceable to source turn.
   - Depends: T18
   - Blocks: T22
@@ -416,7 +416,7 @@ Max Concurrent: 5 (Waves 1, 2, 5)
   - Skills: []
   - QA: `pytest tests/test_hallucination.py -v` passes, fake facts rejected
 
-- [ ] **T20. Observer Agent: Reconciler + Conflict Resolver**
+- [x] **T20. Observer Agent: Reconciler + Conflict Resolver**
   - What: Create `mimir/observer/reconciler.py`. Compares new extractions against existing memory. Implements ADD/UPDATE/DELETE/NOOP logic. Logs conflicts with both versions for user resolution.
   - Depends: T18
   - Blocks: T24
@@ -424,7 +424,7 @@ Max Concurrent: 5 (Waves 1, 2, 5)
   - Skills: []
   - QA: `pytest tests/test_reconciler.py -v` passes, conflicts surfaced correctly
 
-- [ ] **T21. omo Agent Definition (observer.md)**
+- [x] **T21. omo Agent Definition (observer.md)**
   - What: Create `.opencode/agents/observer.md` with YAML frontmatter. Model category: fast (cheap). Permissions: write=false, propose=true. Never auto-commits.
   - Depends: None
   - Blocks: T22

@@ -44,6 +44,16 @@ htmlcov/
 # uv
 .uv/
 
+# Lock files (can be regenerated)
+uv.lock
+
 # OS
 .DS_Store
 Thumbs.db
+
+# Mimir - Generated/Derived
+.knowledge/
+.ruff_cache/
+
+# LangGraph
+.langgraph/

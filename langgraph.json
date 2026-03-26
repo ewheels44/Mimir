@@ -1,0 +1,18 @@
+{
+  "$schema": "https://raw.githubusercontent.com/langchain-ai/langgraph/refs/heads/main/schemas/graph-schema.json",
+  "name": "Mimir Knowledge Workflows",
+  "description": "LangGraph workflows for per-project knowledge retrieval",
+  "graphs": {
+    "rag_workflow": "./workflows/rag.py:graph",
+    "knowledge_agent": "./workflows/knowledge_agent.py:graph"
+  },
+  "env": ".env",
+  "python_version": "3.11",
+  "dependencies": [
+    "langgraph>=0.2.0",
+    "langchain>=0.3.0",
+    "langchain-openai>=0.2.0",
+    "langchain-mcp-adapters>=0.1.0",
+    "llama-index>=0.11.0"
+  ]
+}

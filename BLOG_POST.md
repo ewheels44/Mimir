@@ -253,17 +253,17 @@ flowchart TB
         
         subgraph "KnowledgeServer"
             KS1[_index: VectorStoreIndex]
-            KS2[search\(\)]
-            KS3[query\(\)]
-            KS4[index_documents\(\)]
-            KS5[get_stats\(\)]
+            KS2[search method]
+            KS3[query method]
+            KS4[index_documents method]
+            KS5[get_stats method]
         end
         
         subgraph "MCP Tools"
-            T1[@mcp.tool<br/>search\(\)]
-            T2[@mcp.tool<br/>query\(\)]
-            T3[@mcp.tool<br/>reindex\(\)]
-            T4[@mcp.tool<br/>stats\(\)]
+            T1["@mcp.tool search"]
+            T2["@mcp.tool query"]
+            T3["@mcp.tool reindex"]
+            T4["@mcp.tool stats"]
         end
     end
     
@@ -348,6 +348,218 @@ sequenceDiagram
 3. **Similarity Search**: The index retrieves the most similar document chunks
 4. **Answer Synthesis**: LlamaIndex's query engine synthesizes a coherent answer
 5. **Response**: The answer is returned through the MCP protocol
+
+---
+
+## Deep Dive: How Vector Databases and Semantic Search Work
+
+To truly understand Mimir, you need to understand the technology powering it: **vector databases** and **semantic search**. These concepts are what make Mimir fundamentally different from traditional keyword search.
+
+### What is a Vector Database?
+
+A vector database stores data as **vectors** (arrays of numbers) rather than raw text. Think of it as a library where instead of organizing books alphabetically, you organize them by meaning.
+
+```
+Traditional Database:        Vector Database:
+┌─────────────────┐         ┌─────────────────────────────┐
+│ Title           │         │ Content    │ Vector (384-d) │
+├─────────────────┤         ├────────────┼────────────────┤
+│ "Cat Care"      │         │ Cat guide  │ [0.23, -0.87,  │
+│ "Dog Training"  │         │            │  0.15, ...]    │
+│ "Kitten Health" │         ├────────────┼────────────────┤
+└─────────────────┘         │ Dog guide  │ [-0.45, 0.62,  │
+                            │            │  0.91, ...]    │
+                            ├────────────┼────────────────┤
+                            │ Kitten doc │ [0.25, -0.89,  │
+                            │            │  0.12, ...]    │
+                            └─────────────────────────────┘
+```
+
+**Key insight**: "Cat Care" and "Kitten Health" have similar vectors because they mean similar things, even though they use different words!
+
+### How Text Becomes Vectors: Embedding Models
+
+An **embedding model** (like OpenAI's `text-embedding-3-small`) converts text into vectors using deep learning. Here's how it works:
+
+```
+Input Text: "The quick brown fox jumps over the lazy dog"
+                    ↓
+         [Embedding Model: Neural Network]
+                    ↓
+Output Vector: [0.12, -0.45, 0.89, -0.23, 0.67, ...] 
+               (384 numbers for text-embedding-3-small)
+```
+
+**The Magic**: Similar concepts produce similar vectors, regardless of the exact words used.
+
+| Text 1 | Text 2 | Similarity | Why? |
+|--------|--------|------------|------|
+| "How do I authenticate?" | "What's the login process?" | 0.94 | Same meaning, different words |
+| "Authentication" | "Authorization" | 0.72 | Related but different concepts |
+| "Authentication" | "Pizza recipe" | 0.08 | Completely unrelated |
+
+### Semantic Search vs Keyword Search
+
+Here's why semantic search is revolutionary:
+
+```
+Query: "How do I log in?"
+
+┌─────────────────────────────────────────────────────────────────┐
+│                    KEYWORD SEARCH                               │
+├─────────────────────────────────────────────────────────────────┤
+│ Documents with "log" OR "login" OR "in":                        │
+│  ✅ "The login function accepts credentials"                    │
+│  ✅ "Log in to access your account"                             │
+│  ❌ "Authentication requires valid tokens"                      │
+│  ❌ "Sign in with your username"                                │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│                   SEMANTIC SEARCH                               │
+├─────────────────────────────────────────────────────────────────┤
+│ Documents with SIMILAR MEANING:                                 │
+│  ✅ "The login function accepts credentials" (0.95)            │
+│  ✅ "Log in to access your account" (0.93)                     │
+│  ✅ "Authentication requires valid tokens" (0.89)              │
+│  ✅ "Sign in with your username" (0.88)                        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Semantic search understands intent**, not just text matching!
+
+### How Vector Similarity Works: Cosine Distance
+
+Vectors are compared using **cosine similarity** (or distance). Think of vectors as arrows pointing in different directions in a high-dimensional space:
+
+```
+2D Visualization (actual vectors have 384 dimensions):
+
+                    Query: "login"
+                         ↑
+                         │    ╱
+                         │  ╱  Document A: "login page"
+                         │╱   (angle = 5°, similarity = 0.99)
+                         │
+        Document C:      │
+        "pizza recipe"   │
+        (angle = 89°,    │
+         similarity = 0.01)
+                        ╱│
+                      ╱  │
+                    ╱    │ Document B: "authentication"
+                         │ (angle = 15°, similarity = 0.97)
+```
+
+**Formula**: `similarity = cos(θ)` where θ is the angle between vectors
+- **0° angle** = identical meaning (similarity = 1.0)
+- **90° angle** = completely unrelated (similarity = 0.0)
+- **180° angle** = opposite meaning (similarity = -1.0)
+
+### The Complete Semantic Search Pipeline
+
+Here's the full flow from document to answer:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        INDEXING PHASE                               │
+└─────────────────────────────────────────────────────────────────────┘
+
+1. DOCUMENT CHUNKING
+   Document: "Authentication is the process of verifying..."
+                    ↓
+   Chunks: ["Authentication is the process", "of verifying who you are", "using credentials..."]
+                    ↓
+
+2. EMBEDDING GENERATION
+   Chunk 1: "Authentication is the process"
+                    ↓
+   [Embedding Model: text-embedding-3-small]
+                    ↓
+   Vector: [0.12, -0.45, 0.89, ...] (384 dimensions)
+                    ↓
+
+3. VECTOR STORAGE
+   ┌────────────────────────────────────────────────────────────────┐
+   │ Vector ID │ Vector              │ Original Text                │
+   ├────────────────────────────────────────────────────────────────┤
+   │ 1         │ [0.12, -0.45, ...]  │ "Authentication is..."       │
+   │ 2         │ [-0.23, 0.67, ...]  │ "of verifying who..."        │
+   │ 3         │ [0.34, -0.12, ...]  │ "using credentials..."       │
+   └────────────────────────────────────────────────────────────────┘
+   
+   Stored in: .knowledge/llamaindex/default__vector_store.json
+
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                         QUERY PHASE                                 │
+└─────────────────────────────────────────────────────────────────────┘
+
+4. QUERY EMBEDDING
+   User asks: "How do I verify my identity?"
+                    ↓
+   [Same Embedding Model]
+                    ↓
+   Query Vector: [0.11, -0.44, 0.87, ...]
+                    ↓
+
+5. SIMILARITY SEARCH (K-Nearest Neighbors)
+   Compare query vector to all stored vectors:
+   
+   Document 1: similarity = 0.94 ✨ MATCH!
+   Document 2: similarity = 0.89 ✨ MATCH!
+   Document 3: similarity = 0.23
+   Document 4: similarity = 0.15
+   
+   Top K results returned (K=5 by default)
+                    ↓
+
+6. ANSWER SYNTHESIS
+   Retrieved chunks: ["Authentication is the process", "using credentials..."]
+                    ↓
+   [LLM: gemini-3.1-flash-lite]
+                    ↓
+   "To verify your identity, you need to authenticate using credentials..."
+```
+
+### Why This Matters for Mimir
+
+Traditional documentation search:
+- ❌ User searches "login", misses "authentication" docs
+- ❌ Keyword matching only finds exact word matches
+- ❌ No understanding of synonyms or related concepts
+
+Mimir's semantic search:
+- ✅ User searches "login", finds "authentication", "sign in", "credentials" docs
+- ✅ Understands meaning, not just words
+- ✅ Finds relevant info even with completely different vocabulary
+- ✅ Handles typos and variations naturally
+
+### Performance: How Vector Search is Fast
+
+You might wonder: "Comparing against thousands of vectors sounds slow!"
+
+**The solution: Approximate Nearest Neighbor (ANN) algorithms**
+
+Instead of comparing to every vector, the database uses smart data structures:
+
+```
+Without ANN (Brute Force):           With ANN (HNSW Algorithm):
+┌────────────────────────┐          ┌────────────────────────┐
+│ Query: [0.1, -0.4, ...]│          │ Query: [0.1, -0.4, ...]│
+│                        │          │                        │
+│ Compare to ALL 10,000  │          │ Navigate graph layers: │
+│ vectors                │          │                        │
+│ O(n) = 10,000 ops      │          │ Layer 3: Find region   │
+│                        │          │ Layer 2: Narrow down   │
+│ Result: Slow! ⚠️        │          │ Layer 1: Exact matches │
+│                        │          │ O(log n) = ~10 ops     │
+└────────────────────────┘          │                        │
+                                    │ Result: Fast! ⚡       │
+                                    └────────────────────────┘
+```
+
+LlamaIndex uses **HNSW (Hierarchical Navigable Small World)** algorithm by default, making searches nearly instantaneous even with millions of documents.
 
 ---
 

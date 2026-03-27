@@ -1,21 +1,14 @@
-"""
-Knowledge Agent Workflow for Mimir.
-
-An agentic workflow that can decide whether to search, query, or respond
-directly based on the user's question.
-"""
-
 from typing import Annotated, TypedDict, Literal
 from pathlib import Path
-import os
 import json
 
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage
-from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_mcp_adapters.client import MultiServerMCPClient
+
+from .utils import create_llm, get_mcp_server_path, get_mcp_env, detect_project_root
 
 
 class AgentState(TypedDict):
@@ -23,55 +16,50 @@ class AgentState(TypedDict):
     knowledge_stats: dict
 
 
-def detect_project_root() -> Path:
-    """Detect project root."""
-    for env_var in ["PROJECT_ROOT", "WORKSPACE_FOLDER"]:
-        if path := os.environ.get(env_var):
-            return Path(path).resolve()
-
-    cwd = Path.cwd().resolve()
-    markers = ["opencode.json", ".opencode", ".git"]
-
-    current = cwd
-    while current != current.parent:
-        if any((current / marker).exists() for marker in markers):
-            return current
-        current = current.parent
-
-    return cwd
-
-
 async def check_knowledge(state: AgentState) -> AgentState:
-    """Check knowledge base stats before querying."""
     project_root = detect_project_root()
-    server_path = project_root / "mcp_server_llamaindex.py"
+    server_path = get_mcp_server_path()
+    env = get_mcp_env(project_root)
 
-    try:
-        async with MultiServerMCPClient(
-            {
-                "llamaindex": {
-                    "command": ["python", str(server_path)],
-                    "transport": "stdio",
-                    "env": {"PROJECT_ROOT": str(project_root)},
-                }
+    client = MultiServerMCPClient(
+        {
+            "llamaindex": {
+                "command": "python",
+                "args": [str(server_path)],
+                "transport": "stdio",
+                "env": env,
             }
-        ) as client:
-            tools = await client.get_tools()
-            stats_tool = next((t for t in tools if t.name == "stats"), None)
+        }
+    )
+    try:
+        tools = await client.get_tools()
+        stats_tool = next((t for t in tools if t.name == "stats"), None)
 
-            if stats_tool:
-                result = await stats_tool.ainvoke({})
+        if stats_tool:
+            result = await stats_tool.ainvoke({})
+            if isinstance(result, str):
                 stats = json.loads(result)
-                return {**state, "knowledge_stats": stats}
-    except Exception:
-        pass
+            elif isinstance(result, list) and len(result) > 0:
+                item = result[0]
+                if isinstance(item, dict) and "text" in item:
+                    stats = json.loads(item["text"])
+                elif isinstance(item, dict):
+                    stats = item
+                else:
+                    stats = {"has_index": False}
+            elif isinstance(result, dict):
+                stats = result
+            else:
+                stats = {"has_index": False}
+            return {**state, "knowledge_stats": stats}
+    except Exception as e:
+        print(f"[Knowledge Agent] Error checking knowledge base: {e}")
 
     return {**state, "knowledge_stats": {"has_index": False}}
 
 
 async def agent(state: AgentState) -> AgentState:
-    """The knowledge agent that decides what to do."""
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    llm = create_llm(model="google/gemini-3.1-flash-lite-preview", temperature=0)
 
     stats = state.get("knowledge_stats", {})
     has_index = stats.get("has_index", False)
@@ -81,7 +69,7 @@ async def agent(state: AgentState) -> AgentState:
             **state,
             "messages": [
                 AIMessage(
-                    content="No knowledge base found. Run `python mcp_server_llamaindex.py --index` to create one."
+                    content="No knowledge base found. Run `python .opencode/setup.py` to create one."
                 )
             ],
         }
@@ -94,50 +82,107 @@ async def agent(state: AgentState) -> AgentState:
 Use the search or query tools to find information. Be concise and cite sources."""
 
     project_root = detect_project_root()
-    server_path = project_root / "mcp_server_llamaindex.py"
+    server_path = get_mcp_server_path()
+    env = get_mcp_env(project_root)
 
-    async with MultiServerMCPClient(
+    client = MultiServerMCPClient(
         {
             "llamaindex": {
-                "command": ["python", str(server_path)],
+                "command": "python",
+                "args": [str(server_path)],
                 "transport": "stdio",
-                "env": {"PROJECT_ROOT": str(project_root)},
+                "env": env,
             }
         }
-    ) as client:
-        tools = await client.get_tools()
-        llm_with_tools = llm.bind_tools(tools)
+    )
+    tools = await client.get_tools()
+    llm_with_tools = llm.bind_tools(tools)
 
-        response = await llm_with_tools.ainvoke(
-            [HumanMessage(content=system_prompt)] + state["messages"]
-        )
+    response = await llm_with_tools.ainvoke(
+        [HumanMessage(content=system_prompt)] + state["messages"]
+    )
 
-        return {**state, "messages": [response]}
+    return {**state, "messages": [response]}
 
 
-def should_continue(state: AgentState) -> Literal["agent", "__end__"]:
-    """Determine if we should continue or end."""
+async def execute_tools(state: AgentState) -> AgentState:
+    last_message = state["messages"][-1]
+
+    if not last_message.tool_calls:
+        return state
+
+    project_root = detect_project_root()
+    server_path = get_mcp_server_path()
+    env = get_mcp_env(project_root)
+
+    client = MultiServerMCPClient(
+        {
+            "llamaindex": {
+                "command": "python",
+                "args": [str(server_path)],
+                "transport": "stdio",
+                "env": env,
+            }
+        }
+    )
+    tools = await client.get_tools()
+    tools_by_name = {tool.name: tool for tool in tools}
+
+    tool_messages = []
+    for tool_call in last_message.tool_calls:
+        tool_name = tool_call["name"]
+        tool_args = tool_call["args"]
+        tool_id = tool_call["id"]
+
+        if tool_name in tools_by_name:
+            try:
+                tool = tools_by_name[tool_name]
+                result = await tool.ainvoke(tool_args)
+                if (
+                    isinstance(result, list)
+                    and len(result) > 0
+                    and isinstance(result[0], dict)
+                    and "text" in result[0]
+                ):
+                    content = result[0]["text"]
+                else:
+                    content = str(result)
+                tool_messages.append(ToolMessage(content=content, tool_call_id=tool_id))
+            except Exception as e:
+                tool_messages.append(
+                    ToolMessage(content=f"Error: {e}", tool_call_id=tool_id)
+                )
+        else:
+            tool_messages.append(
+                ToolMessage(content=f"Tool {tool_name} not found", tool_call_id=tool_id)
+            )
+
+    return {**state, "messages": tool_messages}
+
+
+def should_continue(state: AgentState) -> Literal["execute_tools", "__end__"]:
     messages = state["messages"]
     last_message = messages[-1]
 
     if last_message.tool_calls:
-        return "agent"
+        return "execute_tools"
 
     return END
 
 
 def create_graph():
-    """Create the knowledge agent workflow."""
     workflow = StateGraph(AgentState)
 
     workflow.add_node("check", check_knowledge)
     workflow.add_node("agent", agent)
+    workflow.add_node("execute_tools", execute_tools)
 
     workflow.set_entry_point("check")
     workflow.add_edge("check", "agent")
     workflow.add_conditional_edges(
-        "agent", should_continue, {"agent": "agent", "__end__": END}
+        "agent", should_continue, {"execute_tools": "execute_tools", "__end__": END}
     )
+    workflow.add_edge("execute_tools", "agent")
 
     return workflow.compile(checkpointer=MemorySaver())
 

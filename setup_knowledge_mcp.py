@@ -63,101 +63,41 @@ def create_project_setup_script(project_root: Path, server_script: Path) -> Path
 
     setup_script = opencode_dir / "setup.py"
 
-    script_content = f'''#!/usr/bin/env python3
-import json
-import os
-import sys
+    # Copy the template setup.py from the Mimir directory
+    template_script = server_script.parent / ".opencode" / "setup.py"
+
+    if template_script.exists():
+        import shutil
+
+        shutil.copy2(template_script, setup_script)
+        setup_script.chmod(0o755)
+    else:
+        # Fallback: create a minimal script that references the central one
+        script_content = f'''#!/usr/bin/env python3
+"""
+Project setup script for Mimir knowledge base.
+
+This script delegates to the central Mimir installation.
+For the full implementation, see: {server_script.parent / ".opencode" / "setup.py"}
+"""
+
 import subprocess
+import sys
 from pathlib import Path
 
 
-def get_openrouter_api_key() -> str | None:
-    if api_key := os.environ.get("OPENROUTER_API_KEY"):
-        return api_key
-    
-    auth_path = Path.home() / ".local" / "share" / "opencode" / "auth.json"
-    if auth_path.exists():
-        try:
-            with open(auth_path) as f:
-                auth_data = json.load(f)
-            if openrouter := auth_data.get("openrouter"):
-                return openrouter.get("key")
-        except (json.JSONDecodeError, KeyError):
-            pass
-    
-    return None
-
-
-def main():
-    project_root = Path("{project_root}").resolve()
-    server_script = Path("{server_script}").resolve()
-    
-    print(f"🎯 Project root: {{project_root}}")
-    print(f"📜 Server script: {{server_script}}")
-    
-    knowledge_dir = project_root / ".knowledge" / "llamaindex"
-    docs_dir = project_root / "docs"
-    
-    knowledge_dir.mkdir(parents=True, exist_ok=True)
-    docs_dir.mkdir(exist_ok=True)
-    
-    print(f"📁 Knowledge base: {{knowledge_dir}}")
-    print(f"📁 Documents: {{docs_dir}}")
-    
-    api_key = get_openrouter_api_key()
-    if not api_key:
-        print("\\n⚠️  Warning: OpenRouter API key not found")
-        print("   Set OPENROUTER_API_KEY environment variable")
-        return 1
-    
-    os.environ["OPENROUTER_API_KEY"] = api_key
-    print("\\n🔑 OpenRouter API key found")
-    
-    if (knowledge_dir / "index_store.json").exists():
-        print("\\n✅ Knowledge base already exists")
-        response = input("   Rebuild from docs/? [y/N]: ")
-        if response.lower() != "y":
-            print("   Skipping reindex")
-            return 0
-    
-    if docs_dir.exists() and any(docs_dir.iterdir()):
-        print("\\n📚 Indexing documents...")
-        
-        result = subprocess.run(
-            [sys.executable, str(server_script), "--index"],
-            cwd=project_root,
-            capture_output=True,
-            text=True,
-            env={{**os.environ, "OPENROUTER_API_KEY": api_key}}
-        )
-        
-        if result.returncode == 0:
-            print(result.stdout)
-            print("\\n✅ Setup complete!")
-        else:
-            print(f"\\n❌ Error: {{result.stderr}}")
-            return 1
-    else:
-        print("\\n⚠️  No documents found in docs/")
-        print("   Add documentation files and run: python .opencode/setup.py")
-    
-    print("\\n📖 Next steps:")
-    print("   1. Read AGENTS.md for usage guide")
-    print("   2. Add documents to docs/")
-    print("   3. Run: python .opencode/setup.py")
-    print("   4. Or let OpenCode auto-index on first use")
-    
-    return 0
-
-
 if __name__ == "__main__":
-    sys.exit(main())
+    central_script = Path("{server_script.parent / ".opencode" / "setup.py"}").resolve()
+    if central_script.exists():
+        subprocess.run([sys.executable, str(central_script)] + sys.argv[1:])
+    else:
+        print("❌ Central setup.py not found")
+        sys.exit(1)
 '''
+        with open(setup_script, "w") as f:
+            f.write(script_content)
+        setup_script.chmod(0o755)
 
-    with open(setup_script, "w") as f:
-        f.write(script_content)
-
-    setup_script.chmod(0o755)
     return setup_script
 
 
@@ -181,98 +121,19 @@ def create_mimir_config(project_root: Path, code_dirs: list[str] = None) -> Path
     return config_path
 
 
-def create_agents_md(project_root: Path) -> Path:
-    agents_content = """# Project Knowledge Base (Mimir)
+def create_agents_md(project_root: Path, mimir_root: Path) -> Path:
+    import shutil
 
-This project includes a semantic knowledge base powered by **LlamaIndex** and exposed via **MCP (Model Context Protocol)**. Your AI assistant (OpenCode) can search and query your project documentation and code.
+    mimir_dir = project_root / ".mimir"
+    mimir_dir.mkdir(exist_ok=True)
 
-## Quick Start
+    source_agents = mimir_root / "AGENTS.md"
+    dest_agents = mimir_dir / "AGENTS.md"
 
-```bash
-# Add documentation to docs/
-echo "# My Project" > docs/README.md
-
-# Index the knowledge base
-python .opencode/setup.py
-
-# Query via CLI
-python ~/Documents/Mimir/mcp_server_llamaindex.py --query "How does this work?"
-```
-
-## Available MCP Tools
-
-When using OpenCode, these tools are automatically available:
-
-| Tool | Purpose | Example |
-|------|---------|---------|
-| `search` | Semantic search across docs/code | "Find authentication code" |
-| `query` | Natural language Q&A | "How does the database connection work?" |
-| `stats` | Check knowledge base status | "Show me stats" |
-| `reindex` | Rebuild from docs/ | "Reindex the knowledge base" |
-
-## Configuration (`.mimir/config.json`)
-
-Your project configuration is stored in `.mimir/config.json`:
-
-```json
-{
-  "docs_dir": "docs",
-  "code_dirs": [],
-  "knowledge_dir": ".knowledge/llamaindex",
-  "embedding_model": "text-embedding-3-small"
-}
-```
-
-### Indexing Source Code
-
-By default, only `docs/` is indexed. To also index your source code:
-
-1. Edit `.mimir/config.json`:
-```json
-{
-  "docs_dir": "docs",
-  "code_dirs": ["src", "lib", "tests"],
-  "knowledge_dir": ".knowledge/llamaindex",
-  "embedding_model": "text-embedding-3-small"
-}
-```
-
-2. Reindex:
-```bash
-python ~/Documents/Mimir/mcp_server_llamaindex.py --reindex
-```
-
-Now you can search both documentation and code:
-- "Find where authentication is implemented"
-- "How does error handling work in src/utils?"
-- "Show me all database query functions"
-
-## Project Structure
-
-```
-.
-├── docs/                    # Documentation (indexed)
-├── .mimir/                  # Mimir configuration
-│   └── config.json         # Project settings
-├── .knowledge/             # Vector index (auto-generated)
-│   └── llamaindex/        # Semantic search index
-└── .opencode/              # OpenCode integration
-    └── setup.py           # Indexing script
-```
-
-## How It Works
-
-1. **Documentation** goes in `docs/` (markdown, text files)
-2. **Source code** directories are configured in `.mimir/config.json`
-3. **Indexing** converts text into vector embeddings for semantic search
-4. **Querying** finds relevant content by meaning, not just keywords
-
-## Tips
-
-- **Semantic search** understands concepts, not just exact matches
-- **Reindex** after adding new documentation or changing config
-- **Commit** `.mimir/config.json` to share settings with your team
-- **Don't commit** `.knowledge/` - it's auto-generated
+    if source_agents.exists():
+        shutil.copy2(source_agents, dest_agents)
+    else:
+        dest_agents.write_text("""# Project Knowledge Base (Mimir)
 
 ## Learn More
 
@@ -281,13 +142,32 @@ Now you can search both documentation and code:
 ---
 
 *Powered by Mimir - Knowledge that follows you*
-"""
+""")
 
-    agents_path = project_root / "AGENTS.md"
-    with open(agents_path, "w") as f:
-        f.write(agents_content)
+    return dest_agents
 
-    return agents_path
+
+def create_opencode_json(project_root: Path, mimir_root: Path) -> Path:
+    """Create opencode.json with instructions array for AGENTS.md chaining.
+
+    This enables OpenCode to load multiple AGENTS.md files in order:
+    1. Mimir system documentation (base)
+    2. Project root AGENTS.md (project-specific)
+    3. Any subdirectory AGENTS.md files (subsystem-specific)
+
+    Users should customize this based on their project structure.
+    """
+    opencode_json = project_root / "opencode.json"
+
+    config = {
+        "$schema": "https://opencode.ai/config.json",
+        "instructions": [f"{mimir_root}/AGENTS.md", "AGENTS.md"],
+    }
+
+    with open(opencode_json, "w") as f:
+        json.dump(config, f, indent=2)
+
+    return opencode_json
 
 
 def init_project(project_root: Path, server_script: Path, args) -> bool:
@@ -325,12 +205,23 @@ def init_project(project_root: Path, server_script: Path, args) -> bool:
     else:
         print(f"⏭️  Skipped: {config_path} (exists, use --force to overwrite)")
 
-    agents_path = project_root / "AGENTS.md"
+    mimir_root = server_script.parent
+    agents_path = mimir_dir / "AGENTS.md"
     if not agents_path.exists() or args.force:
-        agents_path = create_agents_md(project_root)
+        agents_path = create_agents_md(project_root, mimir_root)
         print(f"📝 Created: {agents_path}")
     else:
         print(f"⏭️  Skipped: {agents_path} (exists, use --force to overwrite)")
+
+    opencode_json_path = project_root / "opencode.json"
+    if not opencode_json_path.exists() or args.force:
+        opencode_json_path = create_opencode_json(project_root, mimir_root)
+        print(f"📝 Created: {opencode_json_path}")
+        print(
+            "   ⚠️  IMPORTANT: Customize 'instructions' array for your project structure"
+        )
+    else:
+        print(f"⏭️  Skipped: {opencode_json_path} (exists, use --force to overwrite)")
 
     local_server = project_root / "mcp_server_llamaindex.py"
     if not local_server.exists() and not args.server_path:
@@ -374,9 +265,13 @@ def init_project(project_root: Path, server_script: Path, args) -> bool:
     print("   3. Run: python .opencode/setup.py")
     print("   4. Or let OpenCode auto-index on first use")
     print("   5. Edit .mimir/config.json to index source code directories")
+    print("   6. Customize opencode.json to chain multiple AGENTS.md files")
     print("\n💡 Quick start:")
     print("   echo '# My Project' > docs/README.md")
     print("   python .opencode/setup.py")
+    print("\n📚 AGENTS.md Hierarchy:")
+    print("   See README.md 'AGENTS.md Hierarchy' section for details")
+    print("   on chaining multiple AGENTS.md files via opencode.json")
 
     return True
 

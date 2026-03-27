@@ -269,6 +269,37 @@ class KnowledgeServer:
         except Exception as e:
             return f"Error indexing: {e}"
 
+    def add_documents(self, source_dir: Path) -> str:
+        if not source_dir.exists():
+            return f"Source directory not found: {source_dir}"
+
+        if not (self.config.knowledge_dir / "index_store.json").exists():
+            return "No existing index found. Run --index to create one first."
+
+        try:
+            storage_context = StorageContext.from_defaults(
+                persist_dir=str(self.config.knowledge_dir)
+            )
+            self._index = load_index_from_storage(storage_context)
+
+            new_docs = SimpleDirectoryReader(
+                str(source_dir), recursive=True, filename_as_id=True
+            ).load_data()
+
+            if not new_docs:
+                return f"No documents found in {source_dir}"
+
+            for doc in new_docs:
+                self._index.insert(doc)
+
+            self._index.storage_context.persist(
+                persist_dir=str(self.config.knowledge_dir)
+            )
+
+            return f"Added {len(new_docs)} documents from {source_dir}"
+        except Exception as e:
+            return f"Error adding documents: {e}"
+
     def get_stats(self) -> dict:
         index = self.get_index()
         stats = {
@@ -320,6 +351,30 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         """Get statistics about the knowledge base."""
         return json.dumps(server.get_stats(), indent=2)
 
+    @mcp.tool()
+    async def rag_workflow(query: str) -> str:
+        import asyncio
+        from langchain_core.messages import HumanMessage
+        from langgraph.workflows.rag import graph as rag_graph
+
+        config = {"configurable": {"thread_id": "mcp-rag"}}
+        result = await rag_graph.ainvoke(
+            {"messages": [HumanMessage(content=query)]}, config
+        )
+        return result["messages"][-1].content
+
+    @mcp.tool()
+    async def knowledge_agent(question: str) -> str:
+        import asyncio
+        from langchain_core.messages import HumanMessage
+        from langgraph.workflows.knowledge_agent import graph as agent_graph
+
+        config = {"configurable": {"thread_id": "mcp-agent"}}
+        result = await agent_graph.ainvoke(
+            {"messages": [HumanMessage(content=question)]}, config
+        )
+        return result["messages"][-1].content
+
     return mcp
 
 
@@ -330,6 +385,9 @@ def main():
     )
     parser.add_argument(
         "--reindex", action="store_true", help="Rebuild index from scratch"
+    )
+    parser.add_argument(
+        "--add", metavar="DIR", help="Add documents from DIR to existing index"
     )
     parser.add_argument("--query", metavar="QUESTION", help="Query the knowledge base")
     parser.add_argument(
@@ -355,6 +413,11 @@ def main():
             shutil.rmtree(config.knowledge_dir)
             config.knowledge_dir.mkdir(parents=True, exist_ok=True)
         print(server.index_documents())
+        return
+
+    if args.add:
+        source_dir = Path(args.add)
+        print(server.add_documents(source_dir))
         return
 
     if args.query:

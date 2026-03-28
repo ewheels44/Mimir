@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """
-Multi-project knowledge base initializer for OpenCode MCP.
+mimir-init.py - Initialize a new project for Mimir knowledge base.
 
-Run this in ANY project directory to set up the raveneye-knowledge MCP server.
+Run this in ANY project directory to set up Mimir integration.
+This creates the necessary directories and configuration files.
+
+Usage:
+    python ~/Documents/Mimir/mimir-init.py
+    python ~/Documents/Mimir/mimir-init.py --code-dirs=src,tests
 """
 
 import argparse
@@ -61,10 +66,8 @@ def create_project_setup_script(project_root: Path, server_script: Path) -> Path
     opencode_dir = project_root / ".opencode"
     opencode_dir.mkdir(exist_ok=True)
 
-    setup_script = opencode_dir / "setup.py"
-
-    # Copy the template setup.py from the Mimir directory
-    template_script = server_script.parent / ".opencode" / "setup.py"
+    setup_script = opencode_dir / "mimir-index.py"
+    template_script = server_script.parent / ".opencode" / "mimir-index.py"
 
     if template_script.exists():
         import shutil
@@ -72,13 +75,11 @@ def create_project_setup_script(project_root: Path, server_script: Path) -> Path
         shutil.copy2(template_script, setup_script)
         setup_script.chmod(0o755)
     else:
-        # Fallback: create a minimal script that references the central one
         script_content = f'''#!/usr/bin/env python3
 """
-Project setup script for Mimir knowledge base.
+Project indexing script for Mimir knowledge base.
 
 This script delegates to the central Mimir installation.
-For the full implementation, see: {server_script.parent / ".opencode" / "setup.py"}
 """
 
 import subprocess
@@ -87,11 +88,11 @@ from pathlib import Path
 
 
 if __name__ == "__main__":
-    central_script = Path("{server_script.parent / ".opencode" / "setup.py"}").resolve()
+    central_script = Path("{server_script.parent / ".opencode" / "mimir-index.py"}").resolve()
     if central_script.exists():
         subprocess.run([sys.executable, str(central_script)] + sys.argv[1:])
     else:
-        print("❌ Central setup.py not found")
+        print("❌ Central mimir-index.py not found")
         sys.exit(1)
 '''
         with open(setup_script, "w") as f:
@@ -188,7 +189,7 @@ def init_project(project_root: Path, server_script: Path, args) -> bool:
     print(f"📁 Created: {opencode_dir}")
     print(f"📁 Created: {mimir_dir}")
 
-    setup_script = opencode_dir / "setup.py"
+    setup_script = opencode_dir / "mimir-index.py"
     if not setup_script.exists() or args.force:
         create_project_setup_script(project_root, server_script)
         print(f"📝 Created: {setup_script}")
@@ -256,19 +257,22 @@ def init_project(project_root: Path, server_script: Path, args) -> bool:
             return False
     elif not args.no_index:
         print("\n⚠️  No documents to index yet")
-        print("   Add files to docs/ and run: python .opencode/setup.py")
+        print("   Add files to docs/ and run: python .opencode/mimir-index.py")
 
     print("\n✅ Project initialized successfully!")
     print("\n📖 Next steps:")
     print("   1. Read AGENTS.md for complete usage guide")
     print("   2. Add documentation files to docs/")
-    print("   3. Run: python .opencode/setup.py")
+    print("   3. Run: python .opencode/mimir-index.py (to index your docs)")
     print("   4. Or let OpenCode auto-index on first use")
     print("   5. Edit .mimir/config.json to index source code directories")
     print("   6. Customize opencode.json to chain multiple AGENTS.md files")
     print("\n💡 Quick start:")
     print("   echo '# My Project' > docs/README.md")
-    print("   python .opencode/setup.py")
+    print("   python .opencode/mimir-index.py")
+    print("\n🌐 Web UI:")
+    print("   python ~/Documents/Mimir/scripts/start_web_ui.sh")
+    print("   Then open http://localhost:8000")
     print("\n📚 AGENTS.md Hierarchy:")
     print("   See README.md 'AGENTS.md Hierarchy' section for details")
     print("   on chaining multiple AGENTS.md files via opencode.json")

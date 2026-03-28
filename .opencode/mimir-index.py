@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
-Per-project setup and full indexing script for Mimir knowledge base.
+mimir-index.py - Index and reindex your project for Mimir knowledge base.
 
 Usage:
-    python .opencode/setup.py              # Setup and index project
-    python .opencode/setup.py --reindex    # Force rebuild index
+    python .opencode/mimir-index.py              # Index project
+    python .opencode/mimir-index.py --reindex    # Force rebuild index
+    python .opencode/mimir-index.py --add src    # Add specific directory
+    python .opencode/mimir-index.py --no-knowledge-graph  # Skip KG extraction
 
 This script:
-    1. Sets up docs/ and .knowledge/ directories
-    2. Reads .mimir/config.json for code directories
-    3. Indexes with intelligent exclusions for cache files
+    1. Indexes docs/ and configured code_dirs
+    2. Extracts knowledge graph relationships (optional)
+    3. Stores vector embeddings in .knowledge/
 """
 
 import argparse
@@ -203,6 +205,11 @@ def main():
     parser.add_argument(
         "--add", metavar="DIR", help="Add documents from DIR to existing index"
     )
+    parser.add_argument(
+        "--no-knowledge-graph",
+        action="store_true",
+        help="Skip knowledge graph relationship extraction",
+    )
     args = parser.parse_args()
 
     project_root = detect_project_root()
@@ -316,7 +323,7 @@ def main():
         print("\n📖 Next steps:")
         print("   1. Add documents to docs/")
         print("   2. Or configure code_dirs in .mimir/config.json")
-        print("   3. Run: python .opencode/setup.py")
+        print("   3. Run: python .opencode/mimir-index.py")
         return 0
 
     # Run full indexing
@@ -333,6 +340,21 @@ def main():
         print(f"\n❌ Error during indexing: {e}")
         return 1
 
+    if not args.no_knowledge_graph:
+        print("\n🔍 Extracting knowledge graph relationships...")
+        try:
+            sys.path.insert(0, str(MIMIR_DIR / "src"))
+            from mimir.knowledge_graph import extract_code_relationships
+
+            extractor = extract_code_relationships(project_root)
+            stats = extractor.get_stats()
+            print(
+                f"   Extracted {stats['total_relationships']} relationships from {stats['total_entities']} entities"
+            )
+        except Exception as e:
+            print(f"   ⚠️  Knowledge graph extraction failed: {e}")
+            print("   Continuing without knowledge graph...")
+
     # Show config info
     project_config = load_project_config(project_root)
     if project_config.get("code_dirs"):
@@ -345,11 +367,22 @@ def main():
         )
         print('   Example: {"code_dirs": ["src", "tests"]}')
 
-    print("\n📖 Usage:")
-    print("   - Query knowledge base via OpenCode")
+    print("\n📖 Next steps:")
+    print("   - Query via OpenCode: Just start asking questions!")
+    print("   - Web UI: python ~/Documents/Mimir/scripts/start_web_ui.sh")
     print(
-        '   - Or run: python ~/Documents/Mimir/mcp_server_llamaindex.py --query "your question"'
+        "   - CLI: python ~/Documents/Mimir/mcp_server_llamaindex.py --query 'your question'"
     )
+
+    if not args.no_knowledge_graph:
+        print("\n🔍 Knowledge Graph:")
+        print("   - Relationships extracted to .knowledge/code_relationships.json")
+        print("   - View in Web UI to see file connections")
+
+    print("\n📚 Documentation:")
+    print("   - See AGENTS.md for complete usage guide")
+    print("   - Run with --no-knowledge-graph to skip relationship extraction")
+    print("   - Run with --reindex to rebuild from scratch")
 
     return 0
 

@@ -62,7 +62,7 @@ Mimir introduces a **centralized-yet-isolated** architecture that provides the b
 flowchart TB
     subgraph "Mimir Central Installation"
         MS[mcp_server_llamaindex.py]
-        SI[setup_knowledge_mcp.py]
+        SI[mimir-init.py]
         CONF[Global Configuration]
     end
     
@@ -124,12 +124,12 @@ flowchart TB
 
 ### 1. Project Detection and Initialization
 
-When you run `setup_knowledge_mcp.py` in any directory, Mimir performs intelligent project detection:
+When you run `mimir-init.py` in any directory, Mimir performs intelligent project detection:
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant Setup as setup_knowledge_mcp.py
+    participant Setup as mimir-init.py
     participant Detect as Project Detector
     participant Files as File System
     
@@ -149,7 +149,7 @@ sequenceDiagram
     
     Setup->>Files: Create docs/ directory
     Setup->>Files: Create .knowledge/llamaindex/
-    Setup->>Files: Create .opencode/setup.py
+    Setup->>Files: Create .opencode/mimir-index.py
     
     alt Documents exist
         Setup->>Setup: Index documents
@@ -681,7 +681,7 @@ The `${workspaceFolder}` variable is automatically replaced by OpenCode with the
 flowchart TB
     subgraph "~/Documents/Mimir/ [Central Installation]"
         M1[mcp_server_llamaindex.py<br/>MCP Server]
-        M2[setup_knowledge_mcp.py<br/>Project Initializer]
+        M2[mimir-init.py<br/>Project Initializer]
         M3[src/mimir/indexing.py<br/>Core Indexing]
         M4[tests/<br/>Test Suite]
         M5[scripts/run_mcp_server.sh<br/>Launch Script]
@@ -710,7 +710,7 @@ flowchart TB
     subgraph "YourProject/ [Any Project]"
         P1[docs/ - Project docs]
         P2[.knowledge/llamaindex/ - Vector store]
-        P3[.opencode/setup.py - Auto-generated]
+        P3[.opencode/mimir-index.py - Auto-generated]
         P4[.git/ - Git repo]
     end
     
@@ -733,11 +733,11 @@ flowchart TB
 | File | Purpose |
 |------|---------|
 | `mcp_server_llamaindex.py` | Main MCP server with workspace detection, indexing, and query capabilities |
-| `setup_knowledge_mcp.py` | Multi-project initializer that creates per-project setup scripts |
+| `mimir-init.py` | Multi-project initializer that creates per-project setup scripts |
 | `src/mimir/indexing.py` | Full indexing utilities with cache exclusions |
 | `tests/test_workflows.py` | Test suite for LangGraph workflows |
 | `scripts/run_mcp_server.sh` | Launch script for MCP server with auto-configuration |
-| `.opencode/setup.py` | Auto-generated per-project setup that calls the central server |
+| `.opencode/mimir-index.py` | Auto-generated per-project setup that calls the central server |
 | `default__vector_store.json` | Vector embeddings for semantic search |
 | `docstore.json` | Original document content and metadata |
 | `index_store.json` | Mapping between vectors and documents |
@@ -829,6 +829,136 @@ flowchart TB
     MCP[MCP Tools<br/>search/query/reindex/stats]
 ```
 
+### 4. Web UI
+
+Mimir includes a browser-based interface for visualizing and exploring the knowledge base:
+
+```mermaid
+flowchart TB
+    subgraph "Web UI Components"
+        UI1[Interactive Graph<br/>Cytoscape.js]
+        UI2[Search Interface<br/>Semantic Search]
+        UI3[Query Interface<br/>Natural Language]
+        UI4[Detail Panels<br/>Metadata & Relationships]
+    end
+    
+    subgraph "Backend"
+        BE1[FastAPI Server]
+        BE2[Graph API<br/>GET /api/graph]
+        BE3[Search API<br/>POST /api/search]
+        BE4[Query API<br/>POST /api/query]
+    end
+    
+    subgraph "Knowledge Base"
+        KB1[Vector Store]
+        KB2[Document Store]
+        KB3[Index Store]
+    end
+    
+    UI1 --> BE1
+    UI2 --> BE3
+    UI3 --> BE4
+    
+    BE1 --> BE2 & BE3 & BE4
+    BE2 & BE3 & BE4 --> KB1 & KB2 & KB3
+    
+    style UI1 fill:#90EE90
+    style BE1 fill:#87CEEB
+```
+
+**Features:**
+- **Interactive Graph Visualization**: Navigate documents as nodes with relationship edges
+- **Multiple Layouts**: Force-directed, circle, grid, and hierarchical views
+- **Search & Query**: Full semantic search and natural language querying
+- **Detail Panels**: Inspect document metadata and relationships
+- **Real-time Updates**: Live graph updates as knowledge base changes
+
+**Usage:**
+```bash
+python ~/Documents/Mimir/scripts/start_web_ui.sh
+# Open http://localhost:8000
+```
+
+### 5. Knowledge Graph Relationship Extraction
+
+Mimir includes a hybrid approach to extracting relationships from your codebase:
+
+```mermaid
+flowchart TB
+    subgraph "AST Analysis Layer"
+        A1[Parse Python Files]
+        A2[Extract Imports]
+        A3[Extract Inheritance]
+        A4[Extract Function Calls]
+        A5[Build Code Graph]
+    end
+    
+    subgraph "Relationship Types"
+        R1[imports_module<br/>solid green]
+        R2[imports_from<br/>dashed green]
+        R3[calls<br/>orange]
+        R4[inherits_from<br/>dotted pink]
+        R5[has_method<br/>purple]
+    end
+    
+    subgraph "Storage"
+        S1[code_relationships.json]
+        S2[Web UI Graph]
+    end
+    
+    A1 --> A2 & A3 & A4
+    A2 --> R1 & R2
+    A3 --> R4
+    A4 --> R3
+    A5 --> R5
+    
+    R1 & R2 & R3 & R4 & R5 --> S1
+    S1 --> S2
+    
+    style A1 fill:#90EE90
+    style S2 fill:#87CEEB
+```
+
+**How it works:**
+1. **AST Parsing**: Python's `ast` module parses source code without execution
+2. **Import Extraction**: Identifies `import x` and `from x import y` statements
+3. **Inheritance Tracking**: Maps class inheritance hierarchies
+4. **Call Graph**: Records which functions/methods call others
+5. **Visualization**: Web UI renders relationships as colored edges
+
+**Generate the knowledge graph:**
+```bash
+python ~/Documents/Mimir/src/mimir/knowledge_graph.py
+```
+
+**Example output:**
+```json
+{
+  "relationships": [
+    {
+      "source": "web/server.py",
+      "target": "fastapi.FastAPI",
+      "relation_type": "imports_from",
+      "metadata": {"line": 9, "module": "fastapi"}
+    },
+    {
+      "source": "src/mimir/indexing.py",
+      "target": "llama_index.core.VectorStoreIndex",
+      "relation_type": "imports_from",
+      "metadata": {"line": 58}
+    }
+  ]
+}
+```
+
+**Visual indicators in Web UI:**
+- **Green (solid)**: Direct module imports
+- **Green (dashed)**: Specific imports from modules
+- **Orange**: Function/method calls
+- **Pink (dotted)**: Class inheritance
+- **Purple**: Class-to-method relationships
+- **Gray diamonds**: External modules
+
 ---
 
 ## Comparison: Mimir vs. Alternatives
@@ -889,12 +1019,12 @@ uv pip install -r requirements.txt
 
 ```bash
 cd ~/Documents/YourProject
-python ~/Documents/Mimir/setup_knowledge_mcp.py
+python ~/Documents/Mimir/mimir-init.py
 
 # Creates:
 #   - docs/           # Add your documentation
 #   - .knowledge/llamaindex/  # Vector index storage
-#   - .opencode/setup.py      # Auto-generated setup
+#   - .opencode/mimir-index.py      # Auto-generated setup
 ```
 
 ### Add and Index Documents
@@ -904,7 +1034,7 @@ python ~/Documents/Mimir/setup_knowledge_mcp.py
 echo "# My Project Docs" > docs/README.md
 
 # Index them
-python .opencode/setup.py
+python .opencode/mimir-index.py
 ```
 
 ### Query Your Knowledge Base
@@ -926,7 +1056,7 @@ By default, Mimir only indexes your `docs/` directory. But you can also index yo
 
 **During setup:**
 ```bash
-python ~/Documents/Mimir/setup_knowledge_mcp.py --code-dirs=src,tests
+python ~/Documents/Mimir/mimir-init.py --code-dirs=src,tests
 ```
 
 **Or manually create `.mimir/config.json`:**
@@ -986,27 +1116,23 @@ flowchart LR
         C2[Workspace Detection]
         C3[OpenRouter Support]
         C4[Multi-Project Support]
+        C5[LangGraph Workflows]
+        C6[Web UI<br/>Browser-based interface]
+        C7[Knowledge Graph<br/>Relationship Extraction]
     end
     
     subgraph "In Progress 🚧"
-        P1[LangGraph Workflows]
-        P2[Advanced Query Patterns]
-    end
-    
-    subgraph "In Progress 🚧"
-        IP1[Web UI<br/>Browser-based interface]
-        IP2[Knowledge Graph<br/>Relationship Extraction]
+        P1[Multi-Modal Support<br/>Images, PDFs]
     end
     
     subgraph "Planned 📋"
-        PL1[Multi-Modal Support<br/>Images, PDFs]
-        PL2[Sync with Git<br/>Auto-index on commit]
-        PL3[Cross-Project Search<br/>Search across all projects]
+        PL1[Sync with Git<br/>Auto-index on commit]
+        PL2[Cross-Project Search<br/>Search across all projects]
+        PL3[Advanced Query Patterns<br/>Complex reasoning]
     end
     
-    C1 & C2 & C3 & C4 --> P1 & P2
-    P1 & P2 --> IP1 & IP2
-    IP1 & IP2 --> PL1 & PL2 & PL3
+    C1 & C2 & C3 & C4 & C5 & C6 & C7 --> P1
+    P1 --> PL1 & PL2 & PL3
 ```
 
 ---
@@ -1037,15 +1163,15 @@ The architecture is designed to be **invisible**: you set it up once, and it jus
 
 - **Repository**: `~/Documents/Mimir/`
 - **MCP Server**: `mcp_server_llamaindex.py` (313 lines)
-- **Setup Script**: `setup_knowledge_mcp.py` (274 lines)
+- **Setup Script**: `mimir-init.py` (274 lines)
 - **Documentation**: Add files to `docs/` in any initialized project
 
 **Try it yourself:**
 ```bash
 cd ~/Documents/YourProject
-python ~/Documents/Mimir/setup_knowledge_mcp.py
+python ~/Documents/Mimir/mimir-init.py
 echo "# Getting Started" > docs/README.md
-python .opencode/setup.py
+python .opencode/mimir-index.py
 python ~/Documents/Mimir/mcp_server_llamaindex.py --query "What can I do with this project?"
 ```
 

@@ -15,9 +15,9 @@ example uv pip install <package>
 
 | Task | Command |
 |------|---------|
-| **Full index** | `python .opencode/setup.py` |
-| **Force rebuild** | `python .opencode/setup.py --reindex` |
-| **Add directory** | `python .opencode/setup.py --add <dir>` |
+| **Full index** | `python .opencode/mimir-index.py` |
+| **Force rebuild** | `python .opencode/mimir-index.py --reindex` |
+| **Add directory** | `python .opencode/mimir-index.py --add <dir>` |
 | **Simple query** | `python ~/Documents/Mimir/mcp_server_llamaindex.py --query "..."` |
 | **RAG workflow** | `python ~/Documents/Mimir/langgraph/cli.py rag "..."` |
 | **Knowledge Agent** | `python ~/Documents/Mimir/langgraph/cli.py agent "..."` |
@@ -84,7 +84,7 @@ Mimir is a **three-layer knowledge base system**:
 Indexes `docs/` directory plus any `code_dirs` configured in `.mimir/config.json`:
 
 ```bash
-python .opencode/setup.py
+python .opencode/mimir-index.py
 ```
 
 **What it does:**
@@ -104,7 +104,7 @@ python .opencode/setup.py
 Clear existing index and rebuild from scratch:
 
 ```bash
-python .opencode/setup.py --reindex
+python .opencode/mimir-index.py --reindex
 ```
 
 **When to use:**
@@ -119,9 +119,9 @@ Add new documents without re-indexing existing content:
 
 ```bash
 # Add a single directory
-python .opencode/setup.py --add src
-python .opencode/setup.py --add tests
-python .opencode/setup.py --add /path/to/docs
+python .opencode/mimir-index.py --add src
+python .opencode/mimir-index.py --add tests
+python .opencode/mimir-index.py --add /path/to/docs
 
 # Via MCP server directly
 python ~/Documents/Mimir/mcp_server_llamaindex.py --add src
@@ -693,9 +693,9 @@ Managed by:
 
 2. **Use incremental adds for development**
    ```bash
-   python .opencode/setup.py --add src  # Add source
+   python .opencode/mimir-index.py --add src  # Add source
    # ... work on src ...
-   python .opencode/setup.py --add src  # Re-add after changes
+   python .opencode/mimir-index.py --add src  # Re-add after changes
    ```
 
 3. **Full rebuild for major changes**
@@ -772,7 +772,7 @@ Managed by:
 ### Troubleshooting
 
 1. **"No knowledge base found"**
-   - Run `python .opencode/setup.py`
+   - Run `python .opencode/mimir-index.py`
    - Check `.mimir/config.json` exists
    - Verify `docs/` has content
 
@@ -791,6 +791,198 @@ Managed by:
    - Verify server path is correct
    - Check Python environment has dependencies
    - Try direct CLI: `--query "test"`
+
+---
+
+## Knowledge Base Integration Guidelines
+
+This section provides decision frameworks for when and how to use the Mimir knowledge base system within OpenCode agents.
+
+### Quick Decision Matrix
+
+| Situation | Tool Choice | Latency | Why |
+|-----------|-------------|---------|-----|
+| You know the file path | `read`/`glob` directly | <1s | Fastest; no overhead |
+| Finding where something lives | `search` | ~1-2s | Semantic discovery |
+| Understanding patterns | `query` | ~3-5s | Synthesized context |
+| Complex multi-file analysis | `rag_workflow` | ~4-8s | Structured reasoning |
+| Deep exploration | `knowledge_agent` | ~5-20s+ | Agentic research |
+
+### Decision Tree for Agents
+
+**Before any modification, ask:**
+
+1. **Do I know exactly which file(s) to modify?**
+   - **YES** → Use direct tools (`read`, `grep`, `glob`)
+   - **NO** → Proceed to step 2
+
+2. **Do I need to find where code lives?**
+   - **YES** → Use `search` tool with `top_k=3-5`
+   - **NO** → Proceed to step 3
+
+3. **Do I need to understand existing patterns first?**
+   - **YES** → Use `query` for quick synthesis or `rag_workflow` for deep context
+   - **NO** → Proceed with implementation
+
+### Anti-Patterns to Avoid
+
+**DON'T:**
+- Query the knowledge base for every minor edit (adds 2-20s latency per operation)
+- Use `knowledge_agent` for simple lookups (overkill; expensive)
+- Skip KB consultation for architectural changes (risk of pattern violations)
+- Use `rag_workflow` when `search` suffices (unnecessary LLM cost)
+
+**DO:**
+- Use direct file tools when paths are known (fastest path)
+- Start with `search` for discovery (semantic > grep for concept matching)
+- Check KB before cross-cutting changes (find existing patterns)
+- Fallback to KB when grep returns no results (semantic search catches related concepts)
+
+### Pattern: Context-Gathering Before Implementation
+
+For non-trivial modifications, use this pattern:
+
+```python
+# Phase 1: Discovery (if needed)
+if not know_exact_location:
+    results = search(query="authentication middleware patterns", top_k=5)
+    
+# Phase 2: Pattern understanding (if needed)
+if is_architectural_change:
+    context = query("How does error handling work across the codebase?")
+    
+# Phase 3: Implementation using direct tools
+read(file_path)
+edit(file_path, ...)
+```
+
+**Rationale:** Direct tools (read/edit) are 10-100x faster than KB queries. KB is for **discovery** and **understanding**, not **execution**.
+
+### When Knowledge Base is Essential
+
+**MUST consult KB before:**
+
+- Creating new modules/packages (check existing conventions)
+- Modifying shared utilities (find all usages)
+- API/schema changes (discover consumers)
+- Refactoring cross-cutting concerns (understand blast radius)
+- Adding dependencies (check existing stack)
+
+**CAN skip KB for:**
+
+- Typo fixes in known files
+- Adding parameters to known functions
+- Tests for known modules
+- Documentation updates
+- Configuration tweaks
+
+### Performance Considerations
+
+**Latency Budget:**
+- Direct tools: ~0.1-0.5s
+- KB search: ~1-2s (embedding + local vector search)
+- KB query: ~3-5s (+ LLM synthesis)
+- RAG workflow: ~4-8s (+ LangGraph orchestration)
+- Knowledge agent: ~5-20s+ (+ agent loop)
+
+**Cost Model (OpenRouter):**
+- `search`: ~$0.0001/query (1 embedding API call)
+- `query`: ~$0.001/query (embedding + LLM synthesis)
+- `rag_workflow`: ~$0.001/query (same as query)
+- `knowledge_agent`: ~$0.005-0.02/query (multiple LLM calls)
+
+**Optimization Tips:**
+1. Use `top_k=3-5` for search (diminishing returns after 5)
+2. Batch related questions into single `query` call
+3. Prefer `query` over `knowledge_agent` for straightforward questions
+4. The KB index is cached in memory during MCP session—subsequent queries are faster
+
+### Example: Refactoring Authentication
+
+**Scenario:** Need to refactor how JWT tokens are handled.
+
+**❌ Bad Approach:**
+```
+Read auth.py
+Edit auth.py (changes token format)
+Commit
+```
+*Problem:* Missed that 3 other files use token parsing logic.
+
+**✅ Good Approach:**
+```
+# Step 1: Discovery
+search("JWT token authentication", top_k=5)
+→ Found: auth.py, middleware.py, api/client.py, tests/test_auth.py
+
+# Step 2: Pattern understanding
+query("How is the token validated across the codebase?")
+→ Synthesized: Token is parsed in middleware, validated in auth.py, 
+   used in client for refresh
+
+# Step 3: Implementation with full context
+read(auth.py)
+read(middleware.py) 
+read(api/client.py)
+# ... coordinated edits ...
+
+# Step 4: Verification
+search("token validation", top_k=10)  # Ensure no missed spots
+```
+
+### Integration with OpenCode Agents
+
+**For Sisyphus (Orchestrator):**
+- Use `search` in Phase 1 (exploration) to find patterns
+- Delegate KB queries to background agents when parallelizing
+- Never block on KB for trivial edits
+
+**For Task Agents:**
+- Check `stats` first to verify KB exists: `python ~/Documents/Mimir/mcp_server_llamaindex.py --stats`
+- Use `search` for context-gathering before implementation
+- Include KB findings in task prompts to specialized agents
+
+**For Specialized Agents (explore/librarian/oracle):**
+- Use `knowledge_agent` for deep research tasks
+- Use `rag_workflow` for structured analysis
+- Cache KB results in agent session for reuse
+
+### Troubleshooting
+
+#### "Should I use KB or direct tools?"
+
+**Use KB when:**
+- You're unsure where something lives
+- Need semantic/conceptual matching (not just string matching)
+- Understanding cross-file patterns
+- Exploring unfamiliar codebases
+
+**Use direct tools when:**
+- You know the file path
+- Exact string matching suffices
+- Speed is critical (e.g., quick fixes)
+- Working in tight loops (e.g., multiple rapid edits)
+
+#### KB is slow—how to optimize?
+
+1. **Check index exists:** `python ~/Documents/Mimir/mcp_server_llamaindex.py --stats`
+2. **Use HTTP transport** (eliminates process spawn overhead):
+   ```bash
+   python ~/Documents/Mimir/mcp_server_llamaindex.py --transport http --port 8000
+   ```
+3. **Direct LlamaIndex access** (fastest, bypasses MCP):
+   ```python
+   from llama_index.core import load_index_from_storage
+   index = load_index_from_storage(".knowledge/llamaindex/")
+   results = index.as_retriever().retrieve("query")
+   ```
+
+#### KB returns irrelevant results?
+
+1. **Rephrase query** — semantic search is sensitive to phrasing
+2. **Increase `top_k`** — more results = better recall
+3. **Check indexed files** — run `--stats` to verify relevant files are indexed
+4. **Force reindex** — `python .opencode/mimir-index.py --reindex` if files changed
 
 ---
 
@@ -820,7 +1012,7 @@ python ~/Documents/Mimir/mcp_server_llamaindex.py --stats
 
 2. Create index:
    ```bash
-   python .opencode/setup.py
+   python .opencode/mimir-index.py
    ```
 
 3. Check config:
@@ -881,7 +1073,7 @@ python ~/Documents/Mimir/mcp_server_llamaindex.py --query "test"
 1. **Rephrase query**: Try synonyms or different wording
 2. **Increase top_k**: More results = better recall
 3. **Check indexed files**: Are relevant files in `code_dirs`?
-4. **Full rebuild**: `python .opencode/setup.py --reindex`
+4. **Full rebuild**: `python .opencode/mimir-index.py --reindex`
 5. **Check exclusions**: Are files excluded by pattern?
 
 #### Issue: "Duplicate documents in index"
@@ -891,7 +1083,7 @@ Incremental adds with `insert()` don't deduplicate automatically.
 
 **Solutions:**
 1. **Accept it**: Usually harmless for search quality
-2. **Full rebuild**: `python .opencode/setup.py --reindex`
+2. **Full rebuild**: `python .opencode/mimir-index.py --reindex`
 3. **Use refresh**: Modify server to use `refresh_ref_docs()` instead of `insert()`
 
 ---
@@ -962,7 +1154,7 @@ results = index.as_retriever().retrieve("query")
 | File | Purpose |
 |------|---------|
 | `~/Documents/Mimir/mcp_server_llamaindex.py` | MCP server |
-| `~/Documents/Mimir/.opencode/setup.py` | Per-project setup |
+| `~/Documents/Mimir/.opencode/mimir-index.py` | Per-project setup |
 | `~/Documents/Mimir/langgraph/cli.py` | Workflow CLI |
 | `~/Documents/Mimir/langgraph/workflows/rag.py` | RAG workflow |
 | `~/Documents/Mimir/langgraph/workflows/knowledge_agent.py` | Knowledge Agent |
@@ -1010,7 +1202,7 @@ Mimir provides a powerful knowledge base system with three usage modes:
 
 The three-layer architecture (LlamaIndex → MCP → LangGraph) provides clean separation of concerns while enabling advanced retrieval patterns.
 
-**Quick Start**: `python .opencode/setup.py`
+**Quick Start**: `python .opencode/mimir-index.py`
 
 **Documentation**: This file (AGENTS.md)
 

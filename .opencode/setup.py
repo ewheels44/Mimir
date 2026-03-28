@@ -265,6 +265,10 @@ def main():
             os.environ["KNOWLEDGE_DIR"] = str(knowledge_dir)
 
             config = ServerConfig.from_env()
+
+            # Initialize KnowledgeServer to set up embedding model
+            server = KnowledgeServer(config)
+
             storage_context = StorageContext.from_defaults(
                 persist_dir=str(knowledge_dir)
             )

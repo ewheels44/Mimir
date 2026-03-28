@@ -3,8 +3,8 @@
 Full index script with cache exclusions for Mimir knowledge base.
 
 Usage:
-    python ~/Documents/Mimir/full_index.py              # Index current project
-    python ~/Documents/Mimir/full_index.py --reindex    # Force reindex
+    python ~/Documents/Mimir/src/mimir/indexing.py              # Index current project
+    python ~/Documents/Mimir/src/mimir/indexing.py --reindex    # Force reindex
 
 This script reads .mimir/config.json and indexes docs/ + code_dirs
 with intelligent exclusions for cache files, images, and binaries.
@@ -22,32 +22,71 @@ os.environ["PROJECT_ROOT"] = str(Path.cwd())
 os.environ["KNOWLEDGE_DIR"] = str(Path.cwd() / ".knowledge" / "llamaindex")
 
 EXCLUDE_PATTERNS = [
-    "__pycache__", "*.pyc", "*.pyo",
-    ".git", ".github", ".gitignore",
+    "__pycache__",
+    "*.pyc",
+    "*.pyo",
+    ".git",
+    ".github",
+    ".gitignore",
     "node_modules",
-    ".venv", "venv", ".env",
-    ".pytest_cache", ".ruff_cache", ".mypy_cache",
-    "*.png", "*.jpg", "*.jpeg", "*.gif", "*.ico", "*.svg",
-    "*.woff", "*.woff2", "*.ttf", "*.eot",
-    "*.mp4", "*.webm", "*.mov",
-    "*.mp3", "*.wav", "*.ogg",
-    "*.pdf", "*.zip", "*.tar", "*.gz", "*.rar",
-    "*.pt", "*.pth", "*.onnx", "*.tflite",
-    "*.lock", "package-lock.json", "yarn.lock", "uv.lock",
-    "*.min.js", "*.min.css",
+    ".venv",
+    "venv",
+    ".env",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    "*.png",
+    "*.jpg",
+    "*.jpeg",
+    "*.gif",
+    "*.ico",
+    "*.svg",
+    "*.woff",
+    "*.woff2",
+    "*.ttf",
+    "*.eot",
+    "*.mp4",
+    "*.webm",
+    "*.mov",
+    "*.mp3",
+    "*.wav",
+    "*.ogg",
+    "*.pdf",
+    "*.zip",
+    "*.tar",
+    "*.gz",
+    "*.rar",
+    "*.pt",
+    "*.pth",
+    "*.onnx",
+    "*.tflite",
+    "*.lock",
+    "package-lock.json",
+    "yarn.lock",
+    "uv.lock",
+    "*.min.js",
+    "*.min.css",
     "*.map",
-    ".DS_Store", "Thumbs.db",
-    "test-results", "playwright-report", "blob-report",
+    ".DS_Store",
+    "Thumbs.db",
+    "test-results",
+    "playwright-report",
+    "blob-report",
 ]
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Index project for Mimir knowledge base")
-    parser.add_argument("--reindex", action="store_true", help="Clear and rebuild index")
+    parser = argparse.ArgumentParser(
+        description="Index project for Mimir knowledge base"
+    )
+    parser.add_argument(
+        "--reindex", action="store_true", help="Clear and rebuild index"
+    )
     args = parser.parse_args()
 
     if args.reindex:
         import shutil
+
         knowledge_dir = Path(".knowledge/llamaindex")
         if knowledge_dir.exists():
             print(f"Clearing existing index at {knowledge_dir}...")
@@ -68,9 +107,7 @@ def main():
     if config.docs_dir.exists():
         print(f"\n1. Indexing {config.docs_dir}/...")
         reader = SimpleDirectoryReader(
-            str(config.docs_dir),
-            recursive=True,
-            exclude=EXCLUDE_PATTERNS
+            str(config.docs_dir), recursive=True, exclude=EXCLUDE_PATTERNS
         )
         docs = reader.load_data()
         all_documents.extend(docs)
@@ -100,7 +137,9 @@ def main():
 
     print("\nCreating VectorStoreIndex...")
     storage_context = StorageContext.from_defaults()
-    index = VectorStoreIndex.from_documents(all_documents, storage_context=storage_context)
+    index = VectorStoreIndex.from_documents(
+        all_documents, storage_context=storage_context
+    )
 
     print("Persisting index...")
     index.storage_context.persist(persist_dir=str(config.knowledge_dir))

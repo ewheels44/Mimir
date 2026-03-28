@@ -653,8 +653,7 @@ flowchart TB
     "mimir-knowledge": {
       "type": "local",
       "command": [
-        "uv", "run", "--python", "3.11",
-        "/Users/ethanwheeler/Documents/Mimir/mcp_server_llamaindex.py"
+        "/Users/ethanwheeler/Documents/Mimir/scripts/run_mcp_server.sh"
       ],
       "environment": {
         "PROJECT_ROOT": "${workspaceFolder}",
@@ -681,11 +680,14 @@ The `${workspaceFolder}` variable is automatically replaced by OpenCode with the
 ```mermaid
 flowchart TB
     subgraph "~/Documents/Mimir/ [Central Installation]"
-        M1[mcp_server_llamaindex.py<br/>313 lines - MCP Server]
-        M2[setup_knowledge_mcp.py<br/>274 lines - Project Initializer]
-        M3[pyproject.toml<br/>Project Config]
-        M4[requirements.txt<br/>Dependencies]
-        M5[run_mcp_server.sh<br/>Launch Script]
+        M1[mcp_server_llamaindex.py<br/>MCP Server]
+        M2[setup_knowledge_mcp.py<br/>Project Initializer]
+        M3[src/mimir/indexing.py<br/>Core Indexing]
+        M4[tests/<br/>Test Suite]
+        M5[scripts/run_mcp_server.sh<br/>Launch Script]
+        M6[langgraph/<br/>Workflows]
+        M7[pyproject.toml<br/>Project Config]
+        M8[requirements.txt<br/>Dependencies]
     end
     
     subgraph ".opencode/ [Template]"
@@ -728,14 +730,17 @@ flowchart TB
 
 **Key Files Explained:**
 
-| File | Lines | Purpose |
-|------|-------|---------|
-| `mcp_server_llamaindex.py` | 313 | Main MCP server with workspace detection, indexing, and query capabilities |
-| `setup_knowledge_mcp.py` | 274 | Multi-project initializer that creates per-project setup scripts |
-| `.opencode/setup.py` | 109 | Auto-generated per-project setup that calls the central server |
-| `default__vector_store.json` | ~35KB | Vector embeddings for semantic search |
-| `docstore.json` | ~2.5KB | Original document content and metadata |
-| `index_store.json` | 331B | Mapping between vectors and documents |
+| File | Purpose |
+|------|---------|
+| `mcp_server_llamaindex.py` | Main MCP server with workspace detection, indexing, and query capabilities |
+| `setup_knowledge_mcp.py` | Multi-project initializer that creates per-project setup scripts |
+| `src/mimir/indexing.py` | Full indexing utilities with cache exclusions |
+| `tests/test_workflows.py` | Test suite for LangGraph workflows |
+| `scripts/run_mcp_server.sh` | Launch script for MCP server with auto-configuration |
+| `.opencode/setup.py` | Auto-generated per-project setup that calls the central server |
+| `default__vector_store.json` | Vector embeddings for semantic search |
+| `docstore.json` | Original document content and metadata |
+| `index_store.json` | Mapping between vectors and documents |
 
 ---
 
@@ -988,16 +993,20 @@ flowchart LR
         P2[Advanced Query Patterns]
     end
     
+    subgraph "In Progress 🚧"
+        IP1[Web UI<br/>Browser-based interface]
+        IP2[Knowledge Graph<br/>Relationship Extraction]
+    end
+    
     subgraph "Planned 📋"
         PL1[Multi-Modal Support<br/>Images, PDFs]
-        PL2[Knowledge Graph<br/>Relationship Extraction]
-        PL3[Sync with Git<br/>Auto-index on commit]
-        PL4[Web UI<br/>Browser-based interface]
-        PL5[Cross-Project Search<br/>Search across all projects]
+        PL2[Sync with Git<br/>Auto-index on commit]
+        PL3[Cross-Project Search<br/>Search across all projects]
     end
     
     C1 & C2 & C3 & C4 --> P1 & P2
-    P1 & P2 --> PL1 & PL2 & PL3 & PL4 & PL5
+    P1 & P2 --> IP1 & IP2
+    IP1 & IP2 --> PL1 & PL2 & PL3
 ```
 
 ---

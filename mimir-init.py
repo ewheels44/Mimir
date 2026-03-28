@@ -122,32 +122,6 @@ def create_mimir_config(project_root: Path, code_dirs: list[str] = None) -> Path
     return config_path
 
 
-def create_agents_md(project_root: Path, mimir_root: Path) -> Path:
-    import shutil
-
-    mimir_dir = project_root / ".mimir"
-    mimir_dir.mkdir(exist_ok=True)
-
-    source_agents = mimir_root / "AGENTS.md"
-    dest_agents = mimir_dir / "AGENTS.md"
-
-    if source_agents.exists():
-        shutil.copy2(source_agents, dest_agents)
-    else:
-        dest_agents.write_text("""# Project Knowledge Base (Mimir)
-
-## Learn More
-
-- Full documentation: https://github.com/ewheels44/Mimir
-
----
-
-*Powered by Mimir - Knowledge that follows you*
-""")
-
-    return dest_agents
-
-
 def create_opencode_json(project_root: Path, mimir_root: Path) -> Path:
     """Create opencode.json with instructions array for AGENTS.md chaining.
 
@@ -207,12 +181,6 @@ def init_project(project_root: Path, server_script: Path, args) -> bool:
         print(f"⏭️  Skipped: {config_path} (exists, use --force to overwrite)")
 
     mimir_root = server_script.parent
-    agents_path = mimir_dir / "AGENTS.md"
-    if not agents_path.exists() or args.force:
-        agents_path = create_agents_md(project_root, mimir_root)
-        print(f"📝 Created: {agents_path}")
-    else:
-        print(f"⏭️  Skipped: {agents_path} (exists, use --force to overwrite)")
 
     opencode_json_path = project_root / "opencode.json"
     if not opencode_json_path.exists() or args.force:

@@ -51,7 +51,7 @@ Then open http://localhost:8000 in your browser.
 
 ### Knowledge Graph 📊
 
-Mimir automatically extracts relationships from your code to build a knowledge graph:
+Mimir can extract relationships from your code to build a visual knowledge graph showing how files connect:
 
 **Relationship Types:**
 - **Imports** (solid green lines): Module imports (`import x`, `from x import y`)
@@ -61,10 +61,20 @@ Mimir automatically extracts relationships from your code to build a knowledge g
 
 **Generate the knowledge graph:**
 ```bash
-python ~/Documents/Mimir/src/mimir/knowledge_graph.py
+# From your project directory
+python ~/Documents/Mimir/src/mimir/knowledge_graph.py --from-index
+
+# Or specify a project path
+python ~/Documents/Mimir/src/mimir/knowledge_graph.py /path/to/your/project --from-index
+
 ```
 
 This creates `.knowledge/code_relationships.json` which the Web UI uses to display connections between files.
+
+**When to generate:**
+- After indexing your codebase for the first time
+- When you add new modules or significant code structure
+- The graph is not auto-generated during indexing (run manually)
 
 ### Enhanced MCP Tools
 - `search`: Semantic search

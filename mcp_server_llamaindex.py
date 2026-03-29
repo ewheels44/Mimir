@@ -99,6 +99,8 @@ class ServerConfig:
             or os.environ.get("DOCS_DIR")
             or project_root / "docs"
         )
+        if not docs_dir.is_absolute():
+            docs_dir = project_root / docs_dir
 
         code_dirs = []
         if "code_dirs" in project_config:
@@ -111,6 +113,9 @@ class ServerConfig:
             or os.environ.get("KNOWLEDGE_DIR")
             or project_root / ".knowledge" / "llamaindex"
         )
+        # Resolve relative paths against project_root
+        if not knowledge_dir.is_absolute():
+            knowledge_dir = project_root / knowledge_dir
 
         return cls(
             project_root=project_root,

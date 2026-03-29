@@ -47,10 +47,51 @@ class GraphData(BaseModel):
     edges: List[Edge]
 
 
+# Store server configuration at module level to avoid re-detection
+_server_config: Optional[ServerConfig] = None
+
+
+# Store server configuration at module level to avoid re-detection
+_server_config: Optional[ServerConfig] = None
+
+
 @app.on_event("startup")
 async def startup():
-    os.environ["PROJECT_ROOT"] = str(Path.cwd())
-    os.environ["KNOWLEDGE_DIR"] = str(Path.cwd() / ".knowledge" / "llamaindex")
+    import sys
+
+    global _server_config
+
+    existing_project = os.environ.get("PROJECT_ROOT")
+    existing_kb = os.environ.get("KNOWLEDGE_DIR")
+
+    if existing_project:
+        print(
+            f"[Startup] Using PROJECT_ROOT from env: {existing_project}",
+            file=sys.stderr,
+        )
+    else:
+        os.environ["PROJECT_ROOT"] = str(Path.cwd())
+        print(
+            f"[Startup] Set PROJECT_ROOT to CWD: {os.environ['PROJECT_ROOT']}",
+            file=sys.stderr,
+        )
+
+    if existing_kb:
+        print(f"[Startup] Using KNOWLEDGE_DIR from env: {existing_kb}", file=sys.stderr)
+    else:
+        project_root = Path(os.environ.get("PROJECT_ROOT", Path.cwd()))
+        os.environ["KNOWLEDGE_DIR"] = str(project_root / ".knowledge" / "llamaindex")
+        print(
+            f"[Startup] Set KNOWLEDGE_DIR to: {os.environ['KNOWLEDGE_DIR']}",
+            file=sys.stderr,
+        )
+
+    # Create server config once during startup
+    _server_config = ServerConfig.from_env()
+    print(
+        f"[Startup] Server config initialized: project={_server_config.project_root}",
+        file=sys.stderr,
+    )
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1532,8 +1573,10 @@ async def read_root():
 async def get_graph():
     """Get the knowledge graph data with relationships"""
     try:
-        config = ServerConfig.from_env()
-        server = KnowledgeServer(config)
+        global _server_config
+        if _server_config is None:
+            _server_config = ServerConfig.from_env()
+        server = KnowledgeServer(_server_config)
 
         index = server.get_index()
         if not index:
@@ -1566,7 +1609,9 @@ async def get_graph():
             nodes.append(node)
             file_path_to_node[file_path] = node
 
-        relationships_path = config.knowledge_dir.parent / "code_relationships.json"
+        relationships_path = (
+            _server_config.knowledge_dir.parent / "code_relationships.json"
+        )
         if relationships_path.exists():
             with open(relationships_path, "r") as f:
                 rel_data = json.load(f)
@@ -1679,8 +1724,10 @@ async def get_graph():
 async def search(request: SearchRequest):
     """Search the knowledge base"""
     try:
-        config = ServerConfig.from_env()
-        server = KnowledgeServer(config)
+        global _server_config
+        if _server_config is None:
+            _server_config = ServerConfig.from_env()
+        server = KnowledgeServer(_server_config)
 
         results_text = server.search(request.query, request.top_k)
 
@@ -1727,8 +1774,10 @@ async def search(request: SearchRequest):
 async def query(request: QueryRequest):
     """Query the knowledge base"""
     try:
-        config = ServerConfig.from_env()
-        server = KnowledgeServer(config)
+        global _server_config
+        if _server_config is None:
+            _server_config = ServerConfig.from_env()
+        server = KnowledgeServer(_server_config)
 
         answer = server.query(request.question)
 
@@ -1741,8 +1790,10 @@ async def query(request: QueryRequest):
 async def get_stats():
     """Get knowledge base statistics"""
     try:
-        config = ServerConfig.from_env()
-        server = KnowledgeServer(config)
+        global _server_config
+        if _server_config is None:
+            _server_config = ServerConfig.from_env()
+        server = KnowledgeServer(_server_config)
 
         stats = server.get_stats()
         return stats
@@ -1752,5 +1803,46 @@ async def get_stats():
 
 if __name__ == "__main__":
     import uvicorn
+    import argparse
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    parser = argparse.ArgumentParser(
+        description="Mimir Web UI - Browse your knowledge base"
+    )
+    parser.add_argument(
+        "--project",
+        metavar="DIR",
+        help="Path to project directory (default: current directory)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port to run server on (default: 8000)",
+    )
+    parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="Host to bind server to (default: 0.0.0.0)",
+    )
+    args = parser.parse_args()
+
+    # Set environment variables BEFORE uvicorn starts (so they're inherited by workers)
+    if args.project:
+        project_path = Path(args.project).resolve()
+        os.environ["PROJECT_ROOT"] = str(project_path)
+        os.environ["KNOWLEDGE_DIR"] = str(project_path / ".knowledge" / "llamaindex")
+        print(f"📁 Serving project: {project_path}")
+        print(f"📚 Knowledge base: {os.environ['KNOWLEDGE_DIR']}")
+    else:
+        # If no --project, but PROJECT_ROOT is set via env, use that
+        if os.environ.get("PROJECT_ROOT"):
+            print(
+                f"📁 Using PROJECT_ROOT from environment: {os.environ['PROJECT_ROOT']}"
+            )
+            if not os.environ.get("KNOWLEDGE_DIR"):
+                os.environ["KNOWLEDGE_DIR"] = str(
+                    Path(os.environ["PROJECT_ROOT"]) / ".knowledge" / "llamaindex"
+                )
+            print(f"📚 Knowledge base: {os.environ['KNOWLEDGE_DIR']}")
+
+    uvicorn.run(app, host=args.host, port=args.port)

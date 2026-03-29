@@ -294,28 +294,51 @@ class ASTRelationshipExtractor:
 
 
 def extract_code_relationships(
-    project_root: Path, output_dir: Optional[Path] = None
+    project_root: Path,
+    output_dir: Optional[Path] = None,
+    code_dirs: Optional[List[str]] = None,
+    from_index: bool = False,
 ) -> ASTRelationshipExtractor:
-    """Main function to extract code relationships from project"""
+    """Main function to extract code relationships from project
+
+    Args:
+        project_root: Root directory of the project
+        output_dir: Where to save code_relationships.json (default: PROJECT/.knowledge)
+        code_dirs: List of directory names to scan (default: ["src"])
+        from_index: If True, use files from the index manifest instead of scanning directories
+    """
     print(f"🔍 Extracting code relationships from {project_root}")
     print()
 
     extractor = ASTRelationshipExtractor(project_root)
 
-    # Extract from common code directories
-    code_dirs = ["src", "langgraph", "web", "tests", "examples"]
+    if from_index:
+        indexed_files = load_indexed_files(project_root)
+        if indexed_files:
+            print(f"📚 Using {len(indexed_files)} indexed Python files from manifest")
+            for file_path in indexed_files:
+                if file_path.exists():
+                    rel_path = file_path.relative_to(project_root)
+                    print(f"  Processing {rel_path}...")
+                    relationships = extractor.extract_from_file(file_path)
+                    extractor.relationships.extend(relationships)
+        else:
+            print("⚠️  No indexed files found in manifest. Run mimir-index.py first.")
+    else:
+        if code_dirs is None:
+            code_dirs = ["src"]
 
-    for dir_name in code_dirs:
-        dir_path = project_root / dir_name
-        if dir_path.exists():
-            print(f"📁 Scanning {dir_name}/...")
-            extractor.extract_from_directory(dir_path)
+        for dir_name in code_dirs:
+            dir_path = project_root / dir_name
+            if dir_path.exists():
+                print(f"📁 Scanning {dir_name}/...")
+                extractor.extract_from_directory(dir_path)
 
-    # Also scan root-level Python files
-    print(f"📁 Scanning root-level Python files...")
-    for py_file in project_root.glob("*.py"):
-        print(f"  Processing {py_file.name}...")
-        extractor.extract_from_file(py_file)
+        print(f"📁 Scanning root-level Python files...")
+        for py_file in project_root.glob("*.py"):
+            print(f"  Processing {py_file.name}...")
+            relationships = extractor.extract_from_file(py_file)
+            extractor.relationships.extend(relationships)
 
     # Save results
     if output_dir is None:
@@ -336,12 +359,140 @@ def extract_code_relationships(
     return extractor
 
 
+def load_project_config(project_root: Path) -> dict:
+    """Load configuration from .mimir/config.json"""
+    config_path = project_root / ".mimir" / "config.json"
+    if config_path.exists():
+        try:
+            with open(config_path) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    return {}
+
+
+def load_indexed_files(
+    project_root: Path, knowledge_dir: Optional[Path] = None
+) -> List[Path]:
+    """Load list of indexed files from manifest.json
+
+    Returns a list of Path objects for all files that have been indexed
+    by mimir-index.py. Filters to only Python files (.py).
+    """
+    if knowledge_dir is None:
+        knowledge_dir = project_root / ".knowledge" / "llamaindex"
+
+    manifest_path = knowledge_dir / "manifest.json"
+    if not manifest_path.exists():
+        return []
+
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return []
+
+    indexed_files = []
+    for dir_key, info in manifest.get("indexed_directories", {}).items():
+        for file_path in info.get("files", []):
+            path = Path(file_path)
+            # Resolve relative paths against project root
+            if not path.is_absolute():
+                path = project_root / path
+            if path.suffix == ".py":
+                indexed_files.append(path)
+
+    return indexed_files
+
+
 if __name__ == "__main__":
-    import sys
+    import argparse
 
-    if len(sys.argv) > 1:
-        project_root = Path(sys.argv[1])
+    parser = argparse.ArgumentParser(
+        description="Extract code relationships (imports, calls, inheritance) from a Python project",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Analyze current directory
+  python knowledge_graph.py
+
+  # Analyze specific project
+  python knowledge_graph.py /path/to/my/project
+
+  # Analyze with custom code directories
+  python knowledge_graph.py /path/to/project --dirs src,lib,tests
+
+  # Use indexed files from manifest (from mimir-index.py)
+  python knowledge_graph.py /path/to/project --from-index
+
+Configuration:
+  You can also set 'code_dirs' in .mimir/config.json:
+  {
+    "code_dirs": ["src", "lib", "tests"]
+  }
+
+Output:
+  Creates .knowledge/code_relationships.json in the project root.
+  This file is used by the Mimir Web UI to visualize code relationships.
+        """,
+    )
+    parser.add_argument(
+        "project",
+        nargs="?",
+        type=Path,
+        default=Path.cwd(),
+        help="Path to project directory (default: current directory)",
+    )
+    parser.add_argument(
+        "--dirs",
+        type=str,
+        default=None,
+        help="Comma-separated list of code directories to scan (overrides config.json)",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Output directory for code_relationships.json (default: PROJECT/.knowledge)",
+    )
+    parser.add_argument(
+        "--from-index",
+        action="store_true",
+        dest="from_index",
+        help="Use indexed files from manifest instead of scanning directories",
+    )
+
+    args = parser.parse_args()
+
+    project_root = args.project.resolve()
+    if not project_root.exists():
+        print(f"❌ Error: Project directory does not exist: {project_root}")
+        exit(1)
+
+    if not project_root.is_dir():
+        print(f"❌ Error: Path is not a directory: {project_root}")
+        exit(1)
+
+    if args.from_index:
+        # Use indexed files from manifest
+        print(f"🔍 Analyzing project: {project_root}")
+        print(f"📚 Using indexed files from manifest")
+        print()
+        extract_code_relationships(project_root, args.output, from_index=True)
     else:
-        project_root = Path.home() / "Documents" / "Mimir"
+        # Traditional directory scanning
+        project_config = load_project_config(project_root)
 
-    extract_code_relationships(project_root)
+        if args.dirs:
+            code_dirs = [d.strip() for d in args.dirs.split(",") if d.strip()]
+        elif "code_dirs" in project_config:
+            code_dirs = project_config["code_dirs"]
+            print(f"📋 Loaded code_dirs from .mimir/config.json")
+        else:
+            code_dirs = ["src"]
+
+        print(f"🔍 Analyzing project: {project_root}")
+        print(f"📁 Code directories: {', '.join(code_dirs)}")
+        print()
+
+        extract_code_relationships(project_root, args.output, code_dirs)

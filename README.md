@@ -17,14 +17,7 @@ A centralized knowledge base system that supercharges [oh-my-opencode](https://g
 ## Prerequisites
 
 You need **oh-my-opencode** installed and configured:
-
-```bash
-# Install oh-my-opencode (if not already installed)
-pip install oh-my-opencode
-
-# Or via Homebrew
-brew install code-yeongyu/tap/oh-my-opencode
-```
+[oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) 
 
 ## Quick Start
 
@@ -444,11 +437,11 @@ OpenCode supports hierarchical AGENTS.md files, but **does not automatically dis
 If you have multiple AGENTS.md files (e.g., project root + subsystems), only the root file loads by default:
 
 ```
-~/Documents/YourProject/
+~/Projects/YourProject/
 ├── AGENTS.md                    ← Only this loads
-├── RavenEye/hardware/
+├── backend/
 │   └── AGENTS.md                ← Ignored ❌
-└── RavenEye/raspberry-pi/backend/
+└── frontend/
     └── AGENTS.md                ← Ignored ❌
 ```
 
@@ -460,10 +453,10 @@ Use the `instructions` field in `opencode.json` to explicitly chain AGENTS.md fi
 {
   "$schema": "https://opencode.ai/config.json",
   "instructions": [
-    "~/Documents/Mimir/AGENTS.md",
+    "~/path/to/Mimir/AGENTS.md",
     "AGENTS.md",
-    "RavenEye/hardware/AGENTS.md",
-    "RavenEye/raspberry-pi/backend/AGENTS.md"
+    "backend/AGENTS.md",
+    "frontend/AGENTS.md"
   ]
 }
 ```
@@ -474,7 +467,7 @@ Or use glob patterns:
 {
   "$schema": "https://opencode.ai/config.json",
   "instructions": [
-    "~/Documents/Mimir/AGENTS.md",
+    "~/path/to/Mimir/AGENTS.md",
     "AGENTS.md",
     "**/AGENTS.md"
   ]
@@ -487,17 +480,17 @@ Files in `instructions` are loaded **in order**, with later files able to overri
 
 | Order | File | Purpose |
 |-------|------|---------|
-| 1 | `~/Documents/Mimir/AGENTS.md` | Base Mimir system documentation |
+| 1 | `~/path/to/Mimir/AGENTS.md` | Base Mimir system documentation |
 | 2 | `AGENTS.md` | Project-specific rules |
-| 3 | `**/AGENTS.md` | Subsystem-specific rules (hardware, backend, etc.) |
+| 3 | `**/AGENTS.md` | Subsystem-specific rules (backend, frontend, etc.) |
 
 ### Best Practices
 
 1. **Reference parent in child files:**
    ```markdown
-   # Hardware AGENTS.md
-   **Parent:** RavenEye  
-   **Scope:** ESP32 firmware, MPU6050 IMU
+   # Backend AGENTS.md
+   **Parent:** YourProject  
+   **Scope:** API, database, business logic
    ```
 
 2. **Document cross-boundary protocols:**
@@ -505,7 +498,7 @@ Files in `instructions` are loaded **in order**, with later files able to overri
    ## Cross-Boundary
    | Direction | Protocol | Details |
    |-----------|----------|---------|
-   | ESP32 → Pi | HTTP POST | `POST /api/camera/upload` |
+   | Frontend → Backend | HTTP POST | `POST /api/users` |
    ```
 
 3. **Use `opencode.json` for complex projects** with multiple AGENTS.md files
@@ -538,7 +531,7 @@ Mimir is designed to work with **oh-my-opencode** agents. You MUST configure the
       "type": "local",
       "command": [
         "uv", "run", "--python", "3.11",
-        "/Users/ethanwheeler/Documents/Mimir/mcp_server_llamaindex.py"
+        "/path/to/Mimir/mcp_server_llamaindex.py"
       ],
       "environment": {
         "PROJECT_ROOT": "${workspaceFolder}",
@@ -551,7 +544,7 @@ Mimir is designed to work with **oh-my-opencode** agents. You MUST configure the
 }
 ```
 
-**Replace** `/Users/ethanwheeler/Documents/Mimir/` with your actual Mimir installation path.
+**Replace** `/path/to/Mimir/` with your actual Mimir installation path.
 
 Once configured, restart oh-my-opencode and these tools become available to agents:
 - `search` - Semantic search across indexed documents
@@ -567,25 +560,17 @@ Configure the **system append prompt** so agents know to use Mimir tools by defa
 {
   "agents": {
     "sisyphus": {
-      "prompt_append": "## Mimir Context Priority (Default Tools)\nWhen searching or exploring code, **prefer Mimir tools first** (`search`, `query`, `rag_workflow`, `knowledge_agent`) as they use the indexed knowledge graph. Check the Tool Decision Matrix in ~/Documents/Mimir/AGENTS.md when uncertain.\n\n## Parallel Agent Launches\nWhen the user explicitly requests parallel search (e.g., '[search-mode]', 'launch multiple agents', 'IN PARALLEL'), you MAY spawn multiple `explore` and `librarian` agents simultaneously alongside direct tool usage. Mimir tools remain the default; parallel agents are for exhaustive multi-angle exploration when explicitly requested."
+      "prompt_append": "## Mimir Context Priority (Default Tools)\nWhen searching or exploring code, **prefer Mimir tools first** (`search`, `query`, `rag_workflow`, `knowledge_agent`) as they use the indexed knowledge graph. Check the Tool Decision Matrix in ~/path/to/Mimir/AGENTS.md when uncertain.\n\n## Parallel Agent Launches\nWhen the user explicitly requests parallel search (e.g., '[search-mode]', 'launch multiple agents', 'IN PARALLEL'), you MAY spawn multiple `explore` and `librarian` agents simultaneously alongside direct tool usage. Mimir tools remain the default; parallel agents are for exhaustive multi-angle exploration when explicitly requested."
     }
   }
 }
 ```
 
-```json
-    "sisyphus": {
-      "model": "",
-      "prompt_append": "## Mimir Context Priority (Default Tools)\nWhen searching or exploring code, **prefer Mimir tools first** (`search`, `query`, `rag_workflow`, `knowledge_agent`) as they use the indexed knowledge graph. Check the Tool Decision Matrix in ~/Documents/Mimir/AGENTS.md when uncertain.\n\n## Parallel Agent Launches\nWhen the user explicitly requests parallel search (e.g., '[search-mode]', 'launch multiple agents', 'IN PARALLEL'), you MAY spawn multiple `explore` and `librarian` agents simultaneously alongside direct tool usage. Mimir tools remain the default; parallel agents are for exhaustive multi-angle exploration when explicitly requested.",
-      "ultrawork": {
-        "model": "",
-      }
-    }
-```
-
 Or for multiple AGENTS.md files:
 
 **Why this matters**: The system append prompt injects the AGENTS.md content into every agent interaction, ensuring agents always prioritize Mimir's knowledge base tools (`search`, `query`, `rag_workflow`, `knowledge_agent`) over generic exploration patterns.
+
+**Note**: Replace `~/path/to/Mimir/` with your actual Mimir installation path.
 
 ## Architecture
 

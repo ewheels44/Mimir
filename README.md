@@ -517,7 +517,7 @@ Add the following to your agent configuration:
 ```json
     "sisyphus": {
       "model": "",
-      "prompt_append": "## ALWAYS MENTION: 'Mimir Context Priority' Mimir Context Priority\nPer ~/Documents/Mimir/AGENTS.md: ALWAYS use Mimir tools (search, query, rag_workflow, knowledge_agent) over generic exploration agents. Check the Tool Decision Matrix when uncertain.",
+      "prompt_append": "## Mimir Context Priority (Default Tools)\nWhen searching or exploring code, **prefer Mimir tools first** (`search`, `query`, `rag_workflow`, `knowledge_agent`) as they use the indexed knowledge graph. Check the Tool Decision Matrix in ~/Documents/Mimir/AGENTS.md when uncertain.\n\n## Parallel Agent Launches\nWhen the user explicitly requests parallel search (e.g., '[search-mode]', 'launch multiple agents', 'IN PARALLEL'), you MAY spawn multiple `explore` and `librarian` agents simultaneously alongside direct tool usage. Mimir tools remain the default; parallel agents are for exhaustive multi-angle exploration when explicitly requested.",
       "ultrawork": {
         "model": "",
       }

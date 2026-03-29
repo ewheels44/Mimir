@@ -622,7 +622,7 @@ async def read_root():
 <body>
     <div class="container">
         <aside class="sidebar">
-            <div class="logo">Mimir</div>
+            <div>Mimir</div>
             
             <div class="search-box">
                 <input type="text" id="searchInput" placeholder="Search knowledge base...">

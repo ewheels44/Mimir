@@ -1,11 +1,35 @@
-# Mimir - Multi-Project Knowledge Base
+# Mimir - Multi-Project Knowledge Base for oh-my-opencode
 
-A centralized, multi-project knowledge base system using LlamaIndex and LangGraph. Install once, use in any project directory with automatic workspace detection.
+A centralized knowledge base system that supercharges [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) agents with semantic search and persistent project memory.
+
+**The Problem**: Every session, agents re-discover the same codebase patterns, wasting tokens and time.  
+**The Solution**: Mimir indexes your docs and code once, then gives oh-my-opencode agents instant semantic access via MCP tools.
+
+## Why Mimir + oh-my-opencode?
+
+| Without Mimir | With Mimir |
+|--------------|------------|
+| Agents grep for files every session | Agents query indexed knowledge instantly |
+| 30% of context spent on discovery | 5% on discovery, 95% on implementation |
+| No memory between sessions | Persistent semantic index across sessions |
+| Keyword searches miss related code | Semantic search finds concepts across files |
+
+## Prerequisites
+
+You need **oh-my-opencode** installed and configured:
+
+```bash
+# Install oh-my-opencode (if not already installed)
+pip install oh-my-opencode
+
+# Or via Homebrew
+brew install code-yeongyu/tap/oh-my-opencode
+```
 
 ## Quick Start
 
 ```bash
-# 1. From any project directory, run the initializer
+# 1. From any project directory, run the Mimir initializer
 python ~/Documents/Mimir/mimir-init.py
 
 # 2. Add documents to docs/
@@ -13,12 +37,30 @@ python ~/Documents/Mimir/mimir-init.py
 # 3. Index them (includes cache exclusions automatically)
 python .opencode/mimir-index.py
 
-# 4. Query your knowledge base
-python ~/Documents/Mimir/mcp_server_llamaindex.py --query "How does authentication work?"
+# 4. Query via oh-my-opencode MCP tools
+#    (Tools available automatically when oh-my-opencode starts)
 
-# 5. Or use LangGraph workflows
+# 5. Or use LangGraph workflows directly
 python ~/Documents/Mimir/langgraph/cli.py rag "How does authentication work?"
 ```
+
+### Using with oh-my-opencode 🤖
+
+Once configured, oh-my-opencode agents automatically use Mimir tools:
+
+```
+User: "How does authentication work?"
+Agent: [Calls mimir-knowledge/search] → Finds auth.py, middleware.py, jwt.ts
+Agent: "The auth flow uses JWT with refresh tokens in auth.py..."
+```
+
+**What agents can do:**
+- `search("authentication patterns")` - Find semantically related files
+- `query("database layer architecture")` - Get synthesized explanations
+- `rag_workflow("API error handling")` - Structured reasoning with sources
+- `knowledge_agent("Find all test files")` - Agentic exploration
+
+No manual tool calls needed—agents choose the right tool based on context.
 
 ## What's New
 
@@ -484,12 +526,13 @@ Files in `instructions` are loaded **in order**, with later files able to overri
 | `OPENROUTER_API_KEY` | From `~/.local/share/opencode/auth.json` | API key for embeddings/LLM |
 | `OPENAI_BASE_URL` | `https://openrouter.ai/api/v1` | API base URL |
 
-### OpenCode Integration
+### OpenCode Integration (REQUIRED)
 
-The MCP server is configured in your global `~/.config/opencode/opencode.json`:
+Mimir is designed to work with **oh-my-opencode** agents. You MUST configure the MCP server in your global `~/.config/opencode/opencode.json`:
 
 ```json
 {
+  "$schema": "https://opencode.ai/config.json",
   "mcp": {
     "mimir-knowledge": {
       "type": "local",
@@ -508,11 +551,27 @@ The MCP server is configured in your global `~/.config/opencode/opencode.json`:
 }
 ```
 
-#### System Append Prompt (oh-my-opencode/code)
+**Replace** `/Users/ethanwheeler/Documents/Mimir/` with your actual Mimir installation path.
 
-If you're using **oh-my-opencode/code**, you must configure the **system append prompt** to include the Mimir AGENTS.md. This ensures the agent receives the priority directives for using Mimir tools over generic exploration agents.
+Once configured, restart oh-my-opencode and these tools become available to agents:
+- `search` - Semantic search across indexed documents
+- `query` - Natural language queries with synthesized answers
+- `rag_workflow` - Structured RAG workflow
+- `knowledge_agent` - Agentic exploration with tool usage
 
-Add the following to your agent configuration:
+#### Agent Configuration (oh-my-opencode/code)
+
+Configure the **system append prompt** so agents know to use Mimir tools by default. Add this to your `~/.config/opencode/oh-my-opencode.json`:
+
+```json
+{
+  "agents": {
+    "sisyphus": {
+      "prompt_append": "## Mimir Context Priority (Default Tools)\nWhen searching or exploring code, **prefer Mimir tools first** (`search`, `query`, `rag_workflow`, `knowledge_agent`) as they use the indexed knowledge graph. Check the Tool Decision Matrix in ~/Documents/Mimir/AGENTS.md when uncertain.\n\n## Parallel Agent Launches\nWhen the user explicitly requests parallel search (e.g., '[search-mode]', 'launch multiple agents', 'IN PARALLEL'), you MAY spawn multiple `explore` and `librarian` agents simultaneously alongside direct tool usage. Mimir tools remain the default; parallel agents are for exhaustive multi-angle exploration when explicitly requested."
+    }
+  }
+}
+```
 
 ```json
     "sisyphus": {

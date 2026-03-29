@@ -29,6 +29,9 @@ from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass
 
+MIMIR_DIR = Path.home() / "Documents" / "Mimir"
+sys.path.insert(0, str(MIMIR_DIR))
+
 from mcp.server.fastmcp import FastMCP
 from llama_index.core import (
     VectorStoreIndex,
@@ -191,39 +194,24 @@ class KnowledgeServer:
         return self._index
 
     def _create_index(self) -> VectorStoreIndex:
-        all_documents = []
+        from mimir.indexing import index_with_progress
 
-        if self.config.docs_dir.exists():
-            docs = SimpleDirectoryReader(
-                str(self.config.docs_dir), recursive=True
-            ).load_data()
-            all_documents.extend(docs)
-
-        for code_dir in self.config.code_dirs:
-            if code_dir.exists():
-                try:
-                    code_docs = SimpleDirectoryReader(
-                        str(code_dir),
-                        recursive=True,
-                        filename_as_id=True,
-                    ).load_data()
-                    all_documents.extend(code_docs)
-                except Exception as e:
-                    print(
-                        f"[Knowledge Server] Warning: Could not index {code_dir}: {e}",
-                        file=sys.stderr,
-                    )
-
-        if not all_documents:
-            raise ValueError("No documents found to index")
-
-        storage_context = StorageContext.from_defaults()
-        index = VectorStoreIndex.from_documents(
-            all_documents, storage_context=storage_context
+        success = index_with_progress(
+            project_root=self.config.project_root,
+            docs_dir=self.config.docs_dir,
+            code_dirs=self.config.code_dirs,
+            knowledge_dir=self.config.knowledge_dir,
+            force_reindex=False,
+            verbose=True,
         )
-        index.storage_context.persist(persist_dir=str(self.config.knowledge_dir))
 
-        return index
+        if not success:
+            raise ValueError("Failed to create index")
+
+        storage_context = StorageContext.from_defaults(
+            persist_dir=str(self.config.knowledge_dir)
+        )
+        return load_index_from_storage(storage_context)
 
     def search(self, query: str, top_k: int = 5) -> str:
         index = self.get_index()
@@ -258,47 +246,43 @@ class KnowledgeServer:
             return f"Error querying knowledge base: {e}. Try using 'search' instead for faster results."
 
     def index_documents(self, docs_dir: Optional[Path] = None) -> str:
+        from mimir.indexing import index_with_progress
+
         target_dir = docs_dir or self.config.docs_dir
 
         if not target_dir.exists():
             return f"Documents directory not found: {target_dir}"
 
-        try:
-            self._index = self._create_index()
+        success = index_with_progress(
+            project_root=self.config.project_root,
+            docs_dir=self.config.docs_dir,
+            code_dirs=self.config.code_dirs,
+            knowledge_dir=self.config.knowledge_dir,
+            force_reindex=False,
+            verbose=True,
+        )
+
+        if success:
+            self._index = None
             return f"Successfully indexed {target_dir}"
-        except Exception as e:
-            return f"Error indexing: {e}"
+        return "Error indexing documents"
 
     def add_documents(self, source_dir: Path) -> str:
+        from mimir.indexing import add_directory_with_progress
+
         if not source_dir.exists():
             return f"Source directory not found: {source_dir}"
 
-        if not (self.config.knowledge_dir / "index_store.json").exists():
-            return "No existing index found. Run --index to create one first."
+        success = add_directory_with_progress(
+            source_dir=source_dir,
+            knowledge_dir=self.config.knowledge_dir,
+            verbose=True,
+        )
 
-        try:
-            storage_context = StorageContext.from_defaults(
-                persist_dir=str(self.config.knowledge_dir)
-            )
-            self._index = load_index_from_storage(storage_context)
-
-            new_docs = SimpleDirectoryReader(
-                str(source_dir), recursive=True, filename_as_id=True
-            ).load_data()
-
-            if not new_docs:
-                return f"No documents found in {source_dir}"
-
-            for doc in new_docs:
-                self._index.insert(doc)
-
-            self._index.storage_context.persist(
-                persist_dir=str(self.config.knowledge_dir)
-            )
-
-            return f"Added {len(new_docs)} documents from {source_dir}"
-        except Exception as e:
-            return f"Error adding documents: {e}"
+        if success:
+            self._index = None
+            return f"Successfully added documents from {source_dir}"
+        return "Error adding documents"
 
     def get_stats(self) -> dict:
         index = self.get_index()

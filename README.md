@@ -329,6 +329,31 @@ python .opencode/mimir-index.py --add src
 python ~/Documents/Mimir/mcp_server_llamaindex.py --add tests
 ```
 
+**Progress Tracking:**
+
+For large projects, the indexer shows real-time progress:
+
+```
+1. Scanning docs/...
+   Found 150 files
+   Loading docs: 100%|████████████████████████| 150/150 [00:02<00:00, 62.50file/s]
+   ✓ Loaded 150 documents
+
+2. Scanning src/...
+   Found 450 files
+   Loading src: 100%|█████████████████████████| 450/450 [00:08<00:00, 52.30file/s]
+   ✓ Loaded 450 documents
+
+📊 Total documents: 600
+
+🔄 Creating embeddings...
+   Embedding docs: 100%|██████████████████████| 600/600 [02:15<00:00,  4.42doc/s]
+   ✓ Index created
+
+💾 Saving index...
+   ✓ Index persisted
+```
+
 ### Querying
 
 ```bash
@@ -472,6 +497,26 @@ The MCP server is configured in your global `~/.config/opencode/opencode.json`:
   }
 }
 ```
+
+#### System Append Prompt (oh-my-opencode/code)
+
+If you're using **oh-my-opencode/code**, you must configure the **system append prompt** to include the Mimir AGENTS.md. This ensures the agent receives the priority directives for using Mimir tools over generic exploration agents.
+
+Add the following to your agent configuration:
+
+```json
+    "sisyphus": {
+      "model": "",
+      "prompt_append": "## ALWAYS MENTION: 'Mimir Context Priority' Mimir Context Priority\nPer ~/Documents/Mimir/AGENTS.md: ALWAYS use Mimir tools (search, query, rag_workflow, knowledge_agent) over generic exploration agents. Check the Tool Decision Matrix when uncertain.",
+      "ultrawork": {
+        "model": "",
+      }
+    }
+```
+
+Or for multiple AGENTS.md files:
+
+**Why this matters**: The system append prompt injects the AGENTS.md content into every agent interaction, ensuring agents always prioritize Mimir's knowledge base tools (`search`, `query`, `rag_workflow`, `knowledge_agent`) over generic exploration patterns.
 
 ## Architecture
 

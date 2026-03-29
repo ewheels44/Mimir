@@ -8,6 +8,10 @@ This creates the necessary directories and configuration files.
 Usage:
     python ~/Documents/Mimir/mimir-init.py
     python ~/Documents/Mimir/mimir-init.py --code-dirs=src,tests
+
+The --code-dirs flag pre-configures source code directories for indexing.
+If not specified, you can later add code_dirs to .mimir/config.json
+or use --add with mimir-index.py for incremental indexing.
 """
 
 import argparse
@@ -146,6 +150,9 @@ def create_opencode_json(project_root: Path, mimir_root: Path) -> Path:
 
 
 def init_project(project_root: Path, server_script: Path, args) -> bool:
+    from tqdm import tqdm
+    import time
+
     print(f"🎯 Project root: {project_root}")
 
     knowledge_dir = project_root / ".knowledge" / "llamaindex"
@@ -153,49 +160,53 @@ def init_project(project_root: Path, server_script: Path, args) -> bool:
     opencode_dir = project_root / ".opencode"
     mimir_dir = project_root / ".mimir"
 
-    knowledge_dir.mkdir(parents=True, exist_ok=True)
-    docs_dir.mkdir(exist_ok=True)
-    opencode_dir.mkdir(exist_ok=True)
-    mimir_dir.mkdir(exist_ok=True)
+    directories = [
+        (knowledge_dir, "Knowledge base"),
+        (docs_dir, "Documents"),
+        (opencode_dir, "OpenCode config"),
+        (mimir_dir, "Mimir config"),
+    ]
 
-    print(f"📁 Created: {knowledge_dir}")
-    print(f"📁 Created: {docs_dir}")
-    print(f"📁 Created: {opencode_dir}")
-    print(f"📁 Created: {mimir_dir}")
+    print("\n📁 Creating directories...")
+    for dir_path, desc in tqdm(directories, desc="   Creating", unit="dir", ncols=80):
+        dir_path.mkdir(parents=True, exist_ok=True)
+        tqdm.write(f"   ✓ {desc}: {dir_path}")
 
     setup_script = opencode_dir / "mimir-index.py"
     if not setup_script.exists() or args.force:
         create_project_setup_script(project_root, server_script)
-        print(f"📝 Created: {setup_script}")
+        tqdm.write(f"   ✓ Created: {setup_script}")
     else:
-        print(f"⏭️  Skipped: {setup_script} (exists, use --force to overwrite)")
+        tqdm.write(f"   ⏭️  Skipped: {setup_script} (exists, use --force to overwrite)")
 
     config_path = mimir_dir / "config.json"
     if not config_path.exists() or args.force:
         code_dirs = args.code_dirs.split(",") if args.code_dirs else None
         config_path = create_mimir_config(project_root, code_dirs)
-        print(f"📝 Created: {config_path}")
+        tqdm.write(f"   ✓ Created: {config_path}")
         if code_dirs:
-            print(f"   Code directories: {code_dirs}")
+            tqdm.write(f"   Code directories: {code_dirs}")
     else:
-        print(f"⏭️  Skipped: {config_path} (exists, use --force to overwrite)")
+        tqdm.write(f"   ⏭️  Skipped: {config_path} (exists, use --force to overwrite)")
 
     mimir_root = server_script.parent
 
     opencode_json_path = project_root / "opencode.json"
     if not opencode_json_path.exists() or args.force:
         opencode_json_path = create_opencode_json(project_root, mimir_root)
-        print(f"📝 Created: {opencode_json_path}")
-        print(
+        tqdm.write(f"   ✓ Created: {opencode_json_path}")
+        tqdm.write(
             "   ⚠️  IMPORTANT: Customize 'instructions' array for your project structure"
         )
     else:
-        print(f"⏭️  Skipped: {opencode_json_path} (exists, use --force to overwrite)")
+        tqdm.write(
+            f"   ⏭️  Skipped: {opencode_json_path} (exists, use --force to overwrite)"
+        )
 
     local_server = project_root / "mcp_server_llamaindex.py"
     if not local_server.exists() and not args.server_path:
-        print(f"ℹ️  Server script at: {server_script}")
-        print("   (referenced from central location)")
+        tqdm.write(f"ℹ️  Server script at: {server_script}")
+        tqdm.write("   (referenced from central location)")
 
     api_key = get_openrouter_api_key()
     if not api_key:
@@ -206,22 +217,20 @@ def init_project(project_root: Path, server_script: Path, args) -> bool:
         print("\n🔑 OpenRouter API key found")
 
     if not args.no_index and docs_dir.exists() and any(docs_dir.iterdir()):
-        print("\n📚 Indexing documents...")
+        print("\n📚 Starting document indexing...")
+        print("   (This may take a few minutes for large projects)")
+        print()
         env = {**os.environ, "OPENROUTER_API_KEY": api_key or ""}
 
+        index_script = project_root / ".opencode" / "mimir-index.py"
         result = subprocess.run(
-            [sys.executable, str(server_script), "--index"],
+            [sys.executable, str(index_script)],
             cwd=project_root,
-            capture_output=True,
-            text=True,
             env=env,
         )
 
-        if result.returncode == 0:
-            print(result.stdout)
-            print("\n✅ Indexing complete!")
-        else:
-            print(f"\n❌ Indexing error: {result.stderr}")
+        if result.returncode != 0:
+            print(f"\n❌ Indexing failed with exit code: {result.returncode}")
             return False
     elif not args.no_index:
         print("\n⚠️  No documents to index yet")
@@ -229,21 +238,35 @@ def init_project(project_root: Path, server_script: Path, args) -> bool:
 
     print("\n✅ Project initialized successfully!")
     print("\n📖 Next steps:")
-    print("   1. Read AGENTS.md for complete usage guide")
-    print("   2. Add documentation files to docs/")
-    print("   3. Run: python .opencode/mimir-index.py (to index your docs)")
-    print("   4. Or let OpenCode auto-index on first use")
-    print("   5. Edit .mimir/config.json to index source code directories")
-    print("   6. Customize opencode.json to chain multiple AGENTS.md files")
-    print("\n💡 Quick start:")
-    print("   echo '# My Project' > docs/README.md")
-    print("   python .opencode/mimir-index.py")
+    print("   1. Add documentation files to docs/")
+    print("      Example: echo '# My Project' > docs/README.md")
+    print("\n   2. Index your documents:")
+    print("      python .opencode/mimir-index.py")
+    print("\n   3. Include source code in indexing (optional):")
+    print("      A. Edit .mimir/config.json and add:")
+    print('         "code_dirs": ["src", "tests", "lib"]')
+    print("      B. Then reindex:")
+    print("         python .opencode/mimir-index.py --reindex")
+    print("      C. Or use incremental adds:")
+    print("         python .opencode/mimir-index.py --add src")
+    print("\n   4. Query your knowledge base:")
+    print(
+        "      Via CLI: python ~/Documents/Mimir/mcp_server_llamaindex.py --query 'your question'"
+    )
+    print(
+        "      Via OpenCode: Just ask questions and Mimir tools will search automatically"
+    )
+    print("\n   5. OpenCode MCP Integration:")
+    print("      The MCP server is configured in ~/.config/opencode/opencode.json")
+    print("      and will automatically provide search/query tools to OpenCode agents.")
+    print(
+        "      Customize opencode.json to chain AGENTS.md files for multi-module projects."
+    )
     print("\n🌐 Web UI:")
     print("   python ~/Documents/Mimir/scripts/start_web_ui.sh")
     print("   Then open http://localhost:8000")
-    print("\n📚 AGENTS.md Hierarchy:")
-    print("   See README.md 'AGENTS.md Hierarchy' section for details")
-    print("   on chaining multiple AGENTS.md files via opencode.json")
+    print("\n📚 Documentation:")
+    print("   See README.md for complete user guide and usage examples")
 
     return True
 

@@ -8,11 +8,13 @@ from langgraph.checkpoint.memory import MemorySaver
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from .utils import create_llm, get_mcp_server_path, get_mcp_env, detect_project_root
+from src.mimir.token_callback import create_token_callback, TokenUsageCallbackHandler
 
 
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     context: list[str]
+    token_usage: dict
 
 
 async def retrieve(state: AgentState) -> AgentState:
@@ -51,7 +53,13 @@ async def retrieve(state: AgentState) -> AgentState:
 
 
 async def generate(state: AgentState) -> AgentState:
-    llm = create_llm(model="google/gemini-3.1-flash-lite-preview", temperature=0)
+    # Create token callback to capture actual usage
+    token_callback = create_token_callback()
+    llm = create_llm(
+        model="google/gemini-3.1-flash-lite-preview",
+        temperature=0,
+        callbacks=[token_callback],
+    )
 
     raw_context = state.get("context", [])
     context_items = [
@@ -68,7 +76,13 @@ Context from knowledge base:
 Answer based on this context. If the context doesn't contain the answer, say so clearly."""
 
     response = await llm.ainvoke([HumanMessage(content=system_msg)] + messages)
-    return {**state, "messages": [AIMessage(content=response.content)]}
+
+    # Store token usage in state for metrics tracking
+    new_state = {**state, "messages": [AIMessage(content=response.content)]}
+    new_state["token_usage"] = token_callback.get_usage()
+    new_state["token_usage"]["has_actual_data"] = token_callback.has_data
+
+    return new_state
 
 
 def create_graph():

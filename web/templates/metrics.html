@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mimir Metrics Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        /* CSS Variables */
+        :root {
+            --bg: #0f172a;
+            --card-bg: #1e293b;
+            --accent: #60a5fa;
+            --accent-glow: rgba(96, 165, 250, 0.15);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --border: #334155;
+            --success: #10b981;
+            --danger: #ef4444;
+            --font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        /* Reset & Base */
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: var(--bg);
+            color: var(--text-main);
+            font-family: var(--font-family);
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Layout */
+        .dashboard {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        /* Header */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2.5rem;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 1.5rem;
+        }
+        .header h1 {
+            font-size: 1.875rem;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+            background: linear-gradient(to right, var(--text-main), var(--text-muted));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .nav-link {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 0.875rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            transition: color 0.2s;
+        }
+        .nav-link:hover { color: var(--accent); }
+
+        /* Controls */
+        .controls {
+            display: flex;
+            gap: 0.5rem;
+            background: var(--card-bg);
+            padding: 0.25rem;
+            border-radius: 0.5rem;
+            border: 1px solid var(--border);
+        }
+        .time-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            padding: 0.5rem 1rem;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .time-btn:hover { color: var(--text-main); }
+        .time-btn.active {
+            background: var(--border);
+            color: var(--text-main);
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }
+
+        /* Grid Layouts */
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        .charts-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .charts-grid-bottom {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 1.5rem;
+        }
+
+        @media (max-width: 1024px) {
+            .charts-grid { grid-template-columns: 1fr; }
+        }
+
+        /* Cards */
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            animation: fadeUp 0.5s ease-out forwards;
+            opacity: 0;
+            transform: translateY(10px);
+        }
+        
+        /* Staggered animations */
+        .card:nth-child(1) { animation-delay: 0.05s; }
+        .card:nth-child(2) { animation-delay: 0.1s; }
+        .card:nth-child(3) { animation-delay: 0.15s; }
+        .card:nth-child(4) { animation-delay: 0.2s; }
+        .chart-card:nth-child(1) { animation-delay: 0.25s; }
+        .chart-card:nth-child(2) { animation-delay: 0.3s; }
+        .chart-card:nth-child(3) { animation-delay: 0.35s; }
+
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; height: 2px;
+            background: linear-gradient(90deg, transparent, var(--accent), transparent);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .card:hover::before { opacity: 1; }
+
+        .card-title {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.75rem;
+        }
+        .card-value {
+            font-size: 2.25rem;
+            font-weight: 700;
+            color: var(--text-main);
+            line-height: 1.2;
+            display: flex;
+            align-items: baseline;
+            gap: 0.5rem;
+        }
+        .card-sub {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            margin-top: 0.5rem;
+        }
+        .trend-up { color: var(--success); }
+        .trend-down { color: var(--danger); }
+
+        /* Chart Containers */
+        .chart-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            animation: fadeUp 0.5s ease-out forwards;
+            opacity: 0;
+            transform: translateY(10px);
+        }
+        .chart-header {
+            margin-bottom: 1.5rem;
+        }
+        .chart-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+        }
+        .chart-container {
+            position: relative;
+            flex-grow: 1;
+            min-height: 300px;
+            width: 100%;
+        }
+
+        /* Loading State */
+        .loading-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(30, 41, 59, 0.8);
+            backdrop-filter: blur(4px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+            border-radius: inherit;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s;
+        }
+        .loading-overlay.active {
+            opacity: 1;
+            pointer-events: all;
+        }
+        .spinner {
+            width: 2rem;
+            height: 2rem;
+            border: 3px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        /* Empty State */
+        .empty-state {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-muted);
+            background: var(--card-bg);
+            z-index: 5;
+            display: none;
+        }
+        .empty-state.active { display: flex; }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes fadeUp {
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <header class="header">
+            <div>
+                <a href="/" class="nav-link">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+                    Back to Graph
+                </a>
+                <h1>Metrics & Usage</h1>
+            </div>
+            <div class="controls">
+                <button class="time-btn" data-days="7">7 Days</button>
+                <button class="time-btn active" data-days="30">30 Days</button>
+                <button class="time-btn" data-days="90">90 Days</button>
+            </div>
+        </header>
+
+        <div class="summary-grid">
+            <div class="card">
+                <div class="loading-overlay" id="loading-summary-1"><div class="spinner"></div></div>
+                <div class="card-title">Total Queries</div>
+                <div class="card-value" id="val-queries">--</div>
+                <div class="card-sub">In selected period</div>
+            </div>
+            <div class="card">
+                <div class="loading-overlay" id="loading-summary-2"><div class="spinner"></div></div>
+                <div class="card-title">Actual Spend</div>
+                <div class="card-value" id="val-mimir-cost">$--</div>
+                <div class="card-sub">Real API costs (Mimir)</div>
+            </div>
+            <div class="card">
+                <div class="loading-overlay" id="loading-summary-3"><div class="spinner"></div></div>
+                <div class="card-title">Est. Without Mimir</div>
+                <div class="card-value" id="val-trad-cost">$--</div>
+                <div class="card-sub">What you'd spend traditionally</div>
+            </div>
+            <div class="card">
+                <div class="loading-overlay" id="loading-summary-4"><div class="spinner"></div></div>
+                <div class="card-title">Total Savings</div>
+                <div class="card-value trend-up" id="val-savings">
+                    $-- <span style="font-size: 1rem; font-weight: 500;" id="val-savings-pct">(--%)</span>
+                </div>
+                <div class="card-sub">Efficiency gained</div>
+            </div>
+        </div>
+
+        <div class="charts-grid">
+            <div class="chart-card">
+                <div class="loading-overlay" id="loading-chart-daily"><div class="spinner"></div></div>
+                <div class="empty-state" id="empty-chart-daily">No data available for this period</div>
+                <div class="chart-header">
+                    <h2 class="chart-title">Daily Cost & Usage</h2>
+                </div>
+                <div class="chart-container">
+                    <canvas id="dailyChart"></canvas>
+                </div>
+            </div>
+            <div class="chart-card">
+                <div class="loading-overlay" id="loading-chart-breakdown"><div class="spinner"></div></div>
+                <div class="empty-state" id="empty-chart-breakdown">No data available for this period</div>
+                <div class="chart-header">
+                    <h2 class="chart-title">Query Breakdown</h2>
+                </div>
+                <div class="chart-container">
+                    <canvas id="breakdownChart"></canvas>
+                </div>
+            </div>
+        </div>
+        
+        <div class="charts-grid-bottom">
+            <div class="chart-card">
+                <div class="loading-overlay" id="loading-chart-compare"><div class="spinner"></div></div>
+                <div class="empty-state" id="empty-chart-compare">No data available for this period</div>
+                <div class="chart-header">
+                    <h2 class="chart-title">Cost Comparison</h2>
+                </div>
+                <div class="chart-container">
+                    <canvas id="compareChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Chart instances
+        let dailyChart = null;
+        let breakdownChart = null;
+        let compareChart = null;
+
+        // Theme colors for charts
+        const colors = {
+            accent: '#60a5fa',
+            accentAlpha: 'rgba(96, 165, 250, 0.2)',
+            secondary: '#94a3b8',
+            secondaryAlpha: 'rgba(148, 163, 184, 0.2)',
+            success: '#10b981',
+            successAlpha: 'rgba(16, 185, 129, 0.2)',
+            danger: '#ef4444',
+            grid: '#334155',
+            text: '#94a3b8',
+            textMain: '#f8fafc'
+        };
+
+        // Common Chart.js defaults
+        Chart.defaults.color = colors.text;
+        Chart.defaults.font.family = "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+        Chart.defaults.plugins.tooltip.backgroundColor = '#1e293b';
+        Chart.defaults.plugins.tooltip.titleColor = colors.textMain;
+        Chart.defaults.plugins.tooltip.bodyColor = colors.textMain;
+        Chart.defaults.plugins.tooltip.borderColor = colors.grid;
+        Chart.defaults.plugins.tooltip.borderWidth = 1;
+        Chart.defaults.plugins.tooltip.padding = 12;
+        Chart.defaults.plugins.tooltip.cornerRadius = 8;
+
+        // Formatters
+        const formatCurrency = (val) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(val);
+        const formatNumber = (val) => new Intl.NumberFormat('en-US').format(val);
+
+        // Toggle loading states
+        function setLoading(isLoading) {
+            document.querySelectorAll('.loading-overlay').forEach(el => {
+                if (isLoading) el.classList.add('active');
+                else el.classList.remove('active');
+            });
+        }
+
+        // Fetch and update data
+        async function updateDashboard(days) {
+            setLoading(true);
+            
+            try {
+                // In a real scenario, these would be actual API calls.
+                // We wrap them in try/catch to handle potential 404s gracefully if endpoints aren't ready.
+                const [summaryRes, dailyRes, breakdownRes] = await Promise.allSettled([
+                    fetch(`/api/metrics/summary?days=${days}`).then(r => r.ok ? r.json() : null),
+                    fetch(`/api/metrics/daily?days=${days}`).then(r => r.ok ? r.json() : null),
+                    fetch(`/api/metrics/breakdown?days=${days}`).then(r => r.ok ? r.json() : null)
+                ]);
+
+                const summary = summaryRes.status === 'fulfilled' && summaryRes.value ? summaryRes.value : {
+                    total_queries: 0, total_cost: 0, traditional_cost: 0, savings: 0, savings_percent: 0
+                };
+                
+                const daily = dailyRes.status === 'fulfilled' && dailyRes.value ? dailyRes.value : [];
+                const breakdown = breakdownRes.status === 'fulfilled' && breakdownRes.value ? breakdownRes.value : [];
+
+                updateSummaryCards(summary);
+                updateDailyChart(daily);
+                updateBreakdownChart(breakdown);
+                updateCompareChart(daily);
+
+            } catch (error) {
+                console.error("Error fetching metrics:", error);
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        function updateSummaryCards(data) {
+            document.getElementById('val-queries').textContent = formatNumber(data.total_queries || 0);
+            document.getElementById('val-mimir-cost').textContent = formatCurrency(data.total_cost || 0);
+            document.getElementById('val-trad-cost').textContent = formatCurrency(data.traditional_cost || 0);
+            
+            const savings = data.savings || 0;
+            const pct = data.savings_percent || 0;
+            
+            const savingsEl = document.getElementById('val-savings');
+            savingsEl.innerHTML = `${formatCurrency(savings)} <span style="font-size: 1rem; font-weight: 500;" id="val-savings-pct">(${pct.toFixed(1)}%)</span>`;
+            
+            if (savings < 0) {
+                savingsEl.className = 'card-value trend-down';
+            } else {
+                savingsEl.className = 'card-value trend-up';
+            }
+        }
+
+        function updateDailyChart(data) {
+            const emptyState = document.getElementById('empty-chart-daily');
+            if (!data || data.length === 0) {
+                emptyState.classList.add('active');
+                if (dailyChart) dailyChart.destroy();
+                return;
+            }
+            emptyState.classList.remove('active');
+
+            const labels = data.map(d => d.date);
+            const costs = data.map(d => d.cost);
+            const queries = data.map(d => d.queries);
+
+            const ctx = document.getElementById('dailyChart').getContext('2d');
+            
+            if (dailyChart) dailyChart.destroy();
+            
+            dailyChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Cost ($)',
+                            data: costs,
+                            borderColor: colors.accent,
+                            backgroundColor: colors.accentAlpha,
+                            borderWidth: 2,
+                            tension: 0.4,
+                            fill: true,
+                            yAxisID: 'y'
+                        },
+                        {
+                            label: 'Queries',
+                            data: queries,
+                            borderColor: colors.secondary,
+                            backgroundColor: 'transparent',
+                            borderWidth: 2,
+                            borderDash: [5, 5],
+                            tension: 0.4,
+                            yAxisID: 'y1'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    scales: {
+                        x: { grid: { color: colors.grid, drawBorder: false } },
+                        y: { 
+                            type: 'linear', 
+                            display: true, 
+                            position: 'left',
+                            grid: { color: colors.grid, drawBorder: false },
+                            ticks: { callback: (val) => '$' + val }
+                        },
+                        y1: { 
+                            type: 'linear', 
+                            display: true, 
+                            position: 'right',
+                            grid: { drawOnChartArea: false },
+                            ticks: { stepSize: 1 }
+                        }
+                    }
+                }
+            });
+        }
+
+        function updateBreakdownChart(data) {
+            const emptyState = document.getElementById('empty-chart-breakdown');
+            if (!data || data.length === 0) {
+                emptyState.classList.add('active');
+                if (breakdownChart) breakdownChart.destroy();
+                return;
+            }
+            emptyState.classList.remove('active');
+
+            const labels = data.map(d => d.type || d.model || 'Unknown');
+            const counts = data.map(d => d.count);
+            
+            // Generate some nice colors based on the accent
+            const bgColors = [
+                colors.accent,
+                '#818cf8', // indigo
+                '#c084fc', // purple
+                '#f472b6', // pink
+                '#38bdf8', // sky
+                '#2dd4bf'  // teal
+            ];
+
+            const ctx = document.getElementById('breakdownChart').getContext('2d');
+            
+            if (breakdownChart) breakdownChart.destroy();
+            
+            breakdownChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        data: counts,
+                        backgroundColor: bgColors.slice(0, labels.length),
+                        borderWidth: 0,
+                        hoverOffset: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '70%',
+                    plugins: {
+                        legend: { position: 'bottom', labels: { padding: 20, usePointStyle: true } }
+                    }
+                }
+            });
+        }
+
+        function updateCompareChart(data) {
+            const emptyState = document.getElementById('empty-chart-compare');
+            if (!data || data.length === 0) {
+                emptyState.classList.add('active');
+                if (compareChart) compareChart.destroy();
+                return;
+            }
+            emptyState.classList.remove('active');
+
+            const labels = data.map(d => d.date);
+            const mimirCosts = data.map(d => d.cost);
+            const tradCosts = data.map(d => d.traditional_cost || (d.cost * 1.5)); // Fallback if not provided
+
+            const ctx = document.getElementById('compareChart').getContext('2d');
+            
+            if (compareChart) compareChart.destroy();
+            
+            compareChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Mimir Cost',
+                            data: mimirCosts,
+                            backgroundColor: colors.accent,
+                            borderRadius: 4
+                        },
+                        {
+                            label: 'Traditional Cost',
+                            data: tradCosts,
+                            backgroundColor: colors.secondary,
+                            borderRadius: 4
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: (context) => `${context.dataset.label}: ${formatCurrency(context.raw)}`
+                            }
+                        }
+                    },
+                    scales: {
+                        x: { grid: { display: false } },
+                        y: { 
+                            grid: { color: colors.grid },
+                            ticks: { callback: (val) => '$' + val }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Event Listeners
+        document.querySelectorAll('.time-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
+                e.target.classList.add('active');
+                updateDashboard(e.target.dataset.days);
+            });
+        });
+
+        // Initial load
+        document.addEventListener('DOMContentLoaded', () => {
+            updateDashboard(30);
+        });
+    </script>
+</body>
+</html>

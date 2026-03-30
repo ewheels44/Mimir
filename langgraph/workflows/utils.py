@@ -42,13 +42,16 @@ def get_openrouter_config() -> Tuple[str, str]:
 
 
 def create_llm(
-    model: str = "google/gemini-3.1-flash-lite-preview", temperature: float = 0
+    model: str = "google/gemini-3.1-flash-lite-preview",
+    temperature: float = 0,
+    callbacks=None,
 ) -> ChatOpenAI:
     """Create a LangChain LLM configured for OpenRouter.
 
     Args:
         model: Model name (OpenRouter format like "google/gemini-3.1-flash-lite-preview")
         temperature: Sampling temperature
+        callbacks: Optional list of callback handlers for token tracking
 
     Returns:
         Configured ChatOpenAI instance
@@ -61,12 +64,17 @@ def create_llm(
             "or log in with: opencode auth openrouter"
         )
 
-    return ChatOpenAI(
-        model=model,
-        temperature=temperature,
-        api_key=api_key,
-        base_url=base_url,
-    )
+    kwargs = {
+        "model": model,
+        "temperature": temperature,
+        "api_key": api_key,
+        "base_url": base_url,
+    }
+
+    if callbacks:
+        kwargs["callbacks"] = callbacks
+
+    return ChatOpenAI(**kwargs)
 
 
 def get_mcp_server_path() -> Path:

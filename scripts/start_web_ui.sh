@@ -24,7 +24,12 @@ else
     echo ""
     # Check if we're in a project directory
     if [ -z "$PROJECT_ROOT" ]; then
-        export PROJECT_ROOT="$(pwd)"
+        # If running from scripts directory, use Mimir root instead
+        if [ "$(basename "$(pwd)")" = "scripts" ] && [ -f "$MIMIR_DIR/mcp_server_llamaindex.py" ]; then
+            export PROJECT_ROOT="$(cd "$MIMIR_DIR" && pwd)"
+        else
+            export PROJECT_ROOT="$(pwd)"
+        fi
         echo "📁 Project root (auto-detected): $PROJECT_ROOT"
     else
         echo "📁 Project root (from env): $PROJECT_ROOT"
@@ -51,19 +56,10 @@ print(data.get('openrouter', {}).get('key', ''))
     fi
 fi
 
-echo ""
-echo "🚀 Starting server on http://localhost:8000"
-echo ""
-
 cd "$MIMIR_DIR"
 
-# Pass through any arguments to the server
-if [ $# -ge 1 ]; then
-    # Use resolved PROJECT_ROOT, not raw $1, since we've cd'd to MIMIR_DIR
-    echo "Args for server"
-    echo $PROJECT_ROOT
-    exec uv run --python '>=3.11' python web/server.py --project "$PROJECT_ROOT"
-else
-    echo "No Server Args"
-    exec uv run --python '>=3.11' python web/server.py
-fi
+echo ""
+echo "🚀 Starting server on http://localhost:8000"
+echo "   Project: $PROJECT_ROOT"
+echo ""
+exec uv run --python '>=3.11' python web/server.py --project "$PROJECT_ROOT"

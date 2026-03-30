@@ -1,43 +1,92 @@
 #!/usr/bin/env python3
-#!/usr/bin/env python3
 import argparse
 import asyncio
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path.home() / "Documents" / "Mimir"))
 
 from langchain_core.messages import HumanMessage
 from workflows.rag import graph as rag_graph
 from workflows.knowledge_agent import graph as agent_graph
+from src.mimir.metrics import format_report, get_tracker
 
 
 async def run_rag(query: str):
     print(f"Running RAG workflow for: {query}\n")
 
+    start_time = time.time()
     config = {"configurable": {"thread_id": "1"}}
     result = await rag_graph.ainvoke(
         {"messages": [HumanMessage(content=query)]}, config
     )
+    duration_ms = int((time.time() - start_time) * 1000)
+
+    response = result["messages"][-1].content
+    context = result.get("context", [])
 
     print("\n" + "=" * 50)
     print("RESPONSE:")
     print("=" * 50)
-    print(result["messages"][-1].content)
+    print(response)
+
+    # Extract actual token usage if available from the workflow state
+    token_usage = result.get("token_usage", {})
+    has_actual_data = token_usage.get("has_actual_data", False)
+
+    # Track metrics
+    tracker = get_tracker()
+
+    if has_actual_data and token_usage.get("total_tokens", 0) > 0:
+        # Use actual token data from the callback
+        tracker.record_query(
+            query_type="rag",
+            query_text=query,
+            docs_retrieved=len(context),
+            duration_ms=duration_ms,
+            actual_tokens=token_usage,
+        )
+        print(
+            f"\n[Metrics] Recorded with actual tokens: {token_usage['total_tokens']} total"
+        )
+    else:
+        # Fall back to estimates
+        tracker.record_query(
+            query_type="rag",
+            query_text=query,
+            docs_retrieved=len(context),
+            duration_ms=duration_ms,
+        )
+        print(f"\n[Metrics] Recorded with estimated tokens")
+        print(f"\n[Metrics] Recorded with estimated tokens")
 
 
 async def run_agent(query: str):
     print(f"Running Knowledge Agent for: {query}\n")
 
+    start_time = time.time()
     config = {"configurable": {"thread_id": "1"}}
     result = await agent_graph.ainvoke(
         {"messages": [HumanMessage(content=query)]}, config
     )
+    duration_ms = int((time.time() - start_time) * 1000)
+
+    response = result["messages"][-1].content
 
     print("\n" + "=" * 50)
     print("RESPONSE:")
     print("=" * 50)
-    print(result["messages"][-1].content)
+    print(response)
+
+    # Track metrics - agent uses estimates for now
+    tracker = get_tracker()
+    tracker.record_query(
+        query_type="agent",
+        query_text=query,
+        duration_ms=duration_ms,
+    )
 
 
 async def run_test():
@@ -68,6 +117,11 @@ async def run_test():
         print(f"   Knowledge Agent workflow: FAILED - {e}")
 
 
+def run_metrics(days: int = 30):
+    """Show cost metrics report."""
+    print(format_report(days))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run LangGraph workflows with Mimir")
     subparsers = parser.add_subparsers(dest="command", help="Workflow to run")
@@ -80,6 +134,15 @@ def main():
 
     subparsers.add_parser("test", help="Run workflow tests")
 
+    # Add metrics subcommand
+    metrics_parser = subparsers.add_parser("metrics", help="Show cost metrics report")
+    metrics_parser.add_argument(
+        "--days",
+        type=int,
+        default=30,
+        help="Number of days to include in report (default: 30)",
+    )
+
     args = parser.parse_args()
 
     if args.command == "rag":
@@ -88,6 +151,8 @@ def main():
         asyncio.run(run_agent(args.query))
     elif args.command == "test":
         asyncio.run(run_test())
+    elif args.command == "metrics":
+        run_metrics(args.days)
     else:
         parser.print_help()
         sys.exit(1)

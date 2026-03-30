@@ -119,6 +119,72 @@ This creates `.knowledge/code_relationships.json` which the Web UI uses to displ
 - `stats`: Index statistics
 - `reindex`: Rebuild index
 
+### Cost Tracking & ROI Metrics 💰
+
+Mimir automatically tracks usage and calculates your cost savings. Every query (search, query, RAG, agent) is recorded with:
+- **Query type** and duration
+- **Token usage** (input/output)
+- **Actual costs** using real OpenRouter rates
+- **Estimated savings** vs. traditional exploration
+
+**Data is stored** in `.knowledge/cost_metrics.jsonl` per project.
+
+#### View Your Savings
+
+```bash
+# Via MCP server
+python ~/Documents/Mimir/mcp_server_llamaindex.py --metrics
+
+# Via LangGraph CLI
+python ~/Documents/Mimir/langgraph/cli.py metrics --days 30
+
+# Show last 7 days only
+python ~/Documents/Mimir/langgraph/cli.py metrics --days 7
+```
+
+#### Sample Report
+
+```
+============================================================
+Mimir Cost Report (Last 30 days)
+============================================================
+
+Total queries:           247
+Total Mimir cost:        $0.0864
+
+Estimated without Mimir:
+  Traditional cost:      $0.4940
+  Mimir cost:            $0.0864
+
+  Savings:               $0.4076 (83%)
+
+Usage breakdown:
+----------------------------------------
+  search          156 queries  $0.0156
+  query            45 queries  $0.0315
+  rag              35 queries  $0.0280
+  agent            11 queries  $0.0113
+============================================================
+```
+
+**How savings are calculated:**
+- `search`: Traditional ~3K tokens vs Mimir ~500 tokens + embedding
+- `query`: Traditional ~8K tokens vs Mimir ~2K tokens + embedding + synthesis
+- `rag`: Traditional ~12K tokens vs Mimir ~3K tokens + structured retrieval
+- `agent`: Traditional ~15K tokens vs Mimir ~4K tokens + agentic exploration
+
+The comparison assumes traditional approach involves multiple file reads, grep searches, and context building that Mimir eliminates.
+
+#### Cost Model Reference
+
+| Model | Input | Output |
+|-------|-------|--------|
+| text-embedding-3-small | $0.00002/1K | $0 |
+| gemini-3.1-flash-lite | $0.000075/1K | $0.0003/1K |
+| claude-3.5-sonnet | $0.003/1K | $0.015/1K |
+
+See `src/mimir/metrics.py` for complete pricing table.
+
 ## Structure
 
 ```
@@ -128,7 +194,8 @@ This creates `.knowledge/code_relationships.json` which the Web UI uses to displ
 ├── src/                             # Core source code
 │   └── mimir/
 │       ├── __init__.py
-│       └── indexing.py              # Full indexing utilities
+│       ├── indexing.py              # Full indexing utilities
+│       └── metrics.py               # Cost tracking and ROI metrics
 ├── tests/                           # Test files
 │   ├── __init__.py
 │   └── test_workflows.py
@@ -152,7 +219,9 @@ This creates `.knowledge/code_relationships.json` which the Web UI uses to displ
 
 Your Project/                         # Any project directory
 ├── docs/                            # Your documentation
-├── .knowledge/llamaindex/           # Project-specific vector index
+├── .knowledge/
+│   ├── llamaindex/                  # Project-specific vector index
+│   └── cost_metrics.jsonl           # Usage and cost tracking data
 ├── .mimir/config.json               # Project configuration
 ├── .mimir/AGENTS.md                 # Local copy of Mimir AGENTS.md
 ├── .opencode/mimir-index.py               # Auto-generated setup script
@@ -168,6 +237,7 @@ Your Project/                         # Any project directory
 - **LangGraph Integration**: Advanced workflows with RAG and agentic patterns
 - **OpenCode Integration**: Pre-configured MCP server with auto-discovery
 - **OpenRouter Support**: Uses OpenRouter for embeddings and LLM inference
+- **Cost Tracking**: Built-in ROI metrics and savings calculation
 
 ## Why Mimir? Real-World Benefits
 
@@ -415,6 +485,22 @@ python ~/Documents/Mimir/langgraph/cli.py agent "Find all Y implementations"
 python ~/Documents/Mimir/langgraph/cli.py test
 ```
 
+### Cost Metrics
+
+```bash
+# View 30-day cost report (MCP server)
+python ~/Documents/Mimir/mcp_server_llamaindex.py --metrics
+
+# View 30-day cost report (LangGraph CLI)
+python ~/Documents/Mimir/langgraph/cli.py metrics
+
+# View last 7 days
+python ~/Documents/Mimir/langgraph/cli.py metrics --days 7
+
+# View all-time metrics
+python ~/Documents/Mimir/langgraph/cli.py metrics --days 365
+```
+
 ### Configuration
 
 Create `.mimir/config.json`:
@@ -558,19 +644,71 @@ Configure the **system append prompt** so agents know to use Mimir tools by defa
 
 ```json
 {
-  "agents": {
+    "librarian": {
+      "prompt_append": "## Mimir Context Priority (Default Tools)\nWhen searching or exploring code, **prefer Mimir tools first** (`search`, `query`, `rag_workflow`, `knowledge_agent`) as they use the indexed knowledge graph. Check the Tool Decision Matrix in ~/path/to/Mimir/AGENTS.md when uncertain.\n\n## Parallel Agent Launches\nWhen the user explicitly requests parallel search (e.g., '[search-mode]', 'launch multiple agents', 'IN PARALLEL'), you MAY spawn multiple `explore` and `librarian` agents simultaneously alongside direct tool usage. Mimir tools remain the default; parallel agents are for exhaustive multi-angle exploration when explicitly requested."
+    },
+    "explore": {
+      "prompt_append": "## Mimir Context Priority (Default Tools)\nWhen searching or exploring code, **prefer Mimir tools first** (`search`, `query`, `rag_workflow`, `knowledge_agent`) as they use the indexed knowledge graph. Check the Tool Decision Matrix in ~/path/to/Mimir/AGENTS.md when uncertain.\n\n## Parallel Agent Launches\nWhen the user explicitly requests parallel search (e.g., '[search-mode]', 'launch multiple agents', 'IN PARALLEL'), you MAY spawn multiple `explore` and `librarian` agents simultaneously alongside direct tool usage. Mimir tools remain the default; parallel agents are for exhaustive multi-angle exploration when explicitly requested."
+    },
     "sisyphus": {
+      "variant": "max",
       "prompt_append": "## Mimir Context Priority (Default Tools)\nWhen searching or exploring code, **prefer Mimir tools first** (`search`, `query`, `rag_workflow`, `knowledge_agent`) as they use the indexed knowledge graph. Check the Tool Decision Matrix in ~/path/to/Mimir/AGENTS.md when uncertain.\n\n## Parallel Agent Launches\nWhen the user explicitly requests parallel search (e.g., '[search-mode]', 'launch multiple agents', 'IN PARALLEL'), you MAY spawn multiple `explore` and `librarian` agents simultaneously alongside direct tool usage. Mimir tools remain the default; parallel agents are for exhaustive multi-angle exploration when explicitly requested."
     }
-  }
 }
 ```
 
-Or for multiple AGENTS.md files:
+**Note**: Replace `~/path/to/Mimir/` with your actual Mimir installation path. Adjust models and variants based on your preferences and API access.
 
-**Why this matters**: The system append prompt injects the AGENTS.md content into every agent interaction, ensuring agents always prioritize Mimir's knowledge base tools (`search`, `query`, `rag_workflow`, `knowledge_agent`) over generic exploration patterns.
+#### Subagent Context Inheritance (CRITICAL)
 
-**Note**: Replace `~/path/to/Mimir/` with your actual Mimir installation path.
+When oh-my-opencode spawns subagents (explore, librarian) via `task()`, those subagents **do NOT inherit** the parent agent's AGENTS.md context. They only receive their base agent configuration from the global `~/.config/opencode/oh-my-opencode.json`, missing project-specific Mimir directives.
+
+**The Problem:**
+```typescript
+// WRONG: Subagent won't use Mimir tools - uses grep instead
+task(
+    subagent_type="explore",
+    prompt="Find auth patterns..."
+)
+```
+
+**The Solution:**
+
+During project initialization, Mimir creates a skill file at `.opencode/skills/mimir.md`. Always load this skill when spawning subagents:
+
+```typescript
+// CORRECT: Subagent receives full Mimir context
+task(
+    subagent_type="explore",
+    load_skills=["mimir"],
+    run_in_background=true,
+    prompt="Find auth patterns..."
+)
+
+// CORRECT: Multiple parallel subagents
+task(
+    subagent_type="explore",
+    load_skills=["mimir"],
+    run_in_background=true,
+    prompt="Search codebase..."
+)
+task(
+    subagent_type="librarian",
+    load_skills=["mimir"],
+    run_in_background=true,
+    prompt="Research patterns..."
+)
+```
+
+**Why This Matters:**
+
+Without loading the `mimir` skill, spawned subagents will:
+- Use `grep` and `glob` instead of Mimir's semantic search
+- Not know about the indexed knowledge base
+- Fall back to generic exploration patterns
+- Waste tokens on rediscovery
+
+The skill file contains the full AGENTS.md content and is automatically created during `mimir-init.py` or `setup_knowledge_mcp.py` initialization.
 
 ## Architecture
 
@@ -729,6 +867,7 @@ python ~/Documents/Mimir/mcp_server_llamaindex.py --transport http --port 8000
 | `langgraph/workflows/rag.py` | RAG workflow implementation |
 | `langgraph/workflows/knowledge_agent.py` | Knowledge Agent implementation |
 | `langgraph/workflows/utils.py` | Shared utilities |
+| `src/mimir/metrics.py` | Cost tracking and ROI metrics |
 | `AGENTS.md` | Comprehensive agent documentation |
 | `examples/run_workflow.py` | Workflow usage examples |
 

@@ -15,6 +15,7 @@ MIMIR_DIR = Path.home() / "Documents" / "Mimir"
 sys.path.insert(0, str(MIMIR_DIR))
 
 from mcp_server_llamaindex import ServerConfig, KnowledgeServer
+from src.mimir.metrics import get_tracker, MetricsTracker
 
 app = FastAPI(title="Mimir Web UI", version="1.0.0")
 
@@ -705,6 +706,7 @@ async def read_root():
                 <button onclick="loadGraph()" class="active">Full Graph</button>
                 <button onclick="loadSearchResults()">Search Results</button>
                 <button onclick="clearSelection()">Clear Selection</button>
+                <a href="/metrics" style="margin-left: auto; padding: 8px 16px; border: 1px solid #475569; border-radius: 6px; background: transparent; color: #cbd5e1; font-size: 13px; text-decoration: none; transition: all 0.2s;">Metrics Dashboard</a>
             </div>
             
             <div id="graph-container">
@@ -736,86 +738,199 @@ async def read_root():
         let repulsionStrength = 10000;
         let physicsAnimationId = null;
         let nodeVelocities = new Map();
+        
+        // Spatial partitioning grid for O(n) neighbor lookups
+        let spatialGrid = null;
+        let gridCellSize = 200;
+        
+        // Performance monitoring
+        let lastFrameTime = 0;
+        let frameCount = 0;
+        let skipFrames = 0;
+        
+        // Simple spatial grid for fast neighbor queries
+        class SpatialGrid {
+            constructor(cellSize) {
+                this.cellSize = cellSize;
+                this.cells = new Map();
+                this.nodePositions = new Map();
+            }
+            
+            clear() {
+                this.cells.clear();
+                this.nodePositions.clear();
+            }
+            
+            getCellKey(x, y) {
+                const cx = Math.floor(x / this.cellSize);
+                const cy = Math.floor(y / this.cellSize);
+                return `${cx},${cy}`;
+            }
+            
+            insert(nodeId, x, y, degree) {
+                this.nodePositions.set(nodeId, { x, y, degree });
+                const key = this.getCellKey(x, y);
+                if (!this.cells.has(key)) {
+                    this.cells.set(key, []);
+                }
+                this.cells.get(key).push({ id: nodeId, x, y, degree });
+            }
+            
+            // Get neighbors within a radius using spatial grid
+            getNeighbors(x, y, radius) {
+                const neighbors = [];
+                const radiusSquared = radius * radius;
+                const cellRadius = Math.ceil(radius / this.cellSize);
+                const centerCX = Math.floor(x / this.cellSize);
+                const centerCY = Math.floor(y / this.cellSize);
+                
+                // Only check nearby cells (not all nodes)
+                for (let dx = -cellRadius; dx <= cellRadius; dx++) {
+                    for (let dy = -cellRadius; dy <= cellRadius; dy++) {
+                        const key = `${centerCX + dx},${centerCY + dy}`;
+                        const cell = this.cells.get(key);
+                        if (cell) {
+                            for (const node of cell) {
+                                const distX = x - node.x;
+                                const distY = y - node.y;
+                                const distSq = distX * distX + distY * distY;
+                                if (distSq < radiusSquared) {
+                                    neighbors.push({ ...node, distSq });
+                                }
+                            }
+                        }
+                    }
+                }
+                return neighbors;
+            }
+        }
 
-        // Physics simulation for floating mode
+        // Physics simulation for floating mode - Optimized
         function startFloatingPhysics() {
             if (physicsAnimationId) {
                 cancelAnimationFrame(physicsAnimationId);
             }
             
+            // Initialize spatial grid
+            spatialGrid = new SpatialGrid(gridCellSize);
+            
             const damping = 0.92;
             const timeStep = 0.16;
+            const maxInteractionRadius = 400; // Only compute repulsion within this radius
+            const minMovementThreshold = 0.1; // Skip updates for tiny movements
             
-            function applyForces() {
+            // Batch position updates to reduce DOM manipulation
+            const positionBatch = new Map();
+            let batchCounter = 0;
+            
+            function applyForces(timestamp) {
                 if (!floatingMode) return;
                 
+                // Adaptive frame skipping based on node count
                 const nodes = cy.nodes();
-                const positions = new Map();
+                const nodeCount = nodes.length;
                 
-                // Store current positions
+                // Skip frames for large graphs to maintain responsiveness
+                if (nodeCount > 500 && ++batchCounter % 2 !== 0) {
+                    physicsAnimationId = requestAnimationFrame(applyForces);
+                    return;
+                }
+                if (nodeCount > 1000 && ++batchCounter % 3 !== 0) {
+                    physicsAnimationId = requestAnimationFrame(applyForces);
+                    return;
+                }
+                
+                // Rebuild spatial grid every frame
+                spatialGrid.clear();
                 nodes.forEach(node => {
-                    positions.set(node.id(), node.position());
+                    const pos = node.position();
+                    spatialGrid.insert(node.id(), pos.x, pos.y, node.degree());
                 });
                 
-                // Apply repulsion between all node pairs
+                const centerX = cy.width() / 2;
+                const centerY = cy.height() / 2;
+                positionBatch.clear();
+                
+                // Apply forces using spatial grid - O(n) instead of O(n²)
                 nodes.forEach(node1 => {
-                    const pos1 = positions.get(node1.id());
-                    const degree1 = node1.degree();
+                    const nodeId = node1.id();
+                    const pos1 = spatialGrid.nodePositions.get(nodeId);
+                    if (!pos1) return;
+                    
+                    const degree1 = pos1.degree;
                     let fx = 0, fy = 0;
                     
-                    nodes.forEach(node2 => {
-                        if (node1.id() === node2.id()) return;
+                    // Only check nearby nodes using spatial grid
+                    const neighbors = spatialGrid.getNeighbors(pos1.x, pos1.y, maxInteractionRadius);
+                    
+                    for (const neighbor of neighbors) {
+                        if (neighbor.id === nodeId) continue;
                         
-                        const pos2 = positions.get(node2.id());
-                        const dx = pos1.x - pos2.x;
-                        const dy = pos1.y - pos2.y;
-                        let dist = Math.sqrt(dx * dx + dy * dy);
+                        const dx = pos1.x - neighbor.x;
+                        const dy = pos1.y - neighbor.y;
+                        let dist = Math.sqrt(neighbor.distSq);
                         
-                        if (dist < 10) dist = 10; // Prevent division by zero
+                        if (dist < 10) dist = 10;
                         
-                        // Repulsion force inversely proportional to distance
-                        // Nodes with more connections repel more
-                        const degree2 = node2.degree();
-                        const combinedDegree = Math.sqrt((degree1 + 1) * (degree2 + 1));
+                        // Early termination for distant nodes
+                        if (dist > maxInteractionRadius) continue;
+                        
+                        // Optimized repulsion calculation
+                        const combinedDegree = Math.sqrt((degree1 + 1) * (neighbor.degree + 1));
                         const force = (repulsionStrength * combinedDegree) / (dist * dist);
                         
-                        fx += (dx / dist) * force;
-                        fy += (dy / dist) * force;
-                    });
+                        const normalizedForce = force / dist;
+                        fx += dx * normalizedForce;
+                        fy += dy * normalizedForce;
+                    }
                     
-                    // Add some gentle random drift for organic feel
+                    // Add gentle random drift
                     fx += (Math.random() - 0.5) * 50;
                     fy += (Math.random() - 0.5) * 50;
                     
-                    // Add slight attraction to center to prevent drifting away
-                    const centerX = cy.width() / 2;
-                    const centerY = cy.height() / 2;
+                    // Attraction to center
                     fx += (centerX - pos1.x) * 0.0005;
                     fy += (centerY - pos1.y) * 0.0005;
                     
-                    // Get or initialize velocity
-                    let vel = nodeVelocities.get(node1.id()) || { vx: 0, vy: 0 };
+                    // Get velocity (use Float32Array for better performance)
+                    let vel = nodeVelocities.get(nodeId);
+                    if (!vel) {
+                        vel = { vx: 0, vy: 0 };
+                        nodeVelocities.set(nodeId, vel);
+                    }
                     
-                    // Update velocity with force
+                    // Update velocity
                     vel.vx = (vel.vx + fx * timeStep) * damping;
                     vel.vy = (vel.vy + fy * timeStep) * damping;
                     
                     // Limit max velocity
-                    const maxVel = 50;
-                    const velMag = Math.sqrt(vel.vx * vel.vx + vel.vy * vel.vy);
-                    if (velMag > maxVel) {
-                        vel.vx = (vel.vx / velMag) * maxVel;
-                        vel.vy = (vel.vy / velMag) * maxVel;
+                    const velMagSq = vel.vx * vel.vx + vel.vy * vel.vy;
+                    if (velMagSq > 2500) { // 50²
+                        const scale = 50 / Math.sqrt(velMagSq);
+                        vel.vx *= scale;
+                        vel.vy *= scale;
                     }
                     
-                    nodeVelocities.set(node1.id(), vel);
-                    
-                    // Apply velocity to position
-                    node1.position({
-                        x: pos1.x + vel.vx,
-                        y: pos1.y + vel.vy
-                    });
+                    // Only update if movement is significant
+                    if (Math.abs(vel.vx) > minMovementThreshold || Math.abs(vel.vy) > minMovementThreshold) {
+                        positionBatch.set(nodeId, {
+                            x: pos1.x + vel.vx,
+                            y: pos1.y + vel.vy
+                        });
+                    }
                 });
+                
+                // Batch update positions (single Cytoscape batch operation)
+                if (positionBatch.size > 0) {
+                    cy.batch(() => {
+                        for (const [nodeId, pos] of positionBatch) {
+                            const node = cy.getElementById(nodeId);
+                            if (node.length > 0) {
+                                node.position(pos);
+                            }
+                        }
+                    });
+                }
                 
                 physicsAnimationId = requestAnimationFrame(applyForces);
             }
@@ -829,6 +944,9 @@ async def read_root():
                 physicsAnimationId = null;
             }
             nodeVelocities.clear();
+            if (spatialGrid) {
+                spatialGrid.clear();
+            }
         }
 
         function toggleFloatingMode() {
@@ -1079,33 +1197,63 @@ async def read_root():
                 cy.elements().removeClass('highlighted dimmed');
             }
 
-            // Node drag handler - add extra repulsion when dragging
+            // Node drag handler - optimized with spatial grid
+            let dragSpatialGrid = null;
+            let isDragging = false;
+            let draggedNodeId = null;
+            
+            cy.on('dragstart', 'node', function(evt) {
+                isDragging = true;
+                draggedNodeId = evt.target.id();
+                // Initialize drag spatial grid
+                dragSpatialGrid = new SpatialGrid(150); // Smaller cells for drag precision
+            });
+            
             cy.on('drag', 'node', function(evt) {
+                if (!isDragging || !dragSpatialGrid) return;
+                
                 const draggedNode = evt.target;
                 const draggedPos = draggedNode.position();
                 const draggedDegree = draggedNode.degree();
                 
-                // Apply immediate repulsion to nearby nodes
+                // Rebuild spatial grid for current positions
+                dragSpatialGrid.clear();
                 cy.nodes().forEach(node => {
-                    if (node.id() === draggedNode.id()) return;
+                    if (node.id() !== draggedNodeId) {
+                        const pos = node.position();
+                        dragSpatialGrid.insert(node.id(), pos.x, pos.y, node.degree());
+                    }
+                });
+                
+                // Only check nearby nodes using spatial grid
+                const neighbors = dragSpatialGrid.getNeighbors(draggedPos.x, draggedPos.y, 300);
+                
+                for (const neighbor of neighbors) {
+                    const dx = neighbor.x - draggedPos.x;
+                    const dy = neighbor.y - draggedPos.y;
+                    const dist = Math.sqrt(neighbor.distSq);
                     
-                    const pos = node.position();
-                    const dx = pos.x - draggedPos.x;
-                    const dy = pos.y - draggedPos.y;
-                    const dist = Math.sqrt(dx * dx + dy * dy);
-                    
-                    if (dist < 300 && dist > 0) {
-                        const nodeDegree = node.degree();
-                        const combinedDegree = Math.sqrt((draggedDegree + 1) * (nodeDegree + 1));
+                    if (dist > 0 && dist < 300) {
+                        const combinedDegree = Math.sqrt((draggedDegree + 1) * (neighbor.degree + 1));
                         const force = (repulsionStrength * 5 * combinedDegree) / (dist * dist);
                         
                         // Add velocity to push away from dragged node
-                        let vel = nodeVelocities.get(node.id()) || { vx: 0, vy: 0 };
-                        vel.vx += (dx / dist) * force * 0.5;
-                        vel.vy += (dy / dist) * force * 0.5;
-                        nodeVelocities.set(node.id(), vel);
+                        let vel = nodeVelocities.get(neighbor.id);
+                        if (!vel) {
+                            vel = { vx: 0, vy: 0 };
+                            nodeVelocities.set(neighbor.id, vel);
+                        }
+                        const normalizedForce = (force * 0.5) / dist;
+                        vel.vx += dx * normalizedForce;
+                        vel.vy += dy * normalizedForce;
                     }
-                });
+                }
+            });
+            
+            cy.on('dragfree', 'node', function(evt) {
+                isDragging = false;
+                draggedNodeId = null;
+                dragSpatialGrid = null;
             });
 
             // Background click handler
@@ -1308,7 +1456,7 @@ async def read_root():
                 
                 // Display connections by type
                 for (const [type, connections] of Object.entries(connectionsByType)) {
-                    const typeLabel = type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                    const typeLabel = type.replace(/_/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase());
                     const typeColor = getEdgeTypeColor(type);
                     
                     html += `
@@ -1569,6 +1717,12 @@ async def read_root():
     return html_content
 
 
+@app.get("/metrics", response_class=HTMLResponse)
+async def read_metrics():
+    metrics_path = Path(__file__).parent / "templates" / "metrics.html"
+    return HTMLResponse(content=metrics_path.read_text())
+
+
 @app.get("/api/graph", response_model=GraphData)
 async def get_graph():
     """Get the knowledge graph data with relationships"""
@@ -1713,6 +1867,92 @@ async def get_graph():
                 )
 
         return GraphData(nodes=nodes, edges=edges)
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/metrics/summary")
+async def get_metrics_summary(days: int = Query(30, ge=1, le=365)):
+    """Get cost summary with total queries, costs, and savings"""
+    try:
+        global _server_config
+        if _server_config is None:
+            _server_config = ServerConfig.from_env()
+
+        tracker = MetricsTracker(_server_config.project_root)
+        summary = tracker.get_summary(days)
+
+        return summary
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/metrics/daily")
+async def get_metrics_daily(days: int = Query(30, ge=1, le=365)):
+    """Get daily stats for charting"""
+    try:
+        global _server_config
+        if _server_config is None:
+            _server_config = ServerConfig.from_env()
+
+        tracker = MetricsTracker(_server_config.project_root)
+        daily_stats = tracker.get_daily_stats(days)
+
+        return daily_stats
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/metrics/breakdown")
+async def get_metrics_breakdown(days: int = Query(30, ge=1, le=365)):
+    """Get query breakdown by type"""
+    try:
+        global _server_config
+        if _server_config is None:
+            _server_config = ServerConfig.from_env()
+
+        tracker = MetricsTracker(_server_config.project_root)
+        metrics = tracker.load_metrics(days)
+
+        if not metrics:
+            raise HTTPException(
+                status_code=404, detail="No metrics found for the specified period"
+            )
+
+        # Group by query_type
+        breakdown = {}
+        for m in metrics:
+            query_type = m.query_type
+            if query_type not in breakdown:
+                breakdown[query_type] = {
+                    "query_type": query_type,
+                    "count": 0,
+                    "total_cost": 0.0,
+                    "total_tokens": 0,
+                }
+            breakdown[query_type]["count"] += 1
+            breakdown[query_type]["total_cost"] += m.cost
+            breakdown[query_type]["total_tokens"] += m.tokens_in + m.tokens_out
+
+        for data in breakdown.values():
+            data["total_cost"] = round(data["total_cost"], 4)
+
+        return list(breakdown.values())
+    except HTTPException:
+        raise
     except Exception as e:
         import traceback
 

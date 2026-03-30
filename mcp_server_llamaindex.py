@@ -25,12 +25,14 @@ import sys
 import json
 import shutil
 import argparse
+import time
 from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass
 
 MIMIR_DIR = Path.home() / "Documents" / "Mimir"
 sys.path.insert(0, str(MIMIR_DIR))
+from src.mimir.metrics import get_tracker
 
 from mcp.server.fastmcp import FastMCP
 from llama_index.core import (
@@ -219,11 +221,22 @@ class KnowledgeServer:
         return load_index_from_storage(storage_context)
 
     def search(self, query: str, top_k: int = 5) -> str:
+        start_time = time.time()
         index = self.get_index()
         if index is None:
             return "No knowledge base found. Run with --index to create one."
 
         nodes = index.as_retriever(similarity_top_k=top_k).retrieve(query)
+        duration_ms = int((time.time() - start_time) * 1000)
+
+        # Track metrics - record_query will calculate realistic costs
+        tracker = get_tracker(self.config.project_root)
+        tracker.record_query(
+            query_type="search",
+            query_text=query,
+            docs_retrieved=len(nodes),
+            duration_ms=duration_ms,
+        )
 
         if not nodes:
             return "No relevant documents found."
@@ -238,15 +251,26 @@ class KnowledgeServer:
         return "\n\n".join(results)
 
     def query(self, question: str) -> str:
+        start_time = time.time()
         index = self.get_index()
         if index is None:
             return "No knowledge base found. Run with --index to create one."
 
         try:
-            # Use a shorter timeout-friendly approach
             query_engine = index.as_query_engine()
             response = query_engine.query(question)
-            return str(response)
+            result = str(response)
+            duration_ms = int((time.time() - start_time) * 1000)
+            
+            # Track metrics - record_query will calculate realistic costs
+            tracker = get_tracker(self.config.project_root)
+            tracker.record_query(
+                query_type="query",
+                query_text=question,
+                duration_ms=duration_ms,
+            )
+            
+            return result
         except Exception as e:
             return f"Error querying knowledge base: {e}. Try using 'search' instead for faster results."
 
@@ -383,6 +407,9 @@ def main():
         "--stats", action="store_true", help="Show knowledge base statistics"
     )
     parser.add_argument(
+        "--metrics", action="store_true", help="Show cost metrics report"
+    )
+    parser.add_argument(
         "--transport", choices=["stdio", "http"], default="stdio", help="Transport mode"
     )
     parser.add_argument("--port", type=int, default=8000, help="HTTP port")
@@ -415,6 +442,11 @@ def main():
 
     if args.stats:
         print(json.dumps(server.get_stats(), indent=2))
+        return
+    
+    if args.metrics:
+        from src.mimir.metrics import format_report
+        print(format_report(days=30))
         return
 
     mcp = create_mcp_server(server)

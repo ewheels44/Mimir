@@ -106,6 +106,38 @@ if __name__ == "__main__":
     return setup_script
 
 
+def create_agents_md(project_root: Path, mimir_root: Path) -> Path:
+    """Copy AGENTS.md from Mimir installation to project's .mimir directory.
+
+    This provides a local copy of the Mimir documentation that can be
+    referenced in opencode.json for AGENTS.md chaining.
+    """
+    import shutil
+
+    mimir_dir = project_root / ".mimir"
+    mimir_dir.mkdir(exist_ok=True)
+
+    source_agents = mimir_root / "AGENTS.md"
+    dest_agents = mimir_dir / "AGENTS.md"
+
+    if source_agents.exists():
+        shutil.copy2(source_agents, dest_agents)
+    else:
+        dest_agents.write_text("""# Project Knowledge Base (Mimir)
+
+## Learn More
+
+- Full documentation: https://github.com/ewheels44/Mimir
+- See AGENTS.md in the Mimir installation directory for complete guide
+
+---
+
+*Powered by Mimir - Knowledge that follows you*
+""")
+
+    return dest_agents
+
+
 def create_mimir_config(project_root: Path, code_dirs: list[str] = None) -> Path:
     mimir_dir = project_root / ".mimir"
     mimir_dir.mkdir(exist_ok=True)
@@ -147,6 +179,98 @@ def create_opencode_json(project_root: Path, mimir_root: Path) -> Path:
         json.dump(config, f, indent=2)
 
     return opencode_json
+
+
+def create_mimir_skill(project_root: Path, mimir_root: Path) -> Path:
+    """Create a Mimir skill file for subagent context inheritance.
+
+    When oh-my-opencode spawns subagents (explore, librarian) via task(),
+    those subagents do NOT inherit the parent agent's AGENTS.md context.
+    They only receive their base agent configuration from the global
+    oh-my-opencode.json, missing project-specific Mimir directives.
+
+    This skill file allows subagents to receive the full Mimir context
+    by loading it via the load_skills parameter:
+
+        task(
+            subagent_type="explore",
+            load_skills=["mimir"],
+            prompt="..."
+        )
+
+    The skill content is injected into the subagent's system prompt,
+    ensuring they follow Mimir's tool priority directives.
+    """
+    skills_dir = project_root / ".opencode" / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+
+    source_agents = mimir_root / "AGENTS.md"
+    agents_content = source_agents.read_text() if source_agents.exists() else ""
+
+    skill_content = f"""---
+name: mimir
+description: Mimir knowledge base directives for subagent context inheritance. Load this skill when spawning explore/librarian subagents to ensure they use Mimir tools by default.
+---
+
+# Mimir Knowledge Base — Subagent Context
+
+This skill ensures that spawned subagents (explore, librarian) receive the full Mimir context
+that would otherwise be missing when they are created via task().
+
+## Why This Skill Is Needed
+
+When you spawn a subagent using:
+```
+task(subagent_type="explore", prompt="...")
+```
+
+The subagent starts with a clean context containing only:
+- Base agent configuration from ~/.config/opencode/oh-my-opencode.json
+- The task prompt you provide
+- NOT the project-specific opencode.json instructions
+- NOT the full AGENTS.md directives
+
+By loading this skill, the subagent receives the complete Mimir directive.
+
+## How to Use
+
+Always load this skill when spawning parallel agents:
+
+```
+task(
+    subagent_type="explore",
+    load_skills=["mimir"],
+    prompt="Find authentication patterns..."
+)
+```
+
+Or for multiple subagents:
+
+```
+task(
+    subagent_type="explore",
+    load_skills=["mimir"],
+    run_in_background=true,
+    prompt="Find auth implementations..."
+)
+task(
+    subagent_type="librarian",
+    load_skills=["mimir"],
+    run_in_background=true,
+    prompt="Research JWT best practices..."
+)
+```
+
+---
+
+{agents_content}
+"""
+
+    skill_path = skills_dir / "mimir.md"
+    with open(skill_path, "w") as f:
+        f.write(skill_content)
+
+    return skill_path
 
 
 def init_project(project_root: Path, server_script: Path, args) -> bool:
@@ -191,6 +315,13 @@ def init_project(project_root: Path, server_script: Path, args) -> bool:
 
     mimir_root = server_script.parent
 
+    agents_path = mimir_dir / "AGENTS.md"
+    if not agents_path.exists() or args.force:
+        agents_path = create_agents_md(project_root, mimir_root)
+        tqdm.write(f"   ✓ Created: {agents_path}")
+    else:
+        tqdm.write(f"   ⏭️  Skipped: {agents_path} (exists, use --force to overwrite)")
+
     opencode_json_path = project_root / "opencode.json"
     if not opencode_json_path.exists() or args.force:
         opencode_json_path = create_opencode_json(project_root, mimir_root)
@@ -201,6 +332,18 @@ def init_project(project_root: Path, server_script: Path, args) -> bool:
     else:
         tqdm.write(
             f"   ⏭️  Skipped: {opencode_json_path} (exists, use --force to overwrite)"
+        )
+
+    mimir_skill_path = project_root / ".opencode" / "skills" / "mimir.md"
+    if not mimir_skill_path.exists() or args.force:
+        mimir_skill_path = create_mimir_skill(project_root, mimir_root)
+        tqdm.write(f"   ✓ Created: {mimir_skill_path}")
+        tqdm.write(
+            "   ⚠️  IMPORTANT: Load skill when spawning subagents: load_skills=['mimir']"
+        )
+    else:
+        tqdm.write(
+            f"   ⏭️  Skipped: {mimir_skill_path} (exists, use --force to overwrite)"
         )
 
     local_server = project_root / "mcp_server_llamaindex.py"
@@ -262,8 +405,16 @@ def init_project(project_root: Path, server_script: Path, args) -> bool:
     print(
         "      Customize opencode.json to chain AGENTS.md files for multi-module projects."
     )
+    print("\n   6. Using with Subagents (explore/librarian):")
+    print("      When spawning parallel agents, always load the mimir skill:")
+    print("         task(")
+    print("             subagent_type='explore',")
+    print("             load_skills=['mimir'],")
+    print("             prompt='...'")
+    print("         )")
+    print("      This ensures subagents inherit Mimir tool priority directives.")
     print("\n🌐 Web UI:")
-    print("   python ~/Documents/Mimir/scripts/start_web_ui.sh")
+    print("   ./ ~/Documents/Mimir/scripts/start_web_ui.sh")
     print("   Then open http://localhost:8000")
     print("\n📚 Documentation:")
     print("   See README.md for complete user guide and usage examples")

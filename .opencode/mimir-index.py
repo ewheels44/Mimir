@@ -402,7 +402,7 @@ def main():
 
     print("\n📖 Next steps:")
     print("   - Query via OpenCode: Just start asking questions!")
-    print("   - Web UI: python ~/Documents/Mimir/scripts/start_web_ui.sh")
+    print("   - Web UI: ./ ~/Documents/Mimir/scripts/start_web_ui.sh")
     print(
         "   - CLI: python ~/Documents/Mimir/mcp_server_llamaindex.py --query 'your question'"
     )

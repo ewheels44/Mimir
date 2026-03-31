@@ -3,614 +3,418 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mimir Metrics Dashboard</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <title>Mimir metrics dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <style>
-        /* CSS Variables */
         :root {
-            --bg: #0f172a;
-            --card-bg: #1e293b;
-            --accent: #60a5fa;
-            --accent-glow: rgba(96, 165, 250, 0.15);
-            --text-main: #f8fafc;
-            --text-muted: #94a3b8;
-            --border: #334155;
-            --success: #10b981;
-            --danger: #ef4444;
-            --font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            --bg: #0f172a; --card-bg: #1e293b; --accent: #60a5fa;
+            --text: #f8fafc; --muted: #94a3b8; --border: #334155;
+            --success: #10b981; --danger: #ef4444; --amber: #f59e0b;
+            --font: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         }
-
-        /* Reset & Base */
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            background-color: var(--bg);
-            color: var(--text-main);
-            font-family: var(--font-family);
-            line-height: 1.5;
-            -webkit-font-smoothing: antialiased;
-        }
+        body { background: var(--bg); color: var(--text); font-family: var(--font); line-height: 1.5; -webkit-font-smoothing: antialiased; }
 
-        /* Layout */
-        .dashboard {
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 2rem;
-        }
+        .dash { max-width: 1400px; margin: 0 auto; padding: 2rem; }
 
-        /* Header */
-        .header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 2.5rem;
-            border-bottom: 1px solid var(--border);
-            padding-bottom: 1.5rem;
-        }
-        .header h1 {
-            font-size: 1.875rem;
-            font-weight: 700;
-            letter-spacing: -0.025em;
-            background: linear-gradient(to right, var(--text-main), var(--text-muted));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        .nav-link {
-            color: var(--text-muted);
-            text-decoration: none;
-            font-size: 0.875rem;
-            display: inline-flex;
-            align-items: center;
-            gap: 0.5rem;
-            transition: color 0.2s;
-        }
+        /* header */
+        .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 2.5rem; border-bottom: 1px solid var(--border); padding-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem; }
+        .header h1 { font-size: 1.75rem; font-weight: 600; letter-spacing: -0.02em; }
+        .nav-link { color: var(--muted); text-decoration: none; font-size: .875rem; display: flex; align-items: center; gap: .4rem; }
         .nav-link:hover { color: var(--accent); }
+        .controls { display: flex; gap: .4rem; background: var(--card-bg); padding: .25rem; border-radius: .5rem; border: 1px solid var(--border); }
+        .tBtn { background: transparent; border: none; color: var(--muted); padding: .4rem .9rem; border-radius: .35rem; font-size: .875rem; cursor: pointer; }
+        .tBtn.active { background: var(--border); color: var(--text); }
 
-        /* Controls */
-        .controls {
-            display: flex;
-            gap: 0.5rem;
-            background: var(--card-bg);
-            padding: 0.25rem;
-            border-radius: 0.5rem;
-            border: 1px solid var(--border);
-        }
-        .time-btn {
-            background: transparent;
-            border: none;
-            color: var(--text-muted);
-            padding: 0.5rem 1rem;
-            border-radius: 0.375rem;
-            font-size: 0.875rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        .time-btn:hover { color: var(--text-main); }
-        .time-btn.active {
-            background: var(--border);
-            color: var(--text-main);
-            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-        }
+        /* metric cards */
+        .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+        .mcard { background: var(--card-bg); border-radius: .75rem; border: 1px solid var(--border); padding: 1.2rem; position: relative; overflow: hidden; }
+        .mcard-label { font-size: .75rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: .5rem; }
+        .mcard-val { font-size: 1.8rem; font-weight: 600; }
+        .mcard-sub { font-size: .75rem; color: var(--muted); margin-top: .3rem; }
+        .pos { color: var(--success); }
+        .neg { color: var(--danger); }
 
-        /* Grid Layouts */
-        .summary-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-            gap: 1.5rem;
-            margin-bottom: 2rem;
-        }
-        .charts-grid {
-            display: grid;
-            grid-template-columns: 2fr 1fr;
-            gap: 1.5rem;
-            margin-bottom: 1.5rem;
-        }
-        .charts-grid-bottom {
-            display: grid;
-            grid-template-columns: 1fr;
-            gap: 1.5rem;
-        }
+        /* section heading */
+        .section-title { font-size: .9rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin: 2rem 0 .75rem; }
 
-        @media (max-width: 1024px) {
-            .charts-grid { grid-template-columns: 1fr; }
-        }
+        /* chart grid */
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.25rem; }
+        .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.25rem; margin-bottom: 1.25rem; }
+        @media (max-width: 900px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
 
-        /* Cards */
-        .card {
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: 1rem;
-            padding: 1.5rem;
-            position: relative;
-            overflow: hidden;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-            animation: fadeUp 0.5s ease-out forwards;
-            opacity: 0;
-            transform: translateY(10px);
-        }
-        
-        /* Staggered animations */
-        .card:nth-child(1) { animation-delay: 0.05s; }
-        .card:nth-child(2) { animation-delay: 0.1s; }
-        .card:nth-child(3) { animation-delay: 0.15s; }
-        .card:nth-child(4) { animation-delay: 0.2s; }
-        .chart-card:nth-child(1) { animation-delay: 0.25s; }
-        .chart-card:nth-child(2) { animation-delay: 0.3s; }
-        .chart-card:nth-child(3) { animation-delay: 0.35s; }
+        .ccard { background: var(--card-bg); border: 1px solid var(--border); border-radius: .75rem; padding: 1.2rem; position: relative; }
+        .ccard-title { font-size: .875rem; font-weight: 500; margin-bottom: .2rem; }
+        .ccard-sub   { font-size: .75rem; color: var(--muted); margin-bottom: 1rem; }
+        .chart-wrap  { position: relative; }
 
-        .card::before {
-            content: '';
-            position: absolute;
-            top: 0; left: 0; right: 0; height: 2px;
-            background: linear-gradient(90deg, transparent, var(--accent), transparent);
-            opacity: 0;
-            transition: opacity 0.3s;
-        }
-        .card:hover::before { opacity: 1; }
+        /* legend */
+        .legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: .7rem; color: var(--muted); margin-top: .75rem; }
+        .legend span { display: flex; align-items: center; gap: 4px; }
+        .swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
 
-        .card-title {
-            color: var(--text-muted);
-            font-size: 0.875rem;
-            font-weight: 500;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin-bottom: 0.75rem;
-        }
-        .card-value {
-            font-size: 2.25rem;
-            font-weight: 700;
-            color: var(--text-main);
-            line-height: 1.2;
-            display: flex;
-            align-items: baseline;
-            gap: 0.5rem;
-        }
-        .card-sub {
-            font-size: 0.875rem;
-            color: var(--text-muted);
-            margin-top: 0.5rem;
-        }
-        .trend-up { color: var(--success); }
-        .trend-down { color: var(--danger); }
+        /* component bar (custom HTML breakdown) */
+        .cbar-wrap { margin-top: .5rem; }
+        .cbar-row  { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: .75rem; color: var(--muted); }
+        .cbar-label{ width: 90px; flex-shrink: 0; text-align: right; }
+        .cbar      { flex: 1; height: 8px; border-radius: 4px; background: var(--border); overflow: hidden; }
+        .cbar-fill { height: 100%; border-radius: 4px; transition: width .4s; }
+        .cbar-amt  { width: 70px; flex-shrink: 0; text-align: right; }
 
-        /* Chart Containers */
-        .chart-card {
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: 1rem;
-            padding: 1.5rem;
-            display: flex;
-            flex-direction: column;
-            animation: fadeUp 0.5s ease-out forwards;
-            opacity: 0;
-            transform: translateY(10px);
-        }
-        .chart-header {
-            margin-bottom: 1.5rem;
-        }
-        .chart-title {
-            font-size: 1.125rem;
-            font-weight: 600;
-        }
-        .chart-container {
-            position: relative;
-            flex-grow: 1;
-            min-height: 300px;
-            width: 100%;
-        }
-
-        /* Loading State */
-        .loading-overlay {
-            position: absolute;
-            inset: 0;
-            background: rgba(30, 41, 59, 0.8);
-            backdrop-filter: blur(4px);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 10;
-            border-radius: inherit;
-            opacity: 0;
-            pointer-events: none;
-            transition: opacity 0.2s;
-        }
-        .loading-overlay.active {
-            opacity: 1;
-            pointer-events: all;
-        }
-        .spinner {
-            width: 2rem;
-            height: 2rem;
-            border: 3px solid var(--border);
-            border-top-color: var(--accent);
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-
-        /* Empty State */
-        .empty-state {
-            position: absolute;
-            inset: 0;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-muted);
-            background: var(--card-bg);
-            z-index: 5;
-            display: none;
-        }
-        .empty-state.active { display: flex; }
-
+        /* spinner */
+        .spinner-wrap { display: flex; align-items: center; justify-content: center; height: 140px; }
+        .spinner { width: 28px; height: 28px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
-        @keyframes fadeUp {
-            to { opacity: 1; transform: translateY(0); }
-        }
+
+        .empty { display: flex; align-items: center; justify-content: center; height: 140px; color: var(--muted); font-size: .875rem; }
     </style>
 </head>
 <body>
-    <div class="dashboard">
-        <header class="header">
-            <div>
-                <a href="/" class="nav-link">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
-                    Back to Graph
-                </a>
-                <h1>Metrics & Usage</h1>
-            </div>
-            <div class="controls">
-                <button class="time-btn" data-days="7">7 Days</button>
-                <button class="time-btn active" data-days="30">30 Days</button>
-                <button class="time-btn" data-days="90">90 Days</button>
-            </div>
-        </header>
-
-        <div class="summary-grid">
-            <div class="card">
-                <div class="loading-overlay" id="loading-summary-1"><div class="spinner"></div></div>
-                <div class="card-title">Total Queries</div>
-                <div class="card-value" id="val-queries">--</div>
-                <div class="card-sub">In selected period</div>
-            </div>
-            <div class="card">
-                <div class="loading-overlay" id="loading-summary-2"><div class="spinner"></div></div>
-                <div class="card-title">Actual Spend</div>
-                <div class="card-value" id="val-mimir-cost">$--</div>
-                <div class="card-sub">Real API costs (Mimir)</div>
-            </div>
-            <div class="card">
-                <div class="loading-overlay" id="loading-summary-3"><div class="spinner"></div></div>
-                <div class="card-title">Est. Without Mimir</div>
-                <div class="card-value" id="val-trad-cost">$--</div>
-                <div class="card-sub">What you'd spend traditionally</div>
-            </div>
-            <div class="card">
-                <div class="loading-overlay" id="loading-summary-4"><div class="spinner"></div></div>
-                <div class="card-title">Total Savings</div>
-                <div class="card-value trend-up" id="val-savings">
-                    $-- <span style="font-size: 1rem; font-weight: 500;" id="val-savings-pct">(--%)</span>
-                </div>
-                <div class="card-sub">Efficiency gained</div>
+<div class="dash">
+    <header class="header">
+        <div>
+            <a href="/" class="nav-link" style="margin-bottom:.5rem;display:inline-flex">← Back to graph</a>
+            <h1>Metrics &amp; usage</h1>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:.5rem">
+            <div class="controls" id="periodCtrl">
+                <button class="tBtn" data-days="7">7d</button>
+                <button class="tBtn active" data-days="30">30d</button>
+                <button class="tBtn" data-days="90">90d</button>
             </div>
         </div>
+    </header>
 
-        <div class="charts-grid">
-            <div class="chart-card">
-                <div class="loading-overlay" id="loading-chart-daily"><div class="spinner"></div></div>
-                <div class="empty-state" id="empty-chart-daily">No data available for this period</div>
-                <div class="chart-header">
-                    <h2 class="chart-title">Daily Cost & Usage</h2>
-                </div>
-                <div class="chart-container">
-                    <canvas id="dailyChart"></canvas>
-                </div>
+    <!-- Summary cards -->
+    <div class="cards" id="summaryCards">
+        <div class="mcard" style="background:linear-gradient(135deg, var(--card-bg) 0%, #1e3a5f 100%); border-color:#60a5fa">
+            <div class="mcard-label" style="color:#60a5fa">Amount Spent</div>
+            <div class="mcard-val" id="sv-m">—</div>
+            <div class="mcard-sub" id="sv-m-sub">actual API cost</div>
+            <div style="margin-top:8px; height:4px; background:var(--border); border-radius:2px; overflow:hidden">
+                <div id="sv-m-bar" style="height:100%; width:0%; background:#60a5fa; transition:width 0.5s"></div>
             </div>
-            <div class="chart-card">
-                <div class="loading-overlay" id="loading-chart-breakdown"><div class="spinner"></div></div>
-                <div class="empty-state" id="empty-chart-breakdown">No data available for this period</div>
-                <div class="chart-header">
-                    <h2 class="chart-title">Query Breakdown</h2>
-                </div>
-                <div class="chart-container">
-                    <canvas id="breakdownChart"></canvas>
-                </div>
-            </div>
+            <div class="mcard-sub" id="sv-m-pct" style="margin-top:4px; font-size:11px">of typical $10 dev budget</div>
         </div>
-        
-        <div class="charts-grid-bottom">
-            <div class="chart-card">
-                <div class="loading-overlay" id="loading-chart-compare"><div class="spinner"></div></div>
-                <div class="empty-state" id="empty-chart-compare">No data available for this period</div>
-                <div class="chart-header">
-                    <h2 class="chart-title">Cost Comparison</h2>
-                </div>
-                <div class="chart-container">
-                    <canvas id="compareChart"></canvas>
-                </div>
+        <div class="mcard"><div class="mcard-label">Total queries</div><div class="mcard-val" id="sv-q">—</div><div class="mcard-sub">in period</div></div>
+        <div class="mcard"><div class="mcard-label">Without Mimir</div><div class="mcard-val" id="sv-t">—</div><div class="mcard-sub">traditional estimate</div></div>
+        <div class="mcard"><div class="mcard-label">Savings</div><div class="mcard-val pos" id="sv-s">—</div><div class="mcard-sub pos" id="sv-sp">—</div></div>
+    </div>
+
+    <!-- Token spend section -->
+    <div class="section-title">Where the money goes</div>
+    <div class="grid-3">
+        <!-- Component pie -->
+        <div class="ccard">
+            <div class="ccard-title">Spend by component</div>
+            <div class="ccard-sub">Embedding · LLM input · LLM output</div>
+            <div class="chart-wrap" style="height:180px"><canvas id="componentPie"></canvas></div>
+            <div class="legend" id="componentLeg"></div>
+        </div>
+
+        <!-- Stacked bar per query type -->
+        <div class="ccard" style="grid-column: span 2">
+            <div class="ccard-title">Token spend by query type</div>
+            <div class="ccard-sub">What each query type actually costs, broken down</div>
+            <div class="chart-wrap" style="height:180px"><canvas id="typeStack"></canvas></div>
+            <div class="legend">
+                <span><span class="swatch" style="background:#378ADD"></span>Embedding</span>
+                <span><span class="swatch" style="background:#1D9E75"></span>LLM input</span>
+                <span><span class="swatch" style="background:#EF9F27"></span>LLM output</span>
             </div>
         </div>
     </div>
 
-    <script>
-        // Chart instances
-        let dailyChart = null;
-        let breakdownChart = null;
-        let compareChart = null;
+    <!-- Per-component bar list -->
+    <div class="ccard" style="margin-bottom:1.25rem">
+        <div class="ccard-title">Cost breakdown detail</div>
+        <div class="ccard-sub">Proportional bar for each spend category</div>
+        <div class="cbar-wrap" id="componentBars">
+            <div class="spinner-wrap"><div class="spinner"></div></div>
+        </div>
+    </div>
 
-        // Theme colors for charts
-        const colors = {
-            accent: '#60a5fa',
-            accentAlpha: 'rgba(96, 165, 250, 0.2)',
-            secondary: '#94a3b8',
-            secondaryAlpha: 'rgba(148, 163, 184, 0.2)',
-            success: '#10b981',
-            successAlpha: 'rgba(16, 185, 129, 0.2)',
-            danger: '#ef4444',
-            grid: '#334155',
-            text: '#94a3b8',
-            textMain: '#f8fafc'
-        };
+    <!-- Trend & comparison section -->
+    <div class="section-title">Usage over time</div>
+    <div class="grid-2">
+        <div class="ccard">
+            <div class="ccard-title">Daily Mimir vs traditional cost</div>
+            <div class="ccard-sub">Shaded gap = savings</div>
+            <div class="chart-wrap" style="height:220px"><canvas id="trendChart"></canvas></div>
+            <div class="legend">
+                <span><span class="swatch" style="background:#378ADD"></span>Mimir</span>
+                <span><span class="swatch" style="background:#73726c"></span>Traditional est.</span>
+            </div>
+        </div>
+        <div class="ccard">
+            <div class="ccard-title">Savings multiplier by query type</div>
+            <div class="ccard-sub">Traditional ÷ Mimir — higher is better</div>
+            <div class="chart-wrap" style="height:220px"><canvas id="roiChart"></canvas></div>
+            <div class="legend"><span><span class="swatch" style="background:#1D9E75"></span>Higher = more savings</span></div>
+        </div>
+    </div>
 
-        // Common Chart.js defaults
-        Chart.defaults.color = colors.text;
-        Chart.defaults.font.family = "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
-        Chart.defaults.plugins.tooltip.backgroundColor = '#1e293b';
-        Chart.defaults.plugins.tooltip.titleColor = colors.textMain;
-        Chart.defaults.plugins.tooltip.bodyColor = colors.textMain;
-        Chart.defaults.plugins.tooltip.borderColor = colors.grid;
-        Chart.defaults.plugins.tooltip.borderWidth = 1;
-        Chart.defaults.plugins.tooltip.padding = 12;
-        Chart.defaults.plugins.tooltip.cornerRadius = 8;
+    <!-- Waterfall -->
+    <div class="section-title">Savings source breakdown</div>
+    <div class="ccard" style="margin-bottom:2rem">
+        <div class="ccard-title">Cost waterfall</div>
+        <div class="ccard-sub">Traditional total → reductions by category → Mimir total</div>
+        <div class="chart-wrap" style="height:200px"><canvas id="waterfallChart"></canvas></div>
+    </div>
+</div>
 
-        // Formatters
-        const formatCurrency = (val) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(val);
-        const formatNumber = (val) => new Intl.NumberFormat('en-US').format(val);
+<script>
+Chart.defaults.color = '#94a3b8';
+Chart.defaults.font.family = "system-ui,-apple-system,'Segoe UI',Roboto,sans-serif";
+Chart.defaults.plugins.tooltip.backgroundColor = '#1e293b';
+Chart.defaults.plugins.tooltip.titleColor = '#f8fafc';
+Chart.defaults.plugins.tooltip.bodyColor  = '#f8fafc';
+Chart.defaults.plugins.tooltip.borderColor = '#334155';
+Chart.defaults.plugins.tooltip.borderWidth = 1;
+Chart.defaults.plugins.tooltip.padding = 10;
+Chart.defaults.plugins.tooltip.cornerRadius = 6;
 
-        // Toggle loading states
-        function setLoading(isLoading) {
-            document.querySelectorAll('.loading-overlay').forEach(el => {
-                if (isLoading) el.classList.add('active');
-                else el.classList.remove('active');
-            });
-        }
+const C = {
+    blue:   '#378ADD', teal: '#1D9E75', amber: '#EF9F27',
+    coral:  '#D85A30', gray: '#888780', purple: '#7F77DD',
+    blueFade: 'rgba(55,138,221,0.18)', grayFade: 'rgba(136,135,128,0.12)',
+};
 
-        // Fetch and update data
-        async function updateDashboard(days) {
-            setLoading(true);
-            
-            try {
-                // In a real scenario, these would be actual API calls.
-                // We wrap them in try/catch to handle potential 404s gracefully if endpoints aren't ready.
-                const [summaryRes, dailyRes, breakdownRes] = await Promise.allSettled([
-                    fetch(`/api/metrics/summary?days=${days}`).then(r => r.ok ? r.json() : null),
-                    fetch(`/api/metrics/daily?days=${days}`).then(r => r.ok ? r.json() : null),
-                    fetch(`/api/metrics/breakdown?days=${days}`).then(r => r.ok ? r.json() : null)
-                ]);
+const fmt$ = v => '$' + Math.abs(v).toFixed(v >= 0.01 ? 3 : 5);
+const fmtN = v => v.toLocaleString();
 
-                const summary = summaryRes.status === 'fulfilled' && summaryRes.value ? summaryRes.value : {
-                    total_queries: 0, total_cost: 0, traditional_cost: 0, savings: 0, savings_percent: 0
-                };
-                
-                const daily = dailyRes.status === 'fulfilled' && dailyRes.value ? dailyRes.value : [];
-                const breakdown = breakdownRes.status === 'fulfilled' && breakdownRes.value ? breakdownRes.value : [];
+let charts = {};
+let activeDays = 30;
 
-                updateSummaryCards(summary);
-                updateDailyChart(daily);
-                updateBreakdownChart(breakdown);
-                updateCompareChart(daily);
+// ---- Period controls -------------------------------------------------------
+document.querySelectorAll('.tBtn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.tBtn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        activeDays = parseInt(btn.dataset.days, 10);
+        loadAll(activeDays);
+    });
+});
 
-            } catch (error) {
-                console.error("Error fetching metrics:", error);
-            } finally {
-                setLoading(false);
+// ---- Load all data ---------------------------------------------------------
+async function loadAll(days) {
+    const [summary, daily, breakdown, components] = await Promise.allSettled([
+        fetch(`/api/metrics/summary?days=${days}`).then(r => r.ok ? r.json() : null),
+        fetch(`/api/metrics/daily?days=${days}`).then(r => r.ok ? r.json() : null),
+        fetch(`/api/metrics/breakdown?days=${days}`).then(r => r.ok ? r.json() : null),
+        fetch(`/api/metrics/components?days=${days}`).then(r => r.ok ? r.json() : null),
+    ]);
+    const s   = summary.value    || { total_queries:0, total_cost:0, traditional_cost:0, savings:0, savings_percent:0, by_type:{} };
+    const d   = daily.value      || [];
+    const b   = breakdown.value  || [];
+    const co  = components.value || { embedding_cost:0, llm_input_cost:0, llm_output_cost:0, total_cost:0 };
+
+    renderCards(s);
+    renderComponentPie(co);
+    renderTypeStack(b);
+    renderComponentBars(co);
+    renderTrend(d);
+    renderROI(b, s);
+    renderWaterfall(s, b);
+}
+
+// ---- Summary cards ---------------------------------------------------------
+function renderCards(s) {
+    document.getElementById('sv-q').textContent  = fmtN(s.total_queries || 0);
+    document.getElementById('sv-m').textContent  = fmt$(s.total_cost || 0);
+    document.getElementById('sv-t').textContent  = fmt$(s.traditional_cost || 0);
+    const sav = s.savings || 0;
+    document.getElementById('sv-s').textContent  = fmt$(sav);
+    document.getElementById('sv-sp').textContent = `${(s.savings_percent || 0).toFixed(1)}% reduction`;
+    document.getElementById('sv-s').className    = 'mcard-val ' + (sav >= 0 ? 'pos' : 'neg');
+    
+    // Amount spent progress bar (assuming $10 typical dev budget)
+    const BUDGET = 10.0;
+    const spent = s.total_cost || 0;
+    const pct = Math.min(100, (spent / BUDGET * 100));
+    document.getElementById('sv-m-bar').style.width = pct + '%';
+    document.getElementById('sv-m-pct').textContent = `${pct.toFixed(1)}% of $${BUDGET.toFixed(0)} typical budget`;
+    if (pct > 80) {
+        document.getElementById('sv-m-bar').style.background = '#ef4444'; // red warning
+    } else if (pct > 50) {
+        document.getElementById('sv-m-bar').style.background = '#f59e0b'; // amber warning
+    }
+}
+
+// ---- Component pie ---------------------------------------------------------
+function renderComponentPie(co) {
+    const total = co.total_cost || 1e-9;
+    const data = [co.embedding_cost || 0, co.llm_input_cost || 0, co.llm_output_cost || 0];
+    const labels = ['Embedding', 'LLM input', 'LLM output'];
+    const colors = [C.blue, C.teal, C.amber];
+
+    if (charts.componentPie) charts.componentPie.destroy();
+    charts.componentPie = new Chart(document.getElementById('componentPie').getContext('2d'), {
+        type: 'doughnut',
+        data: { labels, datasets: [{ data, backgroundColor: colors, borderWidth: 0, hoverOffset: 4 }] },
+        options: {
+            responsive: true, maintainAspectRatio: false, cutout: '68%',
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: c => `${c.label}: ${fmt$(c.raw)} (${(c.raw/total*100).toFixed(0)}%)` } }
             }
         }
+    });
 
-        function updateSummaryCards(data) {
-            document.getElementById('val-queries').textContent = formatNumber(data.total_queries || 0);
-            document.getElementById('val-mimir-cost').textContent = formatCurrency(data.total_cost || 0);
-            document.getElementById('val-trad-cost').textContent = formatCurrency(data.traditional_cost || 0);
-            
-            const savings = data.savings || 0;
-            const pct = data.savings_percent || 0;
-            
-            const savingsEl = document.getElementById('val-savings');
-            savingsEl.innerHTML = `${formatCurrency(savings)} <span style="font-size: 1rem; font-weight: 500;" id="val-savings-pct">(${pct.toFixed(1)}%)</span>`;
-            
-            if (savings < 0) {
-                savingsEl.className = 'card-value trend-down';
-            } else {
-                savingsEl.className = 'card-value trend-up';
+    document.getElementById('componentLeg').innerHTML = labels.map((l,i) =>
+        `<span><span class="swatch" style="background:${colors[i]}"></span>${l} ${(data[i]/total*100).toFixed(0)}%</span>`
+    ).join('');
+}
+
+// ---- Stacked bar per query type --------------------------------------------
+function renderTypeStack(breakdown) {
+    if (!breakdown || breakdown.length === 0) return;
+    const labels = breakdown.map(b => b.query_type);
+    const embed  = breakdown.map(b => b.embedding_cost  || 0);
+    const llmIn  = breakdown.map(b => b.llm_input_cost  || 0);
+    const llmOut = breakdown.map(b => b.llm_output_cost || 0);
+
+    if (charts.typeStack) charts.typeStack.destroy();
+    charts.typeStack = new Chart(document.getElementById('typeStack').getContext('2d'), {
+        type: 'bar',
+        data: {
+            labels,
+            datasets: [
+                { label: 'Embedding',  data: embed,  backgroundColor: C.blue,  stack: 's' },
+                { label: 'LLM input',  data: llmIn,  backgroundColor: C.teal,  stack: 's' },
+                { label: 'LLM output', data: llmOut, backgroundColor: C.amber, stack: 's' },
+            ]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: c => `${c.dataset.label}: ${fmt$(c.raw)}/query avg` } }
+            },
+            scales: {
+                x: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
+                y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8', callback: v => fmt$(v) } }
             }
         }
+    });
+}
 
-        function updateDailyChart(data) {
-            const emptyState = document.getElementById('empty-chart-daily');
-            if (!data || data.length === 0) {
-                emptyState.classList.add('active');
-                if (dailyChart) dailyChart.destroy();
-                return;
+// ---- Component bar list (HTML) ---------------------------------------------
+function renderComponentBars(co) {
+    const total = co.total_cost || 1e-9;
+    const rows = [
+        { label: 'Embedding',  val: co.embedding_cost  || 0, color: C.blue },
+        { label: 'LLM input',  val: co.llm_input_cost  || 0, color: C.teal },
+        { label: 'LLM output', val: co.llm_output_cost || 0, color: C.amber },
+    ];
+    document.getElementById('componentBars').innerHTML = rows.map(r => {
+        const pct = (r.val / total * 100).toFixed(1);
+        return `<div class="cbar-row">
+            <span class="cbar-label">${r.label}</span>
+            <div class="cbar"><div class="cbar-fill" style="width:${pct}%;background:${r.color}"></div></div>
+            <span class="cbar-amt" style="color:${r.color}">${fmt$(r.val)} <span style="color:#94a3b8">(${pct}%)</span></span>
+        </div>`;
+    }).join('');
+}
+
+// ---- Trend (daily Mimir vs traditional) ------------------------------------
+function renderTrend(daily) {
+    if (!daily || daily.length === 0) return;
+    if (charts.trend) charts.trend.destroy();
+    charts.trend = new Chart(document.getElementById('trendChart').getContext('2d'), {
+        type: 'line',
+        data: {
+            labels: daily.map(d => d.date),
+            datasets: [
+                { label: 'Mimir',       data: daily.map(d => d.cost),             borderColor: C.blue,  backgroundColor: C.blueFade, fill: true, tension: 0.4, borderWidth: 2, pointRadius: 0 },
+                { label: 'Traditional', data: daily.map(d => d.traditional_cost), borderColor: C.gray,  backgroundColor: C.grayFade, fill: true, tension: 0.4, borderWidth: 1.5, borderDash: [4,3], pointRadius: 0 },
+            ]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false, callbacks: { label: c => `${c.dataset.label}: ${fmt$(c.raw)}` } } },
+            scales: {
+                x: { grid: { display: false }, ticks: { color: '#94a3b8', maxTicksLimit: 9 } },
+                y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8', callback: v => fmt$(v) } }
             }
-            emptyState.classList.remove('active');
-
-            const labels = data.map(d => d.date);
-            const costs = data.map(d => d.cost);
-            const queries = data.map(d => d.queries);
-
-            const ctx = document.getElementById('dailyChart').getContext('2d');
-            
-            if (dailyChart) dailyChart.destroy();
-            
-            dailyChart = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: [
-                        {
-                            label: 'Cost ($)',
-                            data: costs,
-                            borderColor: colors.accent,
-                            backgroundColor: colors.accentAlpha,
-                            borderWidth: 2,
-                            tension: 0.4,
-                            fill: true,
-                            yAxisID: 'y'
-                        },
-                        {
-                            label: 'Queries',
-                            data: queries,
-                            borderColor: colors.secondary,
-                            backgroundColor: 'transparent',
-                            borderWidth: 2,
-                            borderDash: [5, 5],
-                            tension: 0.4,
-                            yAxisID: 'y1'
-                        }
-                    ]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    interaction: { mode: 'index', intersect: false },
-                    scales: {
-                        x: { grid: { color: colors.grid, drawBorder: false } },
-                        y: { 
-                            type: 'linear', 
-                            display: true, 
-                            position: 'left',
-                            grid: { color: colors.grid, drawBorder: false },
-                            ticks: { callback: (val) => '$' + val }
-                        },
-                        y1: { 
-                            type: 'linear', 
-                            display: true, 
-                            position: 'right',
-                            grid: { drawOnChartArea: false },
-                            ticks: { stepSize: 1 }
-                        }
-                    }
-                }
-            });
         }
+    });
+}
 
-        function updateBreakdownChart(data) {
-            const emptyState = document.getElementById('empty-chart-breakdown');
-            if (!data || data.length === 0) {
-                emptyState.classList.add('active');
-                if (breakdownChart) breakdownChart.destroy();
-                return;
+// ---- ROI multiplier by query type ------------------------------------------
+function renderROI(breakdown, summary) {
+    if (!breakdown || breakdown.length === 0) return;
+    const labels = breakdown.map(b => b.query_type);
+    const rois   = breakdown.map(b => {
+        const trad = (TRAD_TOKENS[b.query_type] || 5000) / 1000 * 0.001;
+        const avg  = b.count ? b.cost / b.count : 0.001;
+        return avg > 0 ? parseFloat((trad / avg).toFixed(1)) : 0;
+    });
+    if (charts.roi) charts.roi.destroy();
+    charts.roi = new Chart(document.getElementById('roiChart').getContext('2d'), {
+        type: 'bar',
+        data: { labels, datasets: [{ data: rois, backgroundColor: rois.map(v => v >= 5 ? C.teal : v >= 3 ? C.blue : C.amber), borderRadius: 4 }] },
+        options: {
+            responsive: true, maintainAspectRatio: false, indexAxis: 'y',
+            plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => `${c.raw}x cheaper than traditional` } } },
+            scales: {
+                x: { grid: { color: '#334155' }, ticks: { color: '#94a3b8', callback: v => v + 'x' }, min: 0 },
+                y: { grid: { display: false }, ticks: { color: '#94a3b8' } }
             }
-            emptyState.classList.remove('active');
-
-            const labels = data.map(d => d.type || d.model || 'Unknown');
-            const counts = data.map(d => d.count);
-            
-            // Generate some nice colors based on the accent
-            const bgColors = [
-                colors.accent,
-                '#818cf8', // indigo
-                '#c084fc', // purple
-                '#f472b6', // pink
-                '#38bdf8', // sky
-                '#2dd4bf'  // teal
-            ];
-
-            const ctx = document.getElementById('breakdownChart').getContext('2d');
-            
-            if (breakdownChart) breakdownChart.destroy();
-            
-            breakdownChart = new Chart(ctx, {
-                type: 'doughnut',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        data: counts,
-                        backgroundColor: bgColors.slice(0, labels.length),
-                        borderWidth: 0,
-                        hoverOffset: 4
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    cutout: '70%',
-                    plugins: {
-                        legend: { position: 'bottom', labels: { padding: 20, usePointStyle: true } }
-                    }
-                }
-            });
         }
+    });
+}
 
-        function updateCompareChart(data) {
-            const emptyState = document.getElementById('empty-chart-compare');
-            if (!data || data.length === 0) {
-                emptyState.classList.add('active');
-                if (compareChart) compareChart.destroy();
-                return;
+const TRAD_TOKENS = { search: 3000, query: 8000, rag: 12000, agent: 15000 };
+
+// ---- Waterfall -------------------------------------------------------------
+function renderWaterfall(summary, breakdown) {
+    const base = summary.traditional_cost || 0;
+    if (base === 0) return;
+
+    const cats   = ['Traditional'];
+    const floats = [0];
+    const bars   = [base];
+    const colors = [C.gray];
+
+    let running = base;
+    (breakdown || []).forEach(b => {
+        const saving = (TRAD_TOKENS[b.query_type] || 5000) / 1000 * 0.001 * b.count - b.cost;
+        if (saving <= 0) return;
+        cats.push(b.query_type + ' savings');
+        floats.push(running - saving);
+        bars.push(saving);
+        colors.push(C.teal);
+        running -= saving;
+    });
+
+    cats.push('Mimir total');
+    floats.push(0);
+    bars.push(summary.total_cost || 0);
+    colors.push(C.blue);
+
+    if (charts.waterfall) charts.waterfall.destroy();
+    charts.waterfall = new Chart(document.getElementById('waterfallChart').getContext('2d'), {
+        type: 'bar',
+        data: {
+            labels: cats,
+            datasets: [
+                { label: 'offset', data: floats, backgroundColor: 'transparent', borderColor: 'transparent', stack: 'w' },
+                { label: 'value',  data: bars,   backgroundColor: colors, borderRadius: 3, stack: 'w' },
+            ]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => c.datasetIndex === 1 ? fmt$(c.raw) : null } } },
+            scales: {
+                x: { grid: { display: false }, ticks: { color: '#94a3b8' } },
+                y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8', callback: v => fmt$(v) } }
             }
-            emptyState.classList.remove('active');
-
-            const labels = data.map(d => d.date);
-            const mimirCosts = data.map(d => d.cost);
-            const tradCosts = data.map(d => d.traditional_cost || (d.cost * 1.5)); // Fallback if not provided
-
-            const ctx = document.getElementById('compareChart').getContext('2d');
-            
-            if (compareChart) compareChart.destroy();
-            
-            compareChart = new Chart(ctx, {
-                type: 'bar',
-                data: {
-                    labels: labels,
-                    datasets: [
-                        {
-                            label: 'Mimir Cost',
-                            data: mimirCosts,
-                            backgroundColor: colors.accent,
-                            borderRadius: 4
-                        },
-                        {
-                            label: 'Traditional Cost',
-                            data: tradCosts,
-                            backgroundColor: colors.secondary,
-                            borderRadius: 4
-                        }
-                    ]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        tooltip: {
-                            callbacks: {
-                                label: (context) => `${context.dataset.label}: ${formatCurrency(context.raw)}`
-                            }
-                        }
-                    },
-                    scales: {
-                        x: { grid: { display: false } },
-                        y: { 
-                            grid: { color: colors.grid },
-                            ticks: { callback: (val) => '$' + val }
-                        }
-                    }
-                }
-            });
         }
+    });
+}
 
-        // Event Listeners
-        document.querySelectorAll('.time-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
-                e.target.classList.add('active');
-                updateDashboard(e.target.dataset.days);
-            });
-        });
-
-        // Initial load
-        document.addEventListener('DOMContentLoaded', () => {
-            updateDashboard(30);
-        });
-    </script>
+document.addEventListener('DOMContentLoaded', () => loadAll(30));
+</script>
 </body>
 </html>

@@ -2,58 +2,59 @@
 
 Tracks token usage, costs, and time savings across Mimir operations.
 Stores data in JSONL format for easy analysis.
+
+v2 additions:
+- QueryMetrics now stores per-component costs (embedding, llm_input, llm_output)
+  so the web dashboard can show where each dollar actually goes.
+- get_component_breakdown() for the /api/metrics/breakdown endpoint.
 """
 
 import json
 import os
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
 
-# Cost per 1K tokens (as of 2026-03, OpenRouter rates)
+# ---------------------------------------------------------------------------
+# Cost tables
+# ---------------------------------------------------------------------------
+
 MODEL_COSTS = {
-    # Embeddings (per 1K tokens)
     "text-embedding-3-small": {"input": 0.00002, "output": 0.0},
     "text-embedding-3-large": {"input": 0.00013, "output": 0.0},
-    # Cheap/fast models (per 1K tokens)
     "google/gemini-3.1-flash-lite-preview": {"input": 0.000075, "output": 0.0003},
     "google/gemini-2.0-flash-exp": {"input": 0.0001, "output": 0.0004},
     "openai/gpt-4o-mini": {"input": 0.00015, "output": 0.0006},
-    # Mid-range (per 1K tokens)
     "anthropic/claude-3.5-haiku": {"input": 0.00025, "output": 0.00125},
     "google/gemini-2.0-pro": {"input": 0.0005, "output": 0.002},
-    # Premium (per 1K tokens)
+    "moonshotai/kimi-k2.5": {"input": 0.00042, "output": 0.0022},
     "anthropic/claude-3.5-sonnet": {"input": 0.003, "output": 0.015},
     "openai/gpt-4o": {"input": 0.0025, "output": 0.01},
 }
 
-# Token estimates per query type (conservative averages)
+# Conservative per-query token estimates broken out by component
 QUERY_TOKEN_ESTIMATES = {
-    # Search: query embedding (~100 tokens) + context retrieved (~1500 tokens avg)
     "search": {
         "embedding_tokens": 100,
         "context_tokens": 1500,
         "llm_tokens_in": 0,
         "llm_tokens_out": 0,
     },
-    # Query: query embedding (~100) + context (~2000) + LLM processing (~500 in, ~300 out)
     "query": {
         "embedding_tokens": 100,
         "context_tokens": 2000,
         "llm_tokens_in": 500,
         "llm_tokens_out": 300,
     },
-    # RAG: query embedding (~100) + context (~3000) + LLM (~800 in, ~400 out)
     "rag": {
         "embedding_tokens": 100,
         "context_tokens": 3000,
         "llm_tokens_in": 800,
         "llm_tokens_out": 400,
     },
-    # Agent: query embedding (~100) + context (~4000) + LLM (~1000 in, ~500 out)
     "agent": {
         "embedding_tokens": 100,
         "context_tokens": 4000,
@@ -62,21 +63,22 @@ QUERY_TOKEN_ESTIMATES = {
     },
 }
 
-# Estimated tokens for traditional approach (without Mimir)
-# Based on: reading files, understanding context, grep searches, etc.
 TRADITIONAL_TOKENS_PER_QUERY = {
-    "search": 3000,  # ~3 files × 1000 tokens average
-    "query": 8000,  # More context needed for synthesis
-    "rag": 12000,  # RAG workflow + generation
-    "agent": 15000,  # Agentic exploration
-    "index": 0,  # One-time cost, calculated separately
+    "search": 3000,
+    "query": 8000,
+    "rag": 12000,
+    "agent": 15000,
+    "index": 0,
 }
+
+
+# ---------------------------------------------------------------------------
+# Data model
+# ---------------------------------------------------------------------------
 
 
 @dataclass
 class TokenUsage:
-    """Tracks actual token usage from API calls."""
-
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
@@ -103,8 +105,6 @@ class TokenUsage:
 
 
 class TokenTracker:
-    """Singleton tracker to capture token usage across operations."""
-
     _instance: Optional["TokenTracker"] = None
 
     def __new__(cls):
@@ -135,10 +135,10 @@ def get_token_tracker() -> TokenTracker:
 
 @dataclass
 class QueryMetrics:
-    """Single query metrics record."""
+    """Single query metrics record — v2 adds per-component cost breakdown."""
 
     timestamp: str
-    query_type: str  # search, query, rag, agent, index
+    query_type: str
     query_text: Optional[str]
     model: str
     tokens_in: int
@@ -147,14 +147,51 @@ class QueryMetrics:
     docs_retrieved: int
     duration_ms: int
     project_root: Optional[str] = None
-    actual_tokens: Optional[dict] = None  # Real API usage if available
+    actual_tokens: Optional[dict] = None
+
+    # v2: per-component costs (0.0 for older records)
+    embedding_cost: float = 0.0
+    llm_input_cost: float = 0.0
+    llm_output_cost: float = 0.0
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict) -> "QueryMetrics":
-        return cls(**data)
+        # Tolerate records written before v2 (missing component fields)
+        known = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
+        filtered = {k: v for k, v in data.items() if k in known}
+
+        has_components = (
+            filtered.get("embedding_cost", 0) > 0
+            or filtered.get("llm_input_cost", 0) > 0
+            or filtered.get("llm_output_cost", 0) > 0
+        )
+        if not has_components and filtered.get("cost", 0) > 0:
+            qt = filtered.get("query_type", "query")
+            estimates = QUERY_TOKEN_ESTIMATES.get(qt, QUERY_TOKEN_ESTIMATES["query"])
+
+            embed_rate = MODEL_COSTS["text-embedding-3-small"]["input"]
+            llm_rate_in = MODEL_COSTS["google/gemini-3.1-flash-lite-preview"]["input"]
+            llm_rate_out = MODEL_COSTS["google/gemini-3.1-flash-lite-preview"]["output"]
+
+            filtered["embedding_cost"] = round(
+                (estimates["embedding_tokens"] / 1000) * embed_rate, 6
+            )
+            filtered["llm_input_cost"] = round(
+                (estimates["llm_tokens_in"] / 1000) * llm_rate_in, 6
+            )
+            filtered["llm_output_cost"] = round(
+                (estimates["llm_tokens_out"] / 1000) * llm_rate_out, 6
+            )
+
+        return cls(**filtered)
+
+
+# ---------------------------------------------------------------------------
+# Metrics tracker
+# ---------------------------------------------------------------------------
 
 
 class MetricsTracker:
@@ -166,7 +203,6 @@ class MetricsTracker:
         self._ensure_metrics_dir()
 
     def _detect_project_root(self) -> Path:
-        """Detect project root from current directory."""
         cwd = Path.cwd().resolve()
         markers = [
             ".opencode",
@@ -175,18 +211,19 @@ class MetricsTracker:
             "package.json",
             "opencode.json",
         ]
-
         current = cwd
         while current != current.parent:
-            if any((current / marker).exists() for marker in markers):
+            if any((current / m).exists() for m in markers):
                 return current
             current = current.parent
-
         return cwd
 
     def _ensure_metrics_dir(self):
-        """Ensure metrics directory exists."""
         self.metrics_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # ------------------------------------------------------------------
+    # Cost calculation
+    # ------------------------------------------------------------------
 
     def calculate_query_cost(
         self,
@@ -194,15 +231,10 @@ class MetricsTracker:
         model: str = "google/gemini-3.1-flash-lite-preview",
         embedding_model: str = "text-embedding-3-small",
     ) -> dict:
-        """Calculate realistic cost breakdown for a query type.
-
-        Returns dict with token breakdown and costs.
-        """
+        """Return full cost breakdown dict including per-component costs."""
         estimates = QUERY_TOKEN_ESTIMATES.get(
             query_type, QUERY_TOKEN_ESTIMATES["query"]
         )
-
-        # Get model costs
         llm_costs = MODEL_COSTS.get(
             model, MODEL_COSTS["google/gemini-3.1-flash-lite-preview"]
         )
@@ -210,43 +242,41 @@ class MetricsTracker:
             embedding_model, MODEL_COSTS["text-embedding-3-small"]
         )
 
-        # Calculate embedding cost (input only)
         embedding_cost = (estimates["embedding_tokens"] / 1000) * embed_costs["input"]
-
-        # Calculate LLM cost (if applicable)
         llm_input_cost = (estimates["llm_tokens_in"] / 1000) * llm_costs["input"]
         llm_output_cost = (estimates["llm_tokens_out"] / 1000) * llm_costs["output"]
-        llm_cost = llm_input_cost + llm_output_cost
-
-        total_cost = embedding_cost + llm_cost
-        total_tokens = (
-            estimates["embedding_tokens"]
-            + estimates["context_tokens"]
-            + estimates["llm_tokens_in"]
-            + estimates["llm_tokens_out"]
-        )
+        total_cost = embedding_cost + llm_input_cost + llm_output_cost
 
         return {
             "embedding_tokens": estimates["embedding_tokens"],
             "context_tokens": estimates["context_tokens"],
             "llm_tokens_in": estimates["llm_tokens_in"],
             "llm_tokens_out": estimates["llm_tokens_out"],
-            "total_tokens": total_tokens,
+            "total_tokens": (
+                estimates["embedding_tokens"]
+                + estimates["context_tokens"]
+                + estimates["llm_tokens_in"]
+                + estimates["llm_tokens_out"]
+            ),
             "embedding_cost": round(embedding_cost, 6),
-            "llm_cost": round(llm_cost, 6),
+            "llm_input_cost": round(llm_input_cost, 6),
+            "llm_output_cost": round(llm_output_cost, 6),
             "total_cost": round(total_cost, 6),
         }
 
     def calculate_cost(self, model: str, tokens_in: int, tokens_out: int) -> float:
-        """Legacy method: Calculate cost in USD for a model and token count."""
+        """Legacy helper: total cost from raw token counts."""
         costs = MODEL_COSTS.get(
             model, MODEL_COSTS["google/gemini-3.1-flash-lite-preview"]
         )
+        return round(
+            (tokens_in / 1000) * costs["input"] + (tokens_out / 1000) * costs["output"],
+            6,
+        )
 
-        input_cost = (tokens_in / 1000) * costs["input"]
-        output_cost = (tokens_out / 1000) * costs["output"]
-
-        return round(input_cost + output_cost, 6)
+    # ------------------------------------------------------------------
+    # Recording
+    # ------------------------------------------------------------------
 
     def record_query(
         self,
@@ -259,75 +289,81 @@ class MetricsTracker:
         duration_ms: int = 0,
         actual_tokens: Optional[dict] = None,
     ) -> QueryMetrics:
-        """Record a query metric with realistic cost estimation.
+        """Record a query metric with per-component cost breakdown.
 
-        If actual_tokens dict is provided with 'prompt_tokens', 'completion_tokens',
-        and 'total_tokens', uses real API usage data. Otherwise falls back to estimates.
+        When *actual_tokens* is provided and contains real API usage, those
+        numbers are used.  Otherwise conservative estimates are applied.
         """
-        # Check if we have actual token usage
+        embedding_model = "text-embedding-3-small"
+
         if actual_tokens and actual_tokens.get("total_tokens", 0) > 0:
-            # Use actual token data
-            cost = self._calculate_cost_from_dict(actual_tokens, model)
-            total_tokens = actual_tokens.get("total_tokens", 0)
-            tokens_in_actual = actual_tokens.get(
-                "prompt_tokens", 0
-            ) + actual_tokens.get("embedding_tokens", 0)
-            tokens_out_actual = actual_tokens.get("completion_tokens", 0)
+            # Real API data path
+            embed_costs = MODEL_COSTS[embedding_model]
+            llm_costs = MODEL_COSTS.get(
+                model, MODEL_COSTS["google/gemini-3.1-flash-lite-preview"]
+            )
+
+            embedding_cost = round(
+                (actual_tokens.get("embedding_tokens", 0) / 1000)
+                * embed_costs["input"],
+                6,
+            )
+            llm_input_cost = round(
+                (actual_tokens.get("prompt_tokens", 0) / 1000) * llm_costs["input"], 6
+            )
+            llm_output_cost = round(
+                (actual_tokens.get("completion_tokens", 0) / 1000)
+                * llm_costs["output"],
+                6,
+            )
+            total_cost = embedding_cost + llm_input_cost + llm_output_cost
+
+            tokens_in_use = actual_tokens.get("prompt_tokens", 0) + actual_tokens.get(
+                "embedding_tokens", 0
+            )
+            tokens_out_use = actual_tokens.get("completion_tokens", 0)
         else:
-            # Fall back to estimates
-            cost_breakdown = self.calculate_query_cost(query_type, model)
-            cost = cost_breakdown["total_cost"]
-            total_tokens = cost_breakdown["total_tokens"]
-            tokens_in_actual = total_tokens
-            tokens_out_actual = cost_breakdown["llm_tokens_out"]
+            # Estimate path
+            breakdown = self.calculate_query_cost(query_type, model, embedding_model)
+            embedding_cost = breakdown["embedding_cost"]
+            llm_input_cost = breakdown["llm_input_cost"]
+            llm_output_cost = breakdown["llm_output_cost"]
+            total_cost = breakdown["total_cost"]
+            tokens_in_use = breakdown["total_tokens"]
+            tokens_out_use = breakdown["llm_tokens_out"]
             actual_tokens = None
 
         metrics = QueryMetrics(
             timestamp=datetime.now().isoformat(),
             query_type=query_type,
-            query_text=query_text[:200]
-            if query_text
-            else None,  # Truncate long queries
+            query_text=query_text[:200] if query_text else None,
             model=model,
-            tokens_in=tokens_in_actual if tokens_in == 0 else tokens_in,
-            tokens_out=tokens_out_actual if tokens_out == 0 else tokens_out,
-            cost=cost,
+            tokens_in=tokens_in if tokens_in else tokens_in_use,
+            tokens_out=tokens_out if tokens_out else tokens_out_use,
+            cost=round(total_cost, 6),
             docs_retrieved=docs_retrieved,
             duration_ms=duration_ms,
             project_root=str(self.project_root),
             actual_tokens=actual_tokens,
+            embedding_cost=embedding_cost,
+            llm_input_cost=llm_input_cost,
+            llm_output_cost=llm_output_cost,
         )
 
-        # Append to JSONL file
         with open(self.metrics_file, "a") as f:
             f.write(json.dumps(metrics.to_dict()) + "\n")
 
         return metrics
 
-    def _calculate_cost_from_dict(self, usage: dict, model: str) -> float:
-        """Calculate cost from actual token usage dict."""
-        costs = MODEL_COSTS.get(
-            model, MODEL_COSTS["google/gemini-3.1-flash-lite-preview"]
-        )
-        embed_costs = MODEL_COSTS["text-embedding-3-small"]
+    # ------------------------------------------------------------------
+    # Loading & aggregation
+    # ------------------------------------------------------------------
 
-        # Embedding cost
-        embed_cost = (usage.get("embedding_tokens", 0) / 1000) * embed_costs["input"]
-
-        # LLM cost
-        llm_input_cost = (usage.get("prompt_tokens", 0) / 1000) * costs["input"]
-        llm_output_cost = (usage.get("completion_tokens", 0) / 1000) * costs["output"]
-
-        return round(embed_cost + llm_input_cost + llm_output_cost, 6)
-
-    def load_metrics(self, days: Optional[int] = None) -> list[QueryMetrics]:
-        """Load all metrics, optionally filtered by days."""
+    def load_metrics(self, days: Optional[int] = None) -> list:
         if not self.metrics_file.exists():
             return []
-
         metrics = []
         cutoff = datetime.now() - timedelta(days=days) if days else None
-
         try:
             with open(self.metrics_file) as f:
                 for line in f:
@@ -337,21 +373,17 @@ class MetricsTracker:
                     try:
                         data = json.loads(line)
                         if cutoff:
-                            ts = datetime.fromisoformat(data["timestamp"])
-                            if ts < cutoff:
+                            if datetime.fromisoformat(data["timestamp"]) < cutoff:
                                 continue
                         metrics.append(QueryMetrics.from_dict(data))
-                    except (json.JSONDecodeError, KeyError):
+                    except (json.JSONDecodeError, KeyError, TypeError):
                         continue
         except FileNotFoundError:
             pass
-
         return metrics
 
     def get_summary(self, days: Optional[int] = None) -> dict:
-        """Get cost summary for a time period."""
         metrics = self.load_metrics(days)
-
         if not metrics:
             return {
                 "total_queries": 0,
@@ -360,65 +392,69 @@ class MetricsTracker:
                 "savings": 0.0,
                 "savings_percent": 0.0,
             }
-
         total_cost = sum(m.cost for m in metrics)
         total_queries = len(metrics)
-
-        # Calculate traditional cost (without Mimir)
-        traditional_tokens = 0
-        for m in metrics:
-            traditional_tokens += TRADITIONAL_TOKENS_PER_QUERY.get(m.query_type, 5000)
-
-        # Assume traditional approach uses same model at avg $0.001/1K tokens
-        traditional_cost = (traditional_tokens / 1000) * 0.001
-
-        savings = traditional_cost - total_cost
-        savings_percent = (
-            (savings / traditional_cost * 100) if traditional_cost > 0 else 0
+        traditional_tokens = sum(
+            TRADITIONAL_TOKENS_PER_QUERY.get(m.query_type, 5000) for m in metrics
         )
-
+        traditional_cost = (traditional_tokens / 1000) * 0.001
+        savings = traditional_cost - total_cost
+        savings_pct = (savings / traditional_cost * 100) if traditional_cost > 0 else 0
         return {
             "total_queries": total_queries,
             "total_cost": round(total_cost, 4),
             "traditional_cost": round(traditional_cost, 4),
             "savings": round(savings, 4),
-            "savings_percent": round(savings_percent, 1),
+            "savings_percent": round(savings_pct, 1),
             "by_type": self._breakdown_by_type(metrics),
         }
 
-    def _breakdown_by_type(self, metrics: list[QueryMetrics]) -> dict:
-        """Break down metrics by query type."""
-        breakdown = {}
-
+    def _breakdown_by_type(self, metrics: list) -> dict:
+        breakdown: dict = {}
         for m in metrics:
-            if m.query_type not in breakdown:
-                breakdown[m.query_type] = {
+            qt = m.query_type
+            if qt not in breakdown:
+                breakdown[qt] = {
                     "count": 0,
                     "cost": 0.0,
                     "tokens_in": 0,
                     "tokens_out": 0,
+                    # v2 component totals
+                    "embedding_cost": 0.0,
+                    "llm_input_cost": 0.0,
+                    "llm_output_cost": 0.0,
                 }
+            breakdown[qt]["count"] += 1
+            breakdown[qt]["cost"] += m.cost
+            breakdown[qt]["tokens_in"] += m.tokens_in
+            breakdown[qt]["tokens_out"] += m.tokens_out
+            breakdown[qt]["embedding_cost"] += m.embedding_cost
+            breakdown[qt]["llm_input_cost"] += m.llm_input_cost
+            breakdown[qt]["llm_output_cost"] += m.llm_output_cost
 
-            breakdown[m.query_type]["count"] += 1
-            breakdown[m.query_type]["cost"] += m.cost
-            breakdown[m.query_type]["tokens_in"] += m.tokens_in
-            breakdown[m.query_type]["tokens_out"] += m.tokens_out
-
-        # Round costs
         for data in breakdown.values():
             data["cost"] = round(data["cost"], 4)
-
+            data["embedding_cost"] = round(data["embedding_cost"], 6)
+            data["llm_input_cost"] = round(data["llm_input_cost"], 6)
+            data["llm_output_cost"] = round(data["llm_output_cost"], 6)
         return breakdown
 
-    def format_report(self, days: Optional[int] = 30) -> str:
-        """Generate a formatted cost report."""
-        summary = self.get_summary(days)
+    def get_component_totals(self, days: Optional[int] = None) -> dict:
+        """Aggregate embedding vs LLM spend across all query types."""
+        metrics = self.load_metrics(days)
+        totals = {
+            "embedding_cost": round(sum(m.embedding_cost for m in metrics), 6),
+            "llm_input_cost": round(sum(m.llm_input_cost for m in metrics), 6),
+            "llm_output_cost": round(sum(m.llm_output_cost for m in metrics), 6),
+            "total_cost": round(sum(m.cost for m in metrics), 6),
+        }
+        return totals
 
+    def format_report(self, days: Optional[int] = 30) -> str:
+        summary = self.get_summary(days)
         if summary["total_queries"] == 0:
             return "No metrics found. Start using Mimir to track savings!"
-
         period = f"Last {days} days" if days else "All time"
-
         lines = [
             f"\n{'=' * 60}",
             f"Mimir Cost Report ({period})",
@@ -430,63 +466,74 @@ class MetricsTracker:
             "Estimated without Mimir:",
             f"  Traditional cost:      ${summary['traditional_cost']:.4f}",
             f"  Mimir cost:            ${summary['total_cost']:.4f}",
-            f"",
+            "",
             f"  Savings:               ${summary['savings']:.4f} ({summary['savings_percent']:.0f}%)",
             "",
         ]
-
-        # Add breakdown by type
         if summary.get("by_type"):
             lines.append("Usage breakdown:")
             lines.append("-" * 40)
-
-            for query_type, data in sorted(summary["by_type"].items()):
-                lines.append(
-                    f"  {query_type:12} {data['count']:4} queries  ${data['cost']:.4f}"
+            for qt, data in sorted(summary["by_type"].items()):
+                embed_pct = (
+                    (data["embedding_cost"] / data["cost"] * 100) if data["cost"] else 0
                 )
-
+                lines.append(
+                    f"  {qt:12} {data['count']:4} queries  "
+                    f"${data['cost']:.4f}  "
+                    f"(embed {embed_pct:.0f}%)"
+                )
             lines.append("")
-
         lines.append(f"{'=' * 60}\n")
-
         return "\n".join(lines)
 
-    def get_daily_stats(self, days: int = 30) -> list[dict]:
-        """Get daily stats for the last N days."""
+    def get_daily_stats(self, days: int = 30) -> list:
         metrics = self.load_metrics(days)
-
-        daily = {}
+        daily: dict = {}
         for m in metrics:
             day = m.timestamp[:10]
             if day not in daily:
-                daily[day] = {"queries": 0, "cost": 0.0, "traditional_tokens": 0}
+                daily[day] = {
+                    "queries": 0,
+                    "cost": 0.0,
+                    "traditional_tokens": 0,
+                    "embedding_cost": 0.0,
+                    "llm_input_cost": 0.0,
+                    "llm_output_cost": 0.0,
+                }
             daily[day]["queries"] += 1
             daily[day]["cost"] += m.cost
             daily[day]["traditional_tokens"] += TRADITIONAL_TOKENS_PER_QUERY.get(
                 m.query_type, 5000
             )
+            daily[day]["embedding_cost"] += m.embedding_cost
+            daily[day]["llm_input_cost"] += m.llm_input_cost
+            daily[day]["llm_output_cost"] += m.llm_output_cost
 
         result = []
         for day, data in sorted(daily.items()):
-            traditional_cost = (data["traditional_tokens"] / 1000) * 0.001
+            trad_cost = (data["traditional_tokens"] / 1000) * 0.001
             result.append(
                 {
                     "date": day,
                     "queries": data["queries"],
                     "cost": round(data["cost"], 4),
-                    "traditional_cost": round(traditional_cost, 4),
+                    "traditional_cost": round(trad_cost, 4),
+                    "embedding_cost": round(data["embedding_cost"], 6),
+                    "llm_input_cost": round(data["llm_input_cost"], 6),
+                    "llm_output_cost": round(data["llm_output_cost"], 6),
                 }
             )
-
         return result
 
 
-# Global tracker instance
+# ---------------------------------------------------------------------------
+# Module-level convenience
+# ---------------------------------------------------------------------------
+
 _tracker: Optional[MetricsTracker] = None
 
 
 def get_tracker(project_root: Optional[Path] = None) -> MetricsTracker:
-    """Get or create global metrics tracker."""
     global _tracker
     if _tracker is None:
         _tracker = MetricsTracker(project_root)
@@ -494,15 +541,12 @@ def get_tracker(project_root: Optional[Path] = None) -> MetricsTracker:
 
 
 def record_query(**kwargs) -> QueryMetrics:
-    """Convenience function to record a query."""
     return get_tracker().record_query(**kwargs)
 
 
 def format_report(days: Optional[int] = 30) -> str:
-    """Convenience function to format a report."""
     return get_tracker().format_report(days)
 
 
 def get_summary(days: Optional[int] = None) -> dict:
-    """Convenience function to get summary."""
     return get_tracker().get_summary(days)

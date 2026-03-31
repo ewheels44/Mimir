@@ -93,6 +93,14 @@ def load_project_config(project_root: Path) -> dict:
     return {}
 
 
+def get_relative_or_absolute_path(file_path: Path, project_root: Path) -> str:
+    """Return relative path if file is under project root, otherwise absolute path."""
+    try:
+        return str(file_path.relative_to(project_root))
+    except ValueError:
+        return str(file_path)
+
+
 def format_time(iso_string: str) -> str:
     """Format ISO timestamp to human-readable string."""
     if not iso_string:
@@ -274,15 +282,6 @@ def main():
     if args.update:
         return update_script(project_root)
 
-    # Handle --list flag first (before requiring index to exist)
-    if args.list:
-        if not (knowledge_dir / "index_store.json").exists():
-            print("\n❌ No knowledge base found")
-            print(f"   Expected: {knowledge_dir}")
-            print("\n   Run: python .opencode/mimir-index.py")
-            return 1
-        return print_indexed_files(knowledge_dir)
-
     # Create directories
     knowledge_dir.mkdir(parents=True, exist_ok=True)
     docs_dir.mkdir(exist_ok=True)
@@ -293,6 +292,7 @@ def main():
         default_config = {
             "docs_dir": "docs",
             "code_dirs": [],
+            "files": [],
             "knowledge_dir": ".knowledge/llamaindex",
             "embedding_model": "text-embedding-3-small",
         }
@@ -325,7 +325,7 @@ def main():
         return 0 if success else 1
 
     if args.add_file:
-        source_file = Path(args.add_file)
+        source_file = Path(args.add_file).resolve()
         if not source_file.exists():
             print(f"\n❌ File not found: {source_file}")
             return 1
@@ -336,10 +336,35 @@ def main():
             print("\n❌ No existing index found. Run without --add-file first.")
             return 1
 
+        config_path = mimir_config_dir / "config.json"
+        try:
+            with open(config_path) as f:
+                config = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            config = {}
+
+        file_entry = get_relative_or_absolute_path(source_file, project_root)
+
+        if "files" not in config:
+            config["files"] = []
+        if file_entry not in config["files"]:
+            config["files"].append(file_entry)
+            with open(config_path, "w") as f:
+                json.dump(config, f, indent=2)
+            print(f"📝 Added to config: {file_entry}")
+
         from mimir.indexing import add_file_to_index
 
         success = add_file_to_index(source_file, knowledge_dir, verbose=True)
         return 0 if success else 1
+
+    if args.list:
+        if not (knowledge_dir / "index_store.json").exists():
+            print("\n❌ No knowledge base found")
+            print(f"   Expected: {knowledge_dir}")
+            print("\n   Run: python .opencode/mimir-index.py")
+            return 1
+        return print_indexed_files(knowledge_dir)
 
     if (knowledge_dir / "index_store.json").exists() and not args.reindex:
         print("\n✅ Knowledge base already exists")
@@ -373,6 +398,22 @@ def main():
 
     if not success:
         return 1
+
+    individual_files = project_config.get("files", [])
+    if individual_files:
+        print(
+            f"\n📄 Indexing {len(individual_files)} individual file(s) from config..."
+        )
+        from mimir.indexing import add_file_to_index
+
+        for file_path_str in individual_files:
+            file_path = Path(file_path_str)
+            if not file_path.is_absolute():
+                file_path = project_root / file_path
+            if file_path.exists():
+                add_file_to_index(file_path, knowledge_dir, verbose=False)
+            else:
+                print(f"   ⚠️  File not found: {file_path}")
 
     if not args.no_knowledge_graph:
         print("\n🔍 Extracting knowledge graph relationships...")

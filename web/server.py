@@ -122,6 +122,7 @@ def _lookup_in_suffix_index(
     candidates = [
         target,
         target if target.endswith(".py") else target + ".py",
+        target.replace(".", "/") + ".py",
         Path(target).name,
         Path(target).stem + ".py",
         Path(target).stem,
@@ -131,6 +132,121 @@ def _lookup_in_suffix_index(
         if matches:
             return matches[0][1]  # take first match
     return None
+
+
+def _load_entities(config: ServerConfig) -> Dict[str, Any]:
+    """Load entities from code_relationships.json."""
+    relationships_path = config.knowledge_dir.parent / "code_relationships.json"
+    if relationships_path.exists():
+        try:
+            with open(relationships_path) as f:
+                return json.load(f).get("entities", {})
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def _get_module_children(
+    module_id: str,
+    file_path_to_id: Dict[str, str],
+    entities: Dict[str, Any],
+) -> Tuple[List[dict], List[dict]]:
+    """Get child nodes (functions/classes) for a module and internal edges."""
+    for fp, mid in file_path_to_id.items():
+        if mid == module_id:
+            file_path = fp
+            break
+    else:
+        return [], []
+
+    child_nodes = []
+    node_ids_added = set()
+
+    for entity_key, entity_data in entities.items():
+        entity_fp = entity_data.get("file_path", "")
+        if (
+            entity_fp == file_path
+            or entity_fp == Path(file_path).name
+            or entity_fp == str(Path(file_path).name)
+        ):
+            entity_type = entity_data.get("entity_type", "unknown")
+            if entity_type in ("function", "class"):
+                node_id = entity_key
+                child_nodes.append(
+                    {
+                        "id": node_id,
+                        "label": entity_data.get("name", entity_key.split("::")[-1]),
+                        "type": entity_type,
+                        "metadata": {
+                            "line_number": entity_data.get("line_number"),
+                            "file_path": file_path,
+                        },
+                    }
+                )
+                node_ids_added.add(node_id)
+
+    edges = []
+    for entity_key, entity_data in entities.items():
+        entity_fp = entity_data.get("file_path", "")
+        if (
+            entity_fp != file_path
+            and entity_fp != Path(file_path).name
+            and entity_fp != str(Path(file_path).name)
+        ):
+            continue
+
+        entity_type = entity_data.get("entity_type", "unknown")
+
+        if entity_type == "method":
+            class_name = entity_data.get("metadata", {}).get("class")
+            if class_name:
+                class_key = f"{file_path}::{class_name}"
+                if class_key in node_ids_added:
+                    edges.append(
+                        {
+                            "source": entity_key,
+                            "target": class_key,
+                            "label": "has_method",
+                            "type": "has_method",
+                            "id": f"e-{entity_key[:8]}-{class_key[:8]}-meth",
+                        }
+                    )
+
+    return child_nodes, edges
+
+
+def _get_child_counts(
+    module_id: str,
+    file_path_to_id: Dict[str, str],
+    entities: Dict[str, Any],
+) -> Dict[str, int]:
+    """Get function_count, class_count, and total_children for a module."""
+    for fp, mid in file_path_to_id.items():
+        if mid == module_id:
+            file_path = fp
+            break
+    else:
+        return {"function_count": 0, "class_count": 0, "total_children": 0}
+
+    function_count = 0
+    class_count = 0
+
+    file_name = Path(file_path).name
+
+    for entity_key, entity_data in entities.items():
+        entity_fp = entity_data.get("file_path", "")
+        if entity_fp == file_path or entity_fp == file_name:
+            entity_type = entity_data.get("entity_type", "unknown")
+            if entity_type == "function":
+                function_count += 1
+            elif entity_type == "class":
+                class_count += 1
+
+    return {
+        "function_count": function_count,
+        "class_count": class_count,
+        "total_children": function_count + class_count,
+    }
 
 
 def _build_graph_data(config: ServerConfig) -> Dict[str, Any]:
@@ -176,6 +292,18 @@ def _build_graph_data(config: ServerConfig) -> Dict[str, Any]:
                 "metadata": metadata,
             }
         )
+
+    # Load entities for child counts
+    entities = _load_entities(config)
+
+    # Add child counts to code nodes
+    if entities:
+        for node in nodes:
+            if node["type"] == "code":
+                child_counts = _get_child_counts(node["id"], file_path_to_id, entities)
+                node["metadata"]["function_count"] = child_counts["function_count"]
+                node["metadata"]["class_count"] = child_counts["class_count"]
+                node["metadata"]["total_children"] = child_counts["total_children"]
 
     # Build O(1) suffix index
     suffix_idx = _build_suffix_index(file_path_to_id)
@@ -241,6 +369,7 @@ def _build_graph_data(config: ServerConfig) -> Dict[str, Any]:
         "nodes": nodes,
         "edges": edges,
         "degree": degree,
+        "file_path_to_id": file_path_to_id,
     }
     _graph_cache.clear()
     _graph_cache.update(result)
@@ -374,6 +503,32 @@ async def invalidate_graph_cache():
     """Force graph cache rebuild on next request (call after reindex)."""
     _graph_cache.clear()
     return {"status": "cache cleared"}
+
+
+@app.get("/api/graph/module/{module_id}/children", response_model=GraphData)
+async def get_module_children(module_id: str):
+    """Return child nodes (functions/classes) for a module with internal edges."""
+    try:
+        global _server_config
+        if _server_config is None:
+            _server_config = ServerConfig.from_env()
+
+        data = _build_graph_data(_server_config)
+        file_path_to_id = data.get("file_path_to_id", {})
+
+        entities = _load_entities(_server_config)
+        child_nodes, edges = _get_module_children(module_id, file_path_to_id, entities)
+
+        return GraphData(
+            nodes=[Node(**n) for n in child_nodes],
+            edges=[Edge(**e) for e in edges],
+        )
+
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ---------------------------------------------------------------------------
@@ -572,6 +727,25 @@ _GRAPH_HTML = """
         .result-item .title { font-weight: 500; margin-bottom: 4px; }
         .result-item .snippet { font-size: 12px; color: #94a3b8; }
 
+        
+        /* module sidebar */
+        .module-sidebar { position: fixed; right: 0; top: 0; width: 400px; height: 100vh; background: #1e293b; border-left: 1px solid #334155; padding: 20px; box-shadow: -5px 0 30px rgba(0,0,0,0.5); display: flex; flex-direction: column; overflow-y: auto; z-index: 2000; transform: translateX(100%); transition: transform 0.3s ease; }
+        .module-sidebar.visible { transform: translateX(0); }
+        .module-sidebar .close-btn { position: absolute; top: 20px; right: 20px; background: transparent; border: none; color: #94a3b8; font-size: 24px; cursor: pointer; line-height: 1; }
+        .module-sidebar .close-btn:hover { color: #e2e8f0; }
+        .module-sidebar h2 { font-size: 18px; color: #60a5fa; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #334155; padding-right: 30px; word-break: break-all; }
+        .module-section { margin-bottom: 20px; }
+        .module-section h3 { font-size: 14px; color: #94a3b8; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .module-item { padding: 8px 12px; background: #334155; border-radius: 6px; margin-bottom: 6px; cursor: pointer; font-size: 13px; color: #e2e8f0; transition: background 0.2s; }
+        .module-item:hover { background: #475569; }
+        .module-item .item-type { font-size: 11px; color: #8b5cf6; margin-right: 6px; text-transform: uppercase; }
+        .module-item.class-item .item-type { color: #ec4899; }
+        .module-stats { display: flex; gap: 10px; margin-bottom: 20px; }
+        .stat-box { flex: 1; background: #334155; padding: 10px; border-radius: 6px; text-align: center; }
+        .stat-box .stat-val { font-size: 18px; font-weight: bold; color: #e2e8f0; }
+        .stat-box .stat-label { font-size: 11px; color: #94a3b8; text-transform: uppercase; margin-top: 4px; }
+        .module-loading { text-align: center; padding: 40px 0; color: #94a3b8; font-size: 14px; }
+
         /* degree filter row */
         .filter-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 12px; color: #94a3b8; }
         .filter-row input[type=range] { flex: 1; }
@@ -648,6 +822,14 @@ _GRAPH_HTML = """
             <div class="edge-loading-badge" id="edgeBadge">Loading relationships...</div>
         </div>
         <div class="detail-panel" id="detailPanel"><h3>Node details</h3><div id="detailContent"></div></div>
+        
+        <div class="module-sidebar" id="moduleSidebar">
+            <button class="close-btn" onclick="closeModuleSidebar()">&times;</button>
+            <h2 id="msTitle">Module Name</h2>
+            <div class="module-stats" id="msStats"></div>
+            <div id="msContent"></div>
+        </div>
+
         <div class="results-panel" id="resultsPanel">
             <button class="collapse-btn" onclick="toggleResultsPanel()"><span id="collapseIcon">−</span></button>
             <h3 id="resultsTitle">Results</h3>
@@ -779,7 +961,12 @@ function initGraph() {
     cy = cytoscape({
         container: document.getElementById('cy'),
         style: [
-            { selector: 'node', style: { 'background-color': '#3b82f6', 'label': 'data(label)', 'width': 40, 'height': 40, 'font-size': '12px', 'text-valign': 'center', 'text-halign': 'center', 'color': '#fff', 'text-outline-color': '#1e293b', 'text-outline-width': 2, 'border-width': 2, 'border-color': '#60a5fa' } },
+            { selector: 'node', style: { 'background-color': '#3b82f6', 'label': function(ele) {
+                const label = ele.data('label');
+                const meta = ele.data('metadata') || {};
+                const count = meta.total_children;
+                return count ? `${label} (${count})` : label;
+            }, 'width': 40, 'height': 40, 'font-size': '12px', 'text-valign': 'center', 'text-halign': 'center', 'color': '#fff', 'text-outline-color': '#1e293b', 'text-outline-width': 2, 'border-width': 2, 'border-color': '#60a5fa' } },
             { selector: 'node[type="document"]', style: { 'background-color': '#10b981', 'border-color': '#34d399' } },
             { selector: 'node[type="code"]',     style: { 'background-color': '#8b5cf6', 'border-color': '#a78bfa' } },
             { selector: 'node[type="module"]',   style: { 'background-color': '#64748b', 'border-color': '#94a3b8', 'shape': 'diamond' } },
@@ -798,11 +985,28 @@ function initGraph() {
     });
 
     cy.on('tap', 'node', function(evt) {
-        highlightNodeConnections(evt.target);
-        showNodeDetails(evt.target);
+        const node = evt.target;
+        highlightNodeConnections(node);
+        if (node.data('type') === 'code' || node.data('type') === 'module') {
+            openModuleSidebar(node);
+        } else {
+            showNodeDetails(node);
+        }
     });
     cy.on('tap', function(evt) {
-        if (evt.target === cy) { hideDetailPanel(); cy.elements().removeClass('highlighted dimmed'); }
+        if (evt.target === cy) { 
+            hideDetailPanel(); 
+            closeModuleSidebar();
+            cy.elements().removeClass('highlighted dimmed'); 
+        }
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            closeModuleSidebar();
+            hideDetailPanel();
+            cy.elements().removeClass('highlighted dimmed');
+        }
     });
 }
 
@@ -967,6 +1171,125 @@ function focusNode(id) {
         cy.animate({ center: { eles: node }, zoom: 1.2 }, { duration: 300 });
         highlightNodeConnections(node);
         showNodeDetails(node);
+    }
+}
+
+
+// --- Module Sidebar -------------------------------------------------------
+let currentModuleId = null;
+
+async function openModuleSidebar(node) {
+    const sidebar = document.getElementById('moduleSidebar');
+    const title = document.getElementById('msTitle');
+    const stats = document.getElementById('msStats');
+    const content = document.getElementById('msContent');
+    
+    currentModuleId = node.id();
+    sidebar.classList.add('visible');
+    title.textContent = node.data('label');
+    
+    const meta = node.data('metadata') || {};
+    stats.innerHTML = `
+        <div class="stat-box"><div class="stat-val">${meta.function_count || 0}</div><div class="stat-label">Functions</div></div>
+        <div class="stat-box"><div class="stat-val">${meta.class_count || 0}</div><div class="stat-label">Classes</div></div>
+        <div class="stat-box"><div class="stat-val">${node.degree()}</div><div class="stat-label">Edges</div></div>
+    `;
+    
+    content.innerHTML = '<div class="module-loading">Loading details...</div>';
+    
+    try {
+        const res = await fetch(`/api/graph/module/${encodeURIComponent(node.id())}/children`);
+        if (!res.ok) throw new Error('Failed to fetch module details');
+        const data = await res.json();
+        
+        let html = '';
+        
+        // Functions
+        const funcs = data.nodes.filter(n => n.type === 'function');
+        if (funcs.length > 0) {
+            html += '<div class="module-section"><h3>Functions</h3>';
+            funcs.forEach(f => {
+                html += `<div class="module-item" onclick="highlightSidebarItem('${f.id}')"><span class="item-type">fn</span>${f.label}</div>`;
+            });
+            html += '</div>';
+        }
+        
+        // Classes
+        const classes = data.nodes.filter(n => n.type === 'class');
+        if (classes.length > 0) {
+            html += '<div class="module-section"><h3>Classes</h3>';
+            classes.forEach(c => {
+                html += `<div class="module-item class-item" onclick="highlightSidebarItem('${c.id}')"><span class="item-type">class</span>${c.label}</div>`;
+                // Find methods for this class
+                const methods = data.edges.filter(e => e.type === 'has_method' && e.target === c.id).map(e => data.nodes.find(n => n.id === e.source)).filter(Boolean);
+                if (methods.length > 0) {
+                    methods.forEach(m => {
+                        html += `<div class="module-item" style="margin-left: 20px; font-size: 12px;" onclick="highlightSidebarItem('${m.id}')"><span class="item-type">m</span>${m.label}</div>`;
+                    });
+                }
+            });
+            html += '</div>';
+        }
+        
+        // Relationships (from the main graph)
+        const outEdges = node.outgoers('edge');
+        const inEdges = node.incomers('edge');
+        
+        if (outEdges.length > 0 || inEdges.length > 0) {
+            html += '<div class="module-section"><h3>Relationships</h3>';
+            
+            if (outEdges.length > 0) {
+                html += '<div style="font-size: 12px; color: #94a3b8; margin: 8px 0 4px;">Outbound</div>';
+                outEdges.forEach(e => {
+                    const target = e.target();
+                    html += `<div class="module-item" onclick="focusNode('${target.id()}')"><span style="color:#94a3b8;margin-right:6px">→</span>${target.data('label')} <span style="font-size:10px;color:#64748b">(${e.data('type')})</span></div>`;
+                });
+            }
+            
+            if (inEdges.length > 0) {
+                html += '<div style="font-size: 12px; color: #94a3b8; margin: 8px 0 4px;">Inbound</div>';
+                inEdges.forEach(e => {
+                    const source = e.source();
+                    html += `<div class="module-item" onclick="focusNode('${source.id()}')"><span style="color:#94a3b8;margin-right:6px">←</span>${source.data('label')} <span style="font-size:10px;color:#64748b">(${e.data('type')})</span></div>`;
+                });
+            }
+            
+            html += '</div>';
+        }
+        
+        if (!html) {
+            html = '<div class="module-loading">No detailed information available.</div>';
+        }
+        
+        content.innerHTML = html;
+        
+    } catch (err) {
+        console.error(err);
+        content.innerHTML = `<div class="module-loading" style="color: #ef4444;">Error: ${err.message}</div>`;
+    }
+}
+
+function closeModuleSidebar() {
+    document.getElementById('moduleSidebar').classList.remove('visible');
+    currentModuleId = null;
+}
+
+function highlightSidebarItem(itemId) {
+    if (!currentModuleId) return;
+    const node = cy.getElementById(currentModuleId);
+    if (node.length) {
+        highlightNodeConnections(node);
+        // Add a quick pulse animation to the node
+        node.animate({
+            style: { 'border-width': 8, 'border-color': '#ec4899' }
+        }, {
+            duration: 200,
+            complete: () => {
+                node.animate({
+                    style: { 'border-width': 4, 'border-color': '#fbbf24' }
+                }, { duration: 200 });
+            }
+        });
     }
 }
 

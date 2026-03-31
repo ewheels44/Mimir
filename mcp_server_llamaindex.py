@@ -26,9 +26,30 @@ import json
 import shutil
 import argparse
 import time
+import threading
+import atexit
+import signal
 from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+# Module-level RLock for thread-safe index access
+_index_lock = threading.RLock()
+
+# Try to import file watcher (graceful degradation)
+try:
+    from src.mimir.watcher import MimirFileWatcher
+
+    WATCHER_AVAILABLE = True
+except ImportError:
+    MimirFileWatcher = None
+    WATCHER_AVAILABLE = False
+    import logging
+
+    logging.getLogger(__name__).warning(
+        "watchdog not installed - file watcher disabled"
+    )
 
 MIMIR_DIR = Path.home() / "Documents" / "Mimir"
 sys.path.insert(0, str(MIMIR_DIR))
@@ -171,6 +192,7 @@ class KnowledgeServer:
     def __init__(self, config: ServerConfig):
         self.config = config
         self._index: Optional[VectorStoreIndex] = None
+        self._watcher: Optional[MimirFileWatcher] = None
 
         embed_kwargs = {"model": config.embedding_model, "api_key": config.api_key}
         llm_kwargs = {"api_key": config.api_key}
@@ -187,18 +209,25 @@ class KnowledgeServer:
         self.config.knowledge_dir.mkdir(parents=True, exist_ok=True)
 
     def get_index(self) -> Optional[VectorStoreIndex]:
+        # Fast path: return cached index without lock
         if self._index is not None:
             return self._index
 
-        if (self.config.knowledge_dir / "index_store.json").exists():
-            storage_context = StorageContext.from_defaults(
-                persist_dir=str(self.config.knowledge_dir)
-            )
-            self._index = load_index_from_storage(storage_context)
-        elif self.config.docs_dir.exists():
-            self._index = self._create_index()
+        # Slow path: load index with lock
+        with _index_lock:
+            # Double-check after acquiring lock
+            if self._index is not None:
+                return self._index
 
-        return self._index
+            if (self.config.knowledge_dir / "index_store.json").exists():
+                storage_context = StorageContext.from_defaults(
+                    persist_dir=str(self.config.knowledge_dir)
+                )
+                self._index = load_index_from_storage(storage_context)
+            elif self.config.docs_dir.exists():
+                self._index = self._create_index()
+
+            return self._index
 
     def _create_index(self) -> VectorStoreIndex:
         from mimir.indexing import index_with_progress
@@ -261,7 +290,7 @@ class KnowledgeServer:
             response = query_engine.query(question)
             result = str(response)
             duration_ms = int((time.time() - start_time) * 1000)
-            
+
             # Track metrics - record_query will calculate realistic costs
             tracker = get_tracker(self.config.project_root)
             tracker.record_query(
@@ -269,7 +298,7 @@ class KnowledgeServer:
                 query_text=question,
                 duration_ms=duration_ms,
             )
-            
+
             return result
         except Exception as e:
             return f"Error querying knowledge base: {e}. Try using 'search' instead for faster results."
@@ -282,19 +311,20 @@ class KnowledgeServer:
         if not target_dir.exists():
             return f"Documents directory not found: {target_dir}"
 
-        success = index_with_progress(
-            project_root=self.config.project_root,
-            docs_dir=self.config.docs_dir,
-            code_dirs=self.config.code_dirs,
-            knowledge_dir=self.config.knowledge_dir,
-            force_reindex=False,
-            verbose=True,
-        )
+        with _index_lock:
+            success = index_with_progress(
+                project_root=self.config.project_root,
+                docs_dir=self.config.docs_dir,
+                code_dirs=self.config.code_dirs,
+                knowledge_dir=self.config.knowledge_dir,
+                force_reindex=False,
+                verbose=True,
+            )
 
-        if success:
-            self._index = None
-            return f"Successfully indexed {target_dir}"
-        return "Error indexing documents"
+            if success:
+                self._index = None
+                return f"Successfully indexed {target_dir}"
+            return "Error indexing documents"
 
     def add_documents(self, source_dir: Path) -> str:
         from mimir.indexing import add_directory_with_progress
@@ -302,16 +332,17 @@ class KnowledgeServer:
         if not source_dir.exists():
             return f"Source directory not found: {source_dir}"
 
-        success = add_directory_with_progress(
-            source_dir=source_dir,
-            knowledge_dir=self.config.knowledge_dir,
-            verbose=True,
-        )
+        with _index_lock:
+            success = add_directory_with_progress(
+                source_dir=source_dir,
+                knowledge_dir=self.config.knowledge_dir,
+                verbose=True,
+            )
 
-        if success:
-            self._index = None
-            return f"Successfully added documents from {source_dir}"
-        return "Error adding documents"
+            if success:
+                self._index = None
+                return f"Successfully added documents from {source_dir}"
+            return "Error adding documents"
 
     def get_stats(self) -> dict:
         index = self.get_index()
@@ -339,6 +370,72 @@ class KnowledgeServer:
         stats["source_files"] = total_source_files
 
         return stats
+
+    def start_watcher(self) -> dict:
+        if not WATCHER_AVAILABLE:
+            return {"status": "error", "message": "watchdog not installed"}
+
+        if self._watcher is not None and self._watcher.status()["running"]:
+            return {"status": "running", "message": "watcher already running"}
+
+        index = self.get_index()
+        if index is None:
+            return {
+                "status": "error",
+                "message": "no index found, cannot start watcher",
+            }
+
+        watched_dirs = [self.config.docs_dir] + self.config.code_dirs
+        watched_dirs = [d for d in watched_dirs if d.exists()]
+
+        if not watched_dirs:
+            return {"status": "error", "message": "no directories to watch"}
+
+        self._watcher = MimirFileWatcher(
+            project_root=self.config.project_root,
+            watched_dirs=watched_dirs,
+            knowledge_dir=self.config.knowledge_dir,
+            index_lock=_index_lock,
+        )
+        self._watcher.start()
+        return {"status": "running"}
+
+    def stop_watcher(self) -> dict:
+        if self._watcher is None:
+            return {"status": "stopped", "message": "watcher not initialized"}
+
+        self._watcher.stop()
+        return {"status": "stopped"}
+
+    def get_watcher_status(self) -> dict:
+        if not WATCHER_AVAILABLE:
+            return {
+                "status": "error",
+                "message": "watchdog not installed",
+                "watched_dirs": [],
+                "last_trigger": None,
+                "changes_processed": 0,
+            }
+
+        if self._watcher is None:
+            return {
+                "status": "stopped",
+                "watched_dirs": [],
+                "last_trigger": None,
+                "changes_processed": 0,
+            }
+
+        watcher_status = self._watcher.status()
+        return {
+            "status": "running" if watcher_status["running"] else "stopped",
+            "watched_dirs": watcher_status["watched_dirs"],
+            "last_trigger": (
+                watcher_status["last_reindex_result"].get("timestamp")
+                if watcher_status["last_reindex_result"]
+                else None
+            ),
+            "changes_processed": watcher_status["reindex_count"],
+        }
 
 
 def create_mcp_server(server: KnowledgeServer) -> FastMCP:
@@ -389,6 +486,59 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         return result["messages"][-1].content
 
     return mcp
+
+
+class WatcherStatusHandler(BaseHTTPRequestHandler):
+    _server_instance: Optional["KnowledgeServer"] = None
+
+    def do_GET(self):
+        if self.path == "/api/watcher/status":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            status = (
+                self._server_instance.get_watcher_status()
+                if self._server_instance
+                else {
+                    "status": "stopped",
+                    "watched_dirs": [],
+                    "last_trigger": None,
+                    "changes_processed": 0,
+                }
+            )
+            self.wfile.write(json.dumps(status).encode())
+        elif self.path == "/api/watcher/stop":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            if self._server_instance:
+                result = self._server_instance.stop_watcher()
+            else:
+                result = {"status": "stopped"}
+            self.wfile.write(json.dumps(result).encode())
+        elif self.path == "/api/watcher/start":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            if self._server_instance:
+                result = self._server_instance.start_watcher()
+            else:
+                result = {"status": "error", "message": "server not initialized"}
+            self.wfile.write(json.dumps(result).encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):
+        pass
+
+
+def start_watcher_server(port: int = 8001, server: Optional[KnowledgeServer] = None):
+    WatcherStatusHandler._server_instance = server
+    http_server = HTTPServer(("", port), WatcherStatusHandler)
+    thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+    thread.start()
+    return http_server
 
 
 def main():
@@ -443,11 +593,39 @@ def main():
     if args.stats:
         print(json.dumps(server.get_stats(), indent=2))
         return
-    
+
     if args.metrics:
         from src.mimir.metrics import format_report
+
         print(format_report(days=30))
         return
+
+    http_server = start_watcher_server(server=server)
+
+    def shutdown_watcher(signum=None, frame=None):
+        if server._watcher is not None:
+            server.stop_watcher()
+        http_server.shutdown()
+
+    atexit.register(shutdown_watcher)
+    signal.signal(signal.SIGINT, shutdown_watcher)
+    signal.signal(signal.SIGTERM, shutdown_watcher)
+
+    index = server.get_index()
+    if index is not None and WATCHER_AVAILABLE:
+        watcher_result = server.start_watcher()
+        if watcher_result.get("status") == "running":
+            print("[Knowledge Server] File watcher started", file=sys.stderr)
+        else:
+            print(
+                f"[Knowledge Server] Watcher not started: {watcher_result.get('message', 'unknown')}",
+                file=sys.stderr,
+            )
+    elif not WATCHER_AVAILABLE:
+        print(
+            "[Knowledge Server] Watcher disabled (watchdog not installed)",
+            file=sys.stderr,
+        )
 
     mcp = create_mcp_server(server)
     mcp.run(transport=args.transport)

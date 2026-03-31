@@ -166,14 +166,13 @@ def add_to_manifest(
     files: List[str],
     document_count: int,
     is_incremental: bool = False,
+    file_hashes: Optional[dict] = None,
 ) -> None:
-    """Add or update a directory entry in the manifest."""
     manifest = load_manifest(knowledge_dir)
 
     dir_key = str(directory.resolve())
 
     if is_incremental and dir_key in manifest["indexed_directories"]:
-        # Merge with existing entry
         existing = manifest["indexed_directories"][dir_key]
         existing_files = set(existing.get("files", []))
         new_files = set(files)
@@ -187,8 +186,13 @@ def add_to_manifest(
             "last_indexed": datetime.now().isoformat(),
             "indexed_at": existing.get("indexed_at", datetime.now().isoformat()),
         }
+        if file_hashes:
+            manifest["indexed_directories"][dir_key]["file_hashes"] = file_hashes
+        elif "file_hashes" in existing:
+            manifest["indexed_directories"][dir_key]["file_hashes"] = existing[
+                "file_hashes"
+            ]
     else:
-        # New entry or full reindex
         manifest["indexed_directories"][dir_key] = {
             "path": str(directory),
             "files": sorted(files),
@@ -197,8 +201,9 @@ def add_to_manifest(
             "last_indexed": datetime.now().isoformat(),
             "indexed_at": datetime.now().isoformat(),
         }
+        if file_hashes:
+            manifest["indexed_directories"][dir_key]["file_hashes"] = file_hashes
 
-    # Recalculate total
     manifest["total_documents"] = sum(
         entry.get("document_count", 0)
         for entry in manifest["indexed_directories"].values()
@@ -222,6 +227,143 @@ def list_indexed_files(knowledge_dir: Path) -> dict:
     """Get a detailed listing of all indexed files."""
     manifest = load_manifest(knowledge_dir)
     return manifest
+
+
+# =============================================================================
+# SHA-256 File Hash Functions
+# =============================================================================
+
+import hashlib
+
+MAX_FILE_SIZE_FOR_HASHING = 50 * 1024 * 1024  # 50MB threshold
+
+
+def compute_file_hash(file_path: Path) -> Optional[str]:
+    """
+    Compute SHA-256 hash of a file.
+
+    Args:
+        file_path: Path to the file to hash
+
+    Returns:
+        Hex-encoded SHA-256 hash string, or None if file is too large or unreadable
+    """
+    try:
+        file_size = file_path.stat().st_size
+        if file_size > MAX_FILE_SIZE_FOR_HASHING:
+            print(
+                f"   Warning: Skipping large file {file_path.name} ({file_size / 1024 / 1024:.1f}MB > 50MB)"
+            )
+            return None
+
+        sha256_hash = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            # Read in chunks to handle large files efficiently
+            for chunk in iter(lambda: f.read(8192), b""):
+                sha256_hash.update(chunk)
+        return sha256_hash.hexdigest()
+    except (IOError, OSError) as e:
+        print(f"   Warning: Could not hash {file_path}: {e}")
+        return None
+
+
+def get_index_state_path(project_root: Path) -> Path:
+    """Get the path to the index state file."""
+    return project_root / ".mimir" / "index_state.json"
+
+
+def load_hash_state(project_root: Path) -> dict:
+    """
+    Load the hash state from .mimir/index_state.json.
+
+    Args:
+        project_root: Root directory of the project
+
+    Returns:
+        Dictionary with file_hashes: {file_path: sha256_hex}
+    """
+    state_path = get_index_state_path(project_root)
+    if state_path.exists():
+        try:
+            with open(state_path) as f:
+                state = json.load(f)
+                # Ensure backward compatibility - return empty dict if file_hashes missing
+                if "file_hashes" not in state:
+                    return {"file_hashes": {}}
+                return state
+        except (json.JSONDecodeError, IOError):
+            pass
+    return {"file_hashes": {}}
+
+
+def save_hash_state(project_root: Path, state: dict) -> None:
+    """
+    Save the hash state to .mimir/index_state.json.
+
+    Args:
+        project_root: Root directory of the project
+        state: Dictionary with file_hashes and optional metadata
+    """
+    state_path = get_index_state_path(project_root)
+    state["last_updated"] = datetime.now().isoformat()
+
+    # Ensure .mimir directory exists
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(state_path, "w") as f:
+        json.dump(state, f, indent=2)
+
+
+def detect_changed_files(
+    project_root: Path,
+    watched_dirs: List[Path],
+    update_state: bool = True,
+) -> dict:
+    previous_state = load_hash_state(project_root)
+    previous_hashes = previous_state.get("file_hashes", {})
+
+    current_hashes = {}
+    all_files = []
+
+    for watched_dir in watched_dirs:
+        if not watched_dir.exists():
+            continue
+        for file_path in watched_dir.rglob("*"):
+            if file_path.is_file() and not _should_exclude(file_path):
+                rel_path = str(file_path.resolve())
+                all_files.append(rel_path)
+                file_hash = compute_file_hash(file_path)
+                if file_hash is not None:
+                    current_hashes[rel_path] = file_hash
+
+    previous_files = set(previous_hashes.keys())
+    current_files = set(current_hashes.keys())
+
+    added = [Path(p) for p in current_files - previous_files]
+    deleted = [Path(p) for p in previous_files - current_files]
+
+    modified = []
+    for path in current_files & previous_files:
+        if current_hashes[path] != previous_hashes[path]:
+            modified.append(Path(path))
+
+    if update_state:
+        save_hash_state(project_root, {"file_hashes": current_hashes})
+
+    return {
+        "added": added,
+        "modified": modified,
+        "deleted": deleted,
+    }
+
+
+def _should_exclude(file_path: Path) -> bool:
+    """Check if a file should be excluded from hashing."""
+    path_str = str(file_path)
+    for pattern in EXCLUDE_PATTERNS:
+        if pattern in path_str:
+            return True
+    return False
 
 
 def index_with_progress(
@@ -418,6 +560,62 @@ def index_with_progress(
     return True
 
 
+def _get_stable_doc_id(file_path: Path) -> str:
+    """Generate a stable document ID based on absolute file path."""
+    return f"file://{file_path.resolve()}"
+
+
+def _use_refresh_ref_docs(index) -> bool:
+    """Check if the index supports refresh_ref_docs method."""
+    return hasattr(index, "refresh_ref_docs") and callable(
+        getattr(index, "refresh_ref_docs")
+    )
+
+
+def _refresh_or_insert_doc(index, doc, verbose: bool = True) -> bool:
+    """
+    Insert a document using refresh_ref_docs if available, or fallback to
+    delete + insert pattern.
+
+    Args:
+        index: The VectorStoreIndex
+        doc: Document to insert
+        verbose: Whether to print debug info
+
+    Returns:
+        True if successful
+    """
+    if _use_refresh_ref_docs(index):
+        try:
+            refreshed = index.refresh_ref_docs([doc])
+            if verbose:
+                status = "updated" if refreshed[0] else "inserted"
+                print(f"      ↳ {status}: {doc.doc_id}")
+            return True
+        except Exception as e:
+            if verbose:
+                print(f"      ↳ refresh_ref_docs failed: {e}, using fallback")
+            # Fall through to fallback
+
+    # Fallback: delete then insert
+    try:
+        doc_id = doc.doc_id
+        # Check if doc exists before deleting
+        docstore = index.storage_context.docstore
+        if doc_id in docstore.docs:
+            index.delete_ref_doc(doc_id, delete_from_docstore=True)
+            if verbose:
+                print(f"      ↳ deleted existing: {doc_id}")
+        index.insert(doc)
+        if verbose:
+            print(f"      ↳ inserted: {doc_id}")
+        return True
+    except Exception as e:
+        if verbose:
+            print(f"      ↳ fallback failed: {e}")
+        return False
+
+
 def add_directory_with_progress(
     source_dir: Path,
     knowledge_dir: Path,
@@ -425,6 +623,7 @@ def add_directory_with_progress(
 ) -> bool:
     """
     Add documents from a directory to existing index with progress bars.
+    Uses stable doc_ids to prevent duplicates.
 
     Args:
         source_dir: Directory to add
@@ -479,9 +678,14 @@ def add_directory_with_progress(
         for resource in get_progress_bar(resources, desc="   Processing", unit="file"):
             try:
                 doc = reader.load_resource(resource)
-                new_docs.extend(doc)
                 for d in doc:
-                    index.insert(d)
+                    # Set stable doc_id based on file path
+                    file_path = Path(str(resource))
+                    d.doc_id = _get_stable_doc_id(file_path)
+                    d.metadata = d.metadata or {}
+                    d.metadata["file_path"] = str(file_path.resolve())
+                    new_docs.append(d)
+                    _refresh_or_insert_doc(index, d, verbose=False)
             except Exception as e:
                 print(f"   ⚠️  Skipped {resource}: {e}", flush=True)
         print(f"   ✓ Added {len(new_docs)} documents")
@@ -498,7 +702,12 @@ def add_directory_with_progress(
             try:
                 doc = reader.load_resource(resource)
                 for d in doc:
-                    index.insert(d)
+                    # Set stable doc_id based on file path
+                    file_path = Path(str(resource))
+                    d.doc_id = _get_stable_doc_id(file_path)
+                    d.metadata = d.metadata or {}
+                    d.metadata["file_path"] = str(file_path.resolve())
+                    _refresh_or_insert_doc(index, d, verbose=False)
                     doc_count += 1
             except Exception:
                 pass
@@ -572,14 +781,14 @@ def add_file_to_index(
         doc = Document(
             text=content,
             metadata={
-                "file_path": str(source_file),
+                "file_path": str(source_file.resolve()),
                 "file_name": file_name,
                 "file_type": source_file.suffix,
             },
-            id_=str(source_file),
+            id_=_get_stable_doc_id(source_file),
         )
 
-        index.insert(doc)
+        _refresh_or_insert_doc(index, doc, verbose=verbose)
 
         # Update manifest - use parent directory as key
         parent_dir = source_file.parent
@@ -599,3 +808,104 @@ def add_file_to_index(
         if verbose:
             print(f"   ❌ Failed to index file: {e}")
         return False
+
+
+def incremental_reindex(
+    project_root: Path,
+    watched_dirs: List[Path],
+    knowledge_dir: Path,
+    verbose: bool = False,
+) -> dict:
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    result = {
+        "added_count": 0,
+        "modified_count": 0,
+        "deleted_count": 0,
+        "success": False,
+    }
+
+    if not (knowledge_dir / "index_store.json").exists():
+        logger.warning("No existing index found. Run full index first.")
+        return result
+
+    try:
+        from llama_index.core import (
+            load_index_from_storage,
+            StorageContext,
+            Document,
+        )
+    except ImportError as e:
+        logger.error(f"Missing dependency: {e}")
+        return result
+
+    changes = detect_changed_files(project_root, watched_dirs, update_state=True)
+    added = changes["added"]
+    modified = changes["modified"]
+    deleted = changes["deleted"]
+
+    if len(added) + len(modified) + len(deleted) == 0:
+        logger.debug("No changes detected, skipping reindex")
+        result["success"] = True
+        return result
+
+    logger.info(
+        f"Incremental reindex: +{len(added)} modified:{len(modified)} -{len(deleted)}"
+    )
+
+    try:
+        storage_context = StorageContext.from_defaults(persist_dir=str(knowledge_dir))
+        index = load_index_from_storage(storage_context)
+
+        for file_path in added + modified:
+            if _should_exclude(file_path):
+                logger.debug(f"Skipping excluded file: {file_path}")
+                continue
+            try:
+                content = file_path.read_text(encoding="utf-8")
+                doc = Document(
+                    text=content,
+                    metadata={
+                        "file_path": str(file_path.resolve()),
+                        "file_name": file_path.name,
+                        "file_type": file_path.suffix,
+                    },
+                    id_=_get_stable_doc_id(file_path),
+                )
+                _refresh_or_insert_doc(index, doc, verbose=verbose)
+                if file_path in added:
+                    result["added_count"] += 1
+                else:
+                    result["modified_count"] += 1
+                logger.debug(f"Indexed: {file_path}")
+            except UnicodeDecodeError:
+                logger.debug(f"Skipping binary file: {file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to index {file_path}: {e}")
+
+        for file_path in deleted:
+            try:
+                doc_id = _get_stable_doc_id(file_path)
+                docstore = index.storage_context.docstore
+                if doc_id in docstore.docs:
+                    index.delete_ref_doc(doc_id, delete_from_docstore=True)
+                    result["deleted_count"] += 1
+                    logger.debug(f"Removed from index: {file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to remove {file_path} from index: {e}")
+
+        index.storage_context.persist(persist_dir=str(knowledge_dir))
+        result["success"] = True
+        result["timestamp"] = datetime.now().isoformat()
+
+        logger.info(
+            f"Incremental reindex complete: "
+            f"+{result['added_count']} ~{result['modified_count']} -{result['deleted_count']}"
+        )
+
+    except Exception as e:
+        logger.error(f"Incremental reindex failed: {e}")
+
+    return result

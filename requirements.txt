@@ -24,3 +24,6 @@ tqdm>=4.65.0
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 jinja2>=3.1.0
+
+# File watching
+watchdog>=3.0.0

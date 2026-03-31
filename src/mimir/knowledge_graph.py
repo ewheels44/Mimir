@@ -1,56 +1,60 @@
 """Knowledge Graph Relationship Extraction
 
-Multi-language support via tree-sitter with Python ast fallback.
+Two complementary extractors, used together when tree-sitter-languages is
+available, or Python-only as a reliable fallback:
 
-Supported languages (requires tree-sitter-languages):
-  Python, TypeScript, JavaScript, Rust, Go
+  PythonASTExtractor   — .py files via Python's built-in `ast` module.
+                         Always available, semantically accurate, fast.
 
-Falls back to Python-only ast extraction if tree-sitter-languages
-is not installed.
+  TreeSitterExtractor  — .ts/.tsx/.js/.jsx/.rs/.go files via tree-sitter.
+                         Requires: pip install tree-sitter-languages
+                         Walks the concrete syntax tree directly — no
+                         fragile S-expression queries.
+
+  CombinedExtractor    — Routes .py to AST, everything else to TreeSitter.
+                         This is the preferred path when tree-sitter is
+                         available.
+
+Public API
+----------
+    extract_code_relationships(project_root, output_dir, code_dirs, from_index)
+        → extractor with .relationships, .entities, .get_stats(), .save_to_file()
 """
 
 import ast
-import os
 import json
-from pathlib import Path
-from typing import List, Dict, Optional, Set
-from dataclasses import dataclass, asdict
+import keyword
+import os
+import re
+import tempfile
 from collections import defaultdict
-
-
-# ---------------------------------------------------------------------------
-# Shared data model
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class Relationship:
-    source: str
-    target: str
-    relation_type: str
-    metadata: Dict
-
-    def to_dict(self):
-        return {
-            "source": self.source,
-            "target": self.target,
-            "relation_type": self.relation_type,
-            "metadata": self.metadata,
-        }
-
-
-@dataclass
-class CodeEntity:
-    name: str
-    entity_type: str
-    file_path: str
-    line_number: int
-    metadata: Dict
-
+from dataclasses import dataclass, asdict
+from pathlib import Path
+from typing import Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 # ---------------------------------------------------------------------------
-# Language → file extension mapping
+# Constants
 # ---------------------------------------------------------------------------
+
+EXCLUDE_DIRS: Set[str] = {
+    "__pycache__",
+    "node_modules",
+    ".venv",
+    "venv",
+    ".git",
+    ".ruff_cache",
+    ".pytest_cache",
+    ".mypy_cache",
+    "dist",
+    "build",
+    "target",
+    ".next",
+    ".nuxt",
+    "coverage",
+    ".coverage",
+    "out",
+    ".output",
+}
 
 EXTENSION_TO_LANGUAGE: Dict[str, str] = {
     ".py": "python",
@@ -64,132 +68,454 @@ EXTENSION_TO_LANGUAGE: Dict[str, str] = {
     ".go": "go",
 }
 
-EXCLUDE_DIRS = {
-    "__pycache__",
-    "node_modules",
-    ".venv",
-    "venv",
-    ".git",
-    ".ruff_cache",
-    ".pytest_cache",
-    "dist",
-    "build",
-    "target",  # Rust
+# Per-language keywords — used to filter noise out of extracted identifiers.
+_PYTHON_KW: FrozenSet[str] = frozenset(keyword.kwlist) | {
+    "True",
+    "False",
+    "None",
+    "self",
+    "cls",
 }
+_JS_KW: FrozenSet[str] = frozenset(
+    {
+        "var",
+        "let",
+        "const",
+        "function",
+        "class",
+        "if",
+        "else",
+        "for",
+        "while",
+        "do",
+        "return",
+        "import",
+        "export",
+        "from",
+        "as",
+        "try",
+        "catch",
+        "finally",
+        "throw",
+        "new",
+        "delete",
+        "typeof",
+        "instanceof",
+        "in",
+        "of",
+        "switch",
+        "case",
+        "break",
+        "continue",
+        "default",
+        "async",
+        "await",
+        "yield",
+        "static",
+        "extends",
+        "super",
+        "this",
+        "true",
+        "false",
+        "null",
+        "undefined",
+        "void",
+    }
+)
+_RUST_KW: FrozenSet[str] = frozenset(
+    {
+        "fn",
+        "let",
+        "mut",
+        "pub",
+        "use",
+        "mod",
+        "struct",
+        "enum",
+        "impl",
+        "trait",
+        "for",
+        "while",
+        "loop",
+        "if",
+        "else",
+        "match",
+        "return",
+        "self",
+        "Self",
+        "super",
+        "crate",
+        "type",
+        "where",
+        "async",
+        "await",
+        "move",
+        "ref",
+        "in",
+        "as",
+        "true",
+        "false",
+        "dyn",
+        "box",
+    }
+)
+_GO_KW: FrozenSet[str] = frozenset(
+    {
+        "func",
+        "var",
+        "const",
+        "type",
+        "struct",
+        "interface",
+        "map",
+        "chan",
+        "for",
+        "range",
+        "if",
+        "else",
+        "switch",
+        "case",
+        "default",
+        "return",
+        "break",
+        "continue",
+        "goto",
+        "defer",
+        "go",
+        "select",
+        "package",
+        "import",
+        "true",
+        "false",
+        "nil",
+        "make",
+        "new",
+        "len",
+        "cap",
+        "append",
+        "copy",
+        "delete",
+        "close",
+        "panic",
+        "recover",
+    }
+)
+
+_LANG_KEYWORDS: Dict[str, FrozenSet[str]] = {
+    "python": _PYTHON_KW,
+    "typescript": _JS_KW,
+    "javascript": _JS_KW,
+    "rust": _RUST_KW,
+    "go": _GO_KW,
+}
+
+# Valid identifier pattern (covers Python, JS/TS, Rust, Go, with $ for JS)
+_VALID_NAME_RE = re.compile(r"^[a-zA-Z_$][a-zA-Z0-9_$]*$")
 
 
 # ---------------------------------------------------------------------------
-# Tree-sitter extractor  (used when tree-sitter-languages is available)
+# Data model
 # ---------------------------------------------------------------------------
 
-# S-expression queries per language.
-# Each query must only use node-type names that exist in that grammar.
-_TS_QUERIES: Dict[str, Dict[str, str]] = {
-    "python": {
-        "imports": """
-            (import_statement (dotted_name) @module)
-            (import_from_statement
-                module_name: (dotted_name)? @module
-                name: (dotted_name) @name)
-        """,
-        "classes": """
-            (class_definition
-                name: (identifier) @class_name
-                bases: (argument_list
-                    [(identifier) @base
-                     (attribute) @base])?)
-        """,
-        "calls": """
-            (call function: (identifier) @func)
-            (call function: (attribute attribute: (identifier) @method))
-        """,
-    },
-    "typescript": {
-        "imports": """
-            (import_statement
-                source: (string (string_fragment) @path))
-            (import_declaration
-                source: (string (string_fragment) @path))
-        """,
-        "classes": """
-            (class_declaration
-                name: (type_identifier) @class_name
-                (class_heritage
-                    (extends_clause value: (identifier) @base))?)
-        """,
-        "calls": """
-            (call_expression function: (identifier) @func)
-            (call_expression
-                function: (member_expression
-                    property: (property_identifier) @method))
-        """,
-    },
-    "javascript": {
-        "imports": """
-            (import_statement
-                source: (string (string_fragment) @path))
-            (call_expression
-                function: (identifier) @_req
-                (#eq? @_req "require")
-                arguments: (arguments (string (string_fragment) @path)))
-        """,
-        "classes": """
-            (class_declaration
-                name: (identifier) @class_name
-                (class_heritage
-                    (extends_clause value: (identifier) @base))?)
-        """,
-        "calls": """
-            (call_expression function: (identifier) @func)
-            (call_expression
-                function: (member_expression
-                    property: (property_identifier) @method))
-        """,
-    },
-    "rust": {
-        "imports": """
-            (use_declaration
-                argument: (scoped_identifier) @path)
-            (use_declaration
-                argument: (identifier) @path)
-            (use_declaration
-                argument: (scoped_use_list
-                    path: (scoped_identifier)? @path))
-        """,
-        "classes": """
-            (struct_item name: (type_identifier) @struct_name)
-            (impl_item type: (type_identifier) @impl_type
-                trait: (type_identifier)? @trait_name)
-        """,
-        "calls": """
-            (call_expression
-                function: (identifier) @func)
-            (call_expression
-                function: (scoped_identifier
-                    name: (identifier) @func))
-        """,
-    },
-    "go": {
-        "imports": """
-            (import_spec path: (interpreted_string_literal) @path)
-        """,
-        "classes": """
-            (type_declaration
-                (type_spec name: (type_identifier) @type_name))
-        """,
-        "calls": """
-            (call_expression
-                function: (identifier) @func)
-            (call_expression
-                function: (selector_expression
-                    field: (field_identifier) @method))
-        """,
-    },
+
+@dataclass
+class Relationship:
+    source: str  # relative file path
+    target: str  # relative file path OR module/symbol name
+    relation_type: (
+        str  # imports_module | imports_from | inherits_from | calls | has_method
+    )
+    metadata: Dict
+
+    def to_dict(self) -> dict:
+        return {
+            "source": self.source,
+            "target": self.target,
+            "relation_type": self.relation_type,
+            "metadata": self.metadata,
+        }
+
+
+@dataclass
+class CodeEntity:
+    name: str
+    entity_type: str  # class | method | function | struct | interface
+    file_path: str
+    line_number: int
+    metadata: Dict
+
+
+# ---------------------------------------------------------------------------
+# Module-level helpers
+# ---------------------------------------------------------------------------
+
+
+def _is_valid_identifier(text: str, lang: str = "python") -> bool:
+    """Return True iff *text* looks like a real, keepable identifier."""
+    if not text or len(text) < 2 or len(text) > 128:
+        return False
+    if not _VALID_NAME_RE.match(text):
+        return False
+    return text not in _LANG_KEYWORDS.get(lang, _PYTHON_KW)
+
+
+def _strip_quotes(text: str) -> str:
+    """Remove surrounding quote characters from a string literal token."""
+    return text.strip().strip('"').strip("'").strip("`")
+
+
+def _should_exclude(path: Path) -> bool:
+    """True if any path component is in EXCLUDE_DIRS."""
+    return any(part in EXCLUDE_DIRS for part in path.parts)
+
+
+def _walk_ts_tree(node):
+    """Depth-first generator over a tree-sitter CST."""
+    yield node
+    for child in node.children:
+        yield from _walk_ts_tree(child)
+
+
+def _ts_node_text(node, source: bytes) -> str:
+    return source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
+
+
+# ---------------------------------------------------------------------------
+# Python AST extractor  (always available, very accurate)
+# ---------------------------------------------------------------------------
+
+
+class PythonASTExtractor:
+    """Extract relationships from Python source using the built-in ast module."""
+
+    def __init__(self, project_root: Path):
+        self.project_root = Path(project_root)
+        self.relationships: List[Relationship] = []
+        self.entities: Dict[str, CodeEntity] = {}
+
+    # ------------------------------------------------------------------
+    # Public interface
+    # ------------------------------------------------------------------
+
+    def extract_from_file(self, file_path: Path) -> List[Relationship]:
+        if file_path.suffix.lower() != ".py":
+            return []
+        try:
+            source = file_path.read_text(encoding="utf-8", errors="replace")
+            tree = ast.parse(source, filename=str(file_path))
+        except SyntaxError as exc:
+            print(f"  [WARN] syntax error in {file_path}: {exc}")
+            return []
+        except Exception as exc:
+            print(f"  [WARN] cannot parse {file_path}: {exc}")
+            return []
+
+        rel_path = self._rel(file_path)
+        rels: List[Relationship] = []
+        rels.extend(self._imports(tree, rel_path))
+        rels.extend(self._classes(tree, rel_path))
+        rels.extend(self._calls(tree, rel_path))
+        return rels
+
+    def extract_from_directory(self, directory: Path) -> List[Relationship]:
+        found: List[Relationship] = []
+        for py_file in sorted(directory.rglob("*.py")):
+            if _should_exclude(py_file):
+                continue
+            try:
+                rel = py_file.relative_to(self.project_root)
+            except ValueError:
+                rel = py_file
+            print(f"  [PY ] {rel}")
+            rels = self.extract_from_file(py_file)
+            self.relationships.extend(rels)
+            found.extend(rels)
+        return found
+
+    def save_to_file(self, output_path: Path) -> None:
+        data = {
+            "relationships": [r.to_dict() for r in self.relationships],
+            "entities": {k: asdict(v) for k, v in self.entities.items()},
+        }
+        with open(output_path, "w") as f:
+            json.dump(data, f, indent=2)
+        print(f"\n✅ Saved {len(self.relationships)} relationships → {output_path}")
+
+    def get_stats(self) -> Dict:
+        type_counts: Dict[str, int] = defaultdict(int)
+        for r in self.relationships:
+            type_counts[r.relation_type] += 1
+        return {
+            "total_relationships": len(self.relationships),
+            "total_entities": len(self.entities),
+            "by_type": dict(type_counts),
+            "by_language": {"python": len(self.relationships)},
+        }
+
+    # ------------------------------------------------------------------
+    # Private extraction helpers
+    # ------------------------------------------------------------------
+
+    def _rel(self, path: Path) -> str:
+        try:
+            return str(path.relative_to(self.project_root))
+        except ValueError:
+            return str(path)
+
+    def _imports(self, tree: ast.Module, rel_path: str) -> List[Relationship]:
+        rels: List[Relationship] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    rels.append(
+                        Relationship(
+                            source=rel_path,
+                            target=alias.name,
+                            relation_type="imports_module",
+                            metadata={"line": node.lineno, "asname": alias.asname},
+                        )
+                    )
+
+            elif isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                for alias in node.names:
+                    target = f"{module}.{alias.name}" if module else alias.name
+                    rels.append(
+                        Relationship(
+                            source=rel_path,
+                            target=target,
+                            relation_type="imports_from",
+                            metadata={
+                                "line": node.lineno,
+                                "module": module,
+                                "name": alias.name,
+                            },
+                        )
+                    )
+        return rels
+
+    def _classes(self, tree: ast.Module, rel_path: str) -> List[Relationship]:
+        rels: List[Relationship] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+
+            self.entities[f"{rel_path}::{node.name}"] = CodeEntity(
+                name=node.name,
+                entity_type="class",
+                file_path=rel_path,
+                line_number=node.lineno,
+                metadata={"bases": [self._base_name(b) for b in node.bases]},
+            )
+
+            for base in node.bases:
+                name = self._base_name(base)
+                if name and _is_valid_identifier(name.split(".")[-1], "python"):
+                    rels.append(
+                        Relationship(
+                            source=rel_path,
+                            target=name,
+                            relation_type="inherits_from",
+                            metadata={"line": node.lineno, "class": node.name},
+                        )
+                    )
+
+            # Methods
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef):
+                    method_key = f"{rel_path}::{node.name}.{item.name}"
+                    self.entities[method_key] = CodeEntity(
+                        name=item.name,
+                        entity_type="method",
+                        file_path=rel_path,
+                        line_number=item.lineno,
+                        metadata={"class": node.name},
+                    )
+                    rels.append(
+                        Relationship(
+                            source=f"{rel_path}::{node.name}",
+                            target=method_key,
+                            relation_type="has_method",
+                            metadata={
+                                "line": item.lineno,
+                                "class": node.name,
+                                "method": item.name,
+                            },
+                        )
+                    )
+        return rels
+
+    def _calls(self, tree: ast.Module, rel_path: str) -> List[Relationship]:
+        """Top-level function / method calls — deduplicated per file."""
+        rels: List[Relationship] = []
+        seen: Set[str] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = self._call_name(node.func)
+            # Only keep simple identifiers (not full dotted chains which get noisy)
+            top = name.split(".")[0] if name else ""
+            if top and top not in seen and _is_valid_identifier(top, "python"):
+                seen.add(top)
+                rels.append(
+                    Relationship(
+                        source=rel_path,
+                        target=top,
+                        relation_type="calls",
+                        metadata={"line": node.lineno},
+                    )
+                )
+        return rels
+
+    @staticmethod
+    def _call_name(node: ast.expr) -> str:
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Attribute):
+            parent = PythonASTExtractor._call_name(node.value)
+            return f"{parent}.{node.attr}" if parent else node.attr
+        return ""
+
+    @staticmethod
+    def _base_name(node: ast.expr) -> str:
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Attribute):
+            parent = PythonASTExtractor._base_name(node.value)
+            return f"{parent}.{node.attr}" if parent else node.attr
+        return ""
+
+
+# ---------------------------------------------------------------------------
+# Tree-sitter extractor  (multi-language)
+# ---------------------------------------------------------------------------
+
+# Node type sets per language — what we look for when walking the tree.
+# These match the actual grammar node types produced by tree-sitter-languages.
+
+_TS_IMPORT_NODES: Dict[str, Set[str]] = {
+    "typescript": {"import_statement", "import_declaration"},
+    "javascript": {"import_statement", "import_declaration"},
+    "rust": {"use_declaration"},
+    "go": {"import_declaration", "import_spec"},
+}
+
+_TS_CLASS_NODES: Dict[str, Set[str]] = {
+    "typescript": {"class_declaration", "abstract_class_declaration", "class_body"},
+    "javascript": {"class_declaration", "class_expression"},
+    "rust": {"struct_item", "impl_item", "trait_item", "enum_item"},
+    "go": {"type_spec"},
+}
+
+_TS_CALL_NAME_NODES: Dict[str, Set[str]] = {
+    "typescript": {"identifier"},
+    "javascript": {"identifier"},
+    "rust": {"identifier"},
+    "go": {"identifier"},
 }
 
 
-def _try_import_treesitter():
-    """Return (get_parser, get_language) or (None, None) if not available."""
+def _try_import_treesitter() -> Tuple[Optional[object], Optional[object]]:
     try:
         from tree_sitter_languages import get_parser, get_language  # type: ignore
 
@@ -199,14 +525,22 @@ def _try_import_treesitter():
 
 
 class TreeSitterExtractor:
-    """Multi-language relationship extractor using tree-sitter."""
+    """
+    Multi-language extractor that walks tree-sitter CSTs directly.
+    No S-expression queries — just typed node matching, which is stable
+    across grammar versions.
+
+    Only handles non-Python files. Use CombinedExtractor to get both.
+    """
+
+    SUPPORTED: Set[str] = {"typescript", "javascript", "rust", "go"}
 
     def __init__(self, project_root: Path):
         get_parser, get_language = _try_import_treesitter()
         if get_parser is None:
             raise ImportError(
                 "tree-sitter-languages is not installed.\n"
-                "Install it with: pip install tree-sitter-languages"
+                "  pip install tree-sitter-languages"
             )
         self._get_parser = get_parser
         self._get_language = get_language
@@ -214,383 +548,474 @@ class TreeSitterExtractor:
         self.relationships: List[Relationship] = []
         self.entities: Dict[str, CodeEntity] = {}
         self._parser_cache: Dict[str, object] = {}
-        self._query_cache: Dict[str, object] = {}
 
-    def _parser_for(self, lang: str):
-        if lang not in self._parser_cache:
-            self._parser_cache[lang] = self._get_parser(lang)
-        return self._parser_cache[lang]
-
-    def _query_for(self, lang: str, kind: str):
-        key = f"{lang}:{kind}"
-        if key not in self._query_cache:
-            language_obj = self._get_language(lang)
-            src = _TS_QUERIES.get(lang, {}).get(kind, "")
-            if not src.strip():
-                self._query_cache[key] = None
-            else:
-                try:
-                    self._query_cache[key] = language_obj.query(src)
-                except Exception:
-                    self._query_cache[key] = None
-        return self._query_cache[key]
+    # ------------------------------------------------------------------
+    # Public interface
+    # ------------------------------------------------------------------
 
     def extract_from_file(self, file_path: Path) -> List[Relationship]:
-        suffix = file_path.suffix.lower()
-        lang = EXTENSION_TO_LANGUAGE.get(suffix)
-        if lang is None:
-            return []
-
-        try:
-            source = file_path.read_bytes()
-        except (OSError, PermissionError):
-            return []
-
-        try:
-            parser = self._parser_for(lang)
-            tree = parser.parse(source)
-        except Exception as e:
-            print(f"  tree-sitter parse error {file_path}: {e}")
-            return []
-
-        try:
-            rel_path = str(file_path.relative_to(self.project_root))
-        except ValueError:
-            rel_path = str(file_path)
-
-        relationships: List[Relationship] = []
-        source_str = source.decode("utf-8", errors="replace")
-
-        relationships.extend(self._extract_imports(tree, rel_path, lang, source_str))
-        relationships.extend(self._extract_classes(tree, rel_path, lang))
-        relationships.extend(self._extract_calls(tree, rel_path, lang))
-
-        return relationships
-
-    def _node_text(self, node, source: str) -> str:
-        return source[node.start_byte : node.end_byte]
-
-    def _extract_imports(
-        self, tree, rel_path: str, lang: str, source: str
-    ) -> List[Relationship]:
-        query = self._query_for(lang, "imports")
-        if query is None:
-            return []
-
-        rels = []
-        seen: Set[str] = set()
-        for node, capture_name in query.captures(tree.root_node):
-            if capture_name in ("module", "name", "path"):
-                target = self._node_text(node, source).strip("\"'`")
-                if not target or target in seen:
-                    continue
-                seen.add(target)
-                rel_type = (
-                    "imports_from" if capture_name == "name" else "imports_module"
-                )
-                rels.append(
-                    Relationship(
-                        source=rel_path,
-                        target=target,
-                        relation_type=rel_type,
-                        metadata={"line": node.start_point[0] + 1, "lang": lang},
-                    )
-                )
-        return rels
-
-    def _extract_classes(self, tree, rel_path: str, lang: str) -> List[Relationship]:
-        query = self._query_for(lang, "classes")
-        if query is None:
-            return []
-
-        rels = []
-        captures = query.captures(tree.root_node)
-        # Group captures — class_name followed by optional base
-        current_class: Optional[str] = None
-        for node, capture_name in captures:
-            text = node.start_byte  # used for ordering only
-
-        # Re-iterate cleanly
-        class_names: Dict[int, str] = {}
-        for node, capture_name in query.captures(tree.root_node):
-            if capture_name in ("class_name", "struct_name", "type_name", "impl_type"):
-                class_names[node.start_byte] = node.start_point[0]
-
-        for node, capture_name in query.captures(tree.root_node):
-            if capture_name == "base":
-                # Find the most recent class definition before this node
-                earlier = {k: v for k, v in class_names.items() if k < node.start_byte}
-                if earlier:
-                    line = node.start_point[0] + 1
-                    parent = node.start_byte  # crude text extraction
-                    rels.append(
-                        Relationship(
-                            source=rel_path,
-                            target=node.type,  # placeholder; overridden below
-                            relation_type="inherits_from",
-                            metadata={"line": line, "lang": lang},
-                        )
-                    )
-                    # Fix target using raw source bytes — not available here.
-                    # We'll re-run with source in a cleaner pass.
-        return rels
-
-    def _extract_classes_with_source(
-        self, tree, rel_path: str, lang: str, source: str
-    ) -> List[Relationship]:
-        """Cleaner class extraction that has access to source text."""
-        query = self._query_for(lang, "classes")
-        if query is None:
-            return []
-
-        rels = []
-        last_class_name: Optional[str] = None
-        last_class_byte: int = -1
-
-        for node, capture_name in query.captures(tree.root_node):
-            raw = self._node_text(node, source)
-            if capture_name in ("class_name", "struct_name", "type_name", "impl_type"):
-                last_class_name = raw
-                last_class_byte = node.start_byte
-                self.entities[f"{rel_path}::{raw}"] = CodeEntity(
-                    name=raw,
-                    entity_type="class",
-                    file_path=rel_path,
-                    line_number=node.start_point[0] + 1,
-                    metadata={"lang": lang},
-                )
-            elif capture_name in ("base", "trait_name") and last_class_name:
-                rels.append(
-                    Relationship(
-                        source=rel_path,
-                        target=raw,
-                        relation_type="inherits_from",
-                        metadata={
-                            "line": node.start_point[0] + 1,
-                            "class": last_class_name,
-                            "lang": lang,
-                        },
-                    )
-                )
-        return rels
-
-    def _extract_calls(self, tree, rel_path: str, lang: str) -> List[Relationship]:
-        query = self._query_for(lang, "calls")
-        if query is None:
-            return []
-
-        rels = []
-        seen: Set[tuple] = set()
-        # We need source to get text — skip if not available (called from extract_from_file)
-        # This is a placeholder; real extraction happens inside extract_from_file
-        return rels
-
-    def extract_from_file(self, file_path: Path) -> List[Relationship]:  # noqa: F811
-        """Full extraction with source access for all relationship types."""
-        suffix = file_path.suffix.lower()
-        lang = EXTENSION_TO_LANGUAGE.get(suffix)
-        if lang is None:
+        lang = EXTENSION_TO_LANGUAGE.get(file_path.suffix.lower())
+        if lang not in self.SUPPORTED:
             return []
 
         try:
             source_bytes = file_path.read_bytes()
-            source = source_bytes.decode("utf-8", errors="replace")
-        except (OSError, PermissionError):
+        except (OSError, PermissionError) as exc:
+            print(f"  [WARN] cannot read {file_path}: {exc}")
             return []
 
         try:
             parser = self._parser_for(lang)
             tree = parser.parse(source_bytes)
-        except Exception as e:
-            print(f"  tree-sitter parse error {file_path}: {e}")
+        except Exception as exc:
+            print(f"  [WARN] tree-sitter parse failed {file_path}: {exc}")
             return []
 
-        try:
-            rel_path = str(file_path.relative_to(self.project_root))
-        except ValueError:
-            rel_path = str(file_path)
-
-        relationships: List[Relationship] = []
-
-        import re
-
-        _VALID_IDENTIFIER = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
-        _PYTHON_KEYWORDS = {
-            "True",
-            "False",
-            "None",
-            "def",
-            "class",
-            "if",
-            "else",
-            "elif",
-            "for",
-            "while",
-            "return",
-            "import",
-            "from",
-            "as",
-            "try",
-            "except",
-            "finally",
-            "with",
-            "pass",
-            "break",
-            "continue",
-            "raise",
-            "yield",
-            "lambda",
-            "and",
-            "or",
-            "not",
-            "in",
-            "is",
-            "global",
-            "nonlocal",
-            "assert",
-            "del",
-            "async",
-            "await",
+        rel_path = self._rel(file_path)
+        dispatch = {
+            "typescript": self._extract_ts_js,
+            "javascript": self._extract_ts_js,
+            "rust": self._extract_rust,
+            "go": self._extract_go,
         }
+        extractor_fn = dispatch.get(lang)
+        if extractor_fn is None:
+            return []
 
-        def _clean_identifier(text: str) -> Optional[str]:
-            if not text:
-                return None
-            text = text.strip().strip("\"'`")
-            if not text or len(text) < 2:
-                return None
-            if "\n" in text or "\r" in text or "\t" in text:
-                return None
-            if any(
-                c in text
-                for c in [
-                    "(",
-                    ")",
-                    ":",
-                    "[",
-                    "]",
-                    "{",
-                    "}",
-                    ",",
-                    "#",
-                    "<",
-                    ">",
-                    "=",
-                    "!",
-                    "+",
-                    "-",
-                    "*",
-                    "/",
-                    "%",
-                    "&",
-                    "|",
-                    "^",
-                    "~",
-                    "@",
-                    "$",
-                    "?",
-                    ".",
-                    " ",
-                    '"',
-                    "'",
-                ]
-            ):
-                return None
-            if not _VALID_IDENTIFIER.match(text):
-                return None
-            if text in _PYTHON_KEYWORDS:
-                return None
-            return text
-
-        # Imports
-        q = self._query_for(lang, "imports")
-        if q:
-            seen_imports: Set[str] = set()
-            for node, capture_name in q.captures(tree.root_node):
-                if capture_name.startswith("_"):
-                    continue
-                raw = source[node.start_byte : node.end_byte]
-                target = _clean_identifier(raw)
-                if not target or target in seen_imports:
-                    continue
-                seen_imports.add(target)
-                rel_type = (
-                    "imports_from" if capture_name == "name" else "imports_module"
-                )
-                relationships.append(
-                    Relationship(
-                        source=rel_path,
-                        target=target,
-                        relation_type=rel_type,
-                        metadata={"line": node.start_point[0] + 1, "lang": lang},
-                    )
-                )
-
-        # Classes / structs / impls
-        relationships.extend(
-            self._extract_classes_with_source(tree, rel_path, lang, source)
-        )
-
-        # Calls (deduplicated — only unique function names per file)
-        q = self._query_for(lang, "calls")
-        if q:
-            seen_calls: Set[str] = set()
-            for node, capture_name in q.captures(tree.root_node):
-                if capture_name.startswith("_"):
-                    continue
-                raw = source[node.start_byte : node.end_byte]
-                func = _clean_identifier(raw)
-                if not func or func in seen_calls or len(func) > 64:
-                    continue
-                seen_calls.add(func)
-                relationships.append(
-                    Relationship(
-                        source=rel_path,
-                        target=func,
-                        relation_type="calls",
-                        metadata={"line": node.start_point[0] + 1, "lang": lang},
-                    )
-                )
-
-        return relationships
+        rels = extractor_fn(tree.root_node, source_bytes, rel_path, lang)
+        return rels
 
     def extract_from_directory(self, directory: Path) -> List[Relationship]:
-        all_rels: List[Relationship] = []
-        for path in directory.rglob("*"):
-            if path.is_dir():
-                if path.name in EXCLUDE_DIRS:
-                    continue
+        found: List[Relationship] = []
+        supported_exts = {
+            ext for ext, lang in EXTENSION_TO_LANGUAGE.items() if lang in self.SUPPORTED
+        }
+        for path in sorted(directory.rglob("*")):
             if not path.is_file():
                 continue
-            if path.suffix.lower() not in EXTENSION_TO_LANGUAGE:
+            if path.suffix.lower() not in supported_exts:
                 continue
-            # Skip excluded dirs in path
-            if any(part in EXCLUDE_DIRS for part in path.parts):
+            if _should_exclude(path):
                 continue
-            print(
-                f"  [{path.suffix[1:].upper()}] {path.relative_to(self.project_root)}"
-            )
+            try:
+                rel = path.relative_to(self.project_root)
+            except ValueError:
+                rel = path
+            lang = EXTENSION_TO_LANGUAGE[path.suffix.lower()]
+            print(f"  [{lang.upper()[:2]}] {rel}")
             rels = self.extract_from_file(path)
-            all_rels.extend(rels)
+            self.relationships.extend(rels)
+            found.extend(rels)
+        return found
 
-        self.relationships.extend(all_rels)
-        return all_rels
-
-    def save_to_file(self, output_path: Path):
+    def save_to_file(self, output_path: Path) -> None:
         data = {
             "relationships": [r.to_dict() for r in self.relationships],
             "entities": {k: asdict(v) for k, v in self.entities.items()},
         }
         with open(output_path, "w") as f:
             json.dump(data, f, indent=2)
-        print(f"\n✅ Saved {len(self.relationships)} relationships to {output_path}")
+        print(f"\n✅ Saved {len(self.relationships)} relationships → {output_path}")
 
     def get_stats(self) -> Dict:
-        type_counts = defaultdict(int)
-        lang_counts = defaultdict(int)
-        for rel in self.relationships:
-            type_counts[rel.relation_type] += 1
-            lang_counts[rel.metadata.get("lang", "unknown")] += 1
+        type_counts: Dict[str, int] = defaultdict(int)
+        lang_counts: Dict[str, int] = defaultdict(int)
+        for r in self.relationships:
+            type_counts[r.relation_type] += 1
+            lang_counts[r.metadata.get("lang", "unknown")] += 1
+        return {
+            "total_relationships": len(self.relationships),
+            "total_entities": len(self.entities),
+            "by_type": dict(type_counts),
+            "by_language": dict(lang_counts),
+        }
+
+    # ------------------------------------------------------------------
+    # Private: parser cache
+    # ------------------------------------------------------------------
+
+    def _parser_for(self, lang: str):
+        if lang not in self._parser_cache:
+            self._parser_cache[lang] = self._get_parser(lang)
+        return self._parser_cache[lang]
+
+    def _rel(self, path: Path) -> str:
+        try:
+            return str(path.relative_to(self.project_root))
+        except ValueError:
+            return str(path)
+
+    # ------------------------------------------------------------------
+    # TypeScript / JavaScript extraction
+    # ------------------------------------------------------------------
+
+    def _extract_ts_js(
+        self, root, source: bytes, rel_path: str, lang: str
+    ) -> List[Relationship]:
+        rels: List[Relationship] = []
+        seen_imports: Set[str] = set()
+        seen_calls: Set[str] = set()
+
+        for node in _walk_ts_tree(root):
+            ntype = node.type
+
+            # ── Imports ────────────────────────────────────────────────
+            if ntype in ("import_statement", "import_declaration"):
+                # Find the string source: "from './foo'" or "import './bar'"
+                for child in _walk_ts_tree(node):
+                    if child.type == "string":
+                        raw = _strip_quotes(_ts_node_text(child, source))
+                        if raw and raw not in seen_imports:
+                            seen_imports.add(raw)
+                            rels.append(
+                                Relationship(
+                                    source=rel_path,
+                                    target=raw,
+                                    relation_type="imports_module",
+                                    metadata={
+                                        "line": node.start_point[0] + 1,
+                                        "lang": lang,
+                                    },
+                                )
+                            )
+                        break  # one string per import statement
+
+            # ── Class declarations ──────────────────────────────────────
+            elif ntype in (
+                "class_declaration",
+                "abstract_class_declaration",
+                "class_expression",
+            ):
+                class_name = None
+                bases: List[str] = []
+
+                for child in node.children:
+                    if child.type in ("identifier", "type_identifier"):
+                        if class_name is None:
+                            class_name = _ts_node_text(child, source)
+                    elif child.type == "class_heritage":
+                        # Grab what comes after `extends`
+                        past_extends = False
+                        for hchild in child.children:
+                            if hchild.type == "extends":
+                                past_extends = True
+                                continue
+                            if past_extends and hchild.type in (
+                                "identifier",
+                                "type_identifier",
+                                "member_expression",
+                            ):
+                                base = _ts_node_text(hchild, source).split("<")[
+                                    0
+                                ]  # strip generics
+                                if _is_valid_identifier(base.split(".")[-1], lang):
+                                    bases.append(base)
+
+                if class_name:
+                    self.entities[f"{rel_path}::{class_name}"] = CodeEntity(
+                        name=class_name,
+                        entity_type="class",
+                        file_path=rel_path,
+                        line_number=node.start_point[0] + 1,
+                        metadata={"lang": lang},
+                    )
+                    for base in bases:
+                        rels.append(
+                            Relationship(
+                                source=rel_path,
+                                target=base,
+                                relation_type="inherits_from",
+                                metadata={
+                                    "line": node.start_point[0] + 1,
+                                    "class": class_name,
+                                    "lang": lang,
+                                },
+                            )
+                        )
+
+            # ── Call expressions ────────────────────────────────────────
+            elif ntype == "call_expression":
+                func_node = node.child_by_field_name("function")
+                if func_node is None:
+                    continue
+                if func_node.type == "identifier":
+                    name = _ts_node_text(func_node, source)
+                elif func_node.type in ("member_expression", "subscript_expression"):
+                    # grab the final property name: foo.bar() → bar
+                    for prop in reversed(list(_walk_ts_tree(func_node))):
+                        if prop.type in ("property_identifier", "identifier"):
+                            name = _ts_node_text(prop, source)
+                            break
+                    else:
+                        continue
+                else:
+                    continue
+
+                if name not in seen_calls and _is_valid_identifier(name, lang):
+                    seen_calls.add(name)
+                    rels.append(
+                        Relationship(
+                            source=rel_path,
+                            target=name,
+                            relation_type="calls",
+                            metadata={"line": node.start_point[0] + 1, "lang": lang},
+                        )
+                    )
+
+        return rels
+
+    # ------------------------------------------------------------------
+    # Rust extraction
+    # ------------------------------------------------------------------
+
+    def _extract_rust(
+        self, root, source: bytes, rel_path: str, lang: str
+    ) -> List[Relationship]:
+        rels: List[Relationship] = []
+        seen_uses: Set[str] = set()
+        seen_calls: Set[str] = set()
+
+        for node in _walk_ts_tree(root):
+            ntype = node.type
+
+            # ── use declarations ────────────────────────────────────────
+            if ntype == "use_declaration":
+                # Walk children to collect scoped_identifier / identifier text
+                for child in _walk_ts_tree(node):
+                    if child.type in (
+                        "scoped_identifier",
+                        "identifier",
+                        "scoped_use_list",
+                    ):
+                        text = _ts_node_text(child, source).strip("{}")
+                        # Take just the first segment as the crate/module name
+                        top = text.split("::")[0].strip()
+                        if (
+                            top
+                            and top not in seen_uses
+                            and _is_valid_identifier(top, lang)
+                        ):
+                            seen_uses.add(top)
+                            rels.append(
+                                Relationship(
+                                    source=rel_path,
+                                    target=text,
+                                    relation_type="imports_module",
+                                    metadata={
+                                        "line": node.start_point[0] + 1,
+                                        "lang": lang,
+                                    },
+                                )
+                            )
+                        break
+
+            # ── struct / enum / trait definitions ───────────────────────
+            elif ntype in ("struct_item", "enum_item", "trait_item"):
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = _ts_node_text(name_node, source)
+                    etype = ntype.replace("_item", "")
+                    self.entities[f"{rel_path}::{name}"] = CodeEntity(
+                        name=name,
+                        entity_type=etype,
+                        file_path=rel_path,
+                        line_number=node.start_point[0] + 1,
+                        metadata={"lang": lang},
+                    )
+
+            # ── impl blocks — track what trait is being implemented ─────
+            elif ntype == "impl_item":
+                type_node = node.child_by_field_name("type")
+                trait_node = node.child_by_field_name("trait")
+                if type_node and trait_node:
+                    impl_type = _ts_node_text(type_node, source)
+                    trait_name = _ts_node_text(trait_node, source)
+                    if _is_valid_identifier(trait_name.split("<")[0], lang):
+                        rels.append(
+                            Relationship(
+                                source=rel_path,
+                                target=trait_name,
+                                relation_type="inherits_from",
+                                metadata={
+                                    "line": node.start_point[0] + 1,
+                                    "impl_type": impl_type,
+                                    "lang": lang,
+                                },
+                            )
+                        )
+
+            # ── call expressions ────────────────────────────────────────
+            elif ntype == "call_expression":
+                func_node = node.child_by_field_name("function")
+                if func_node is None:
+                    continue
+                # Rust calls: identifier, field_expression, scoped_identifier
+                if func_node.type == "identifier":
+                    name = _ts_node_text(func_node, source)
+                elif func_node.type == "scoped_identifier":
+                    name = _ts_node_text(func_node, source).split("::")[-1]
+                elif func_node.type == "field_expression":
+                    field = func_node.child_by_field_name("field")
+                    name = _ts_node_text(field, source) if field else ""
+                else:
+                    continue
+
+                if name and name not in seen_calls and _is_valid_identifier(name, lang):
+                    seen_calls.add(name)
+                    rels.append(
+                        Relationship(
+                            source=rel_path,
+                            target=name,
+                            relation_type="calls",
+                            metadata={"line": node.start_point[0] + 1, "lang": lang},
+                        )
+                    )
+
+        return rels
+
+    # ------------------------------------------------------------------
+    # Go extraction
+    # ------------------------------------------------------------------
+
+    def _extract_go(
+        self, root, source: bytes, rel_path: str, lang: str
+    ) -> List[Relationship]:
+        rels: List[Relationship] = []
+        seen_imports: Set[str] = set()
+        seen_calls: Set[str] = set()
+
+        for node in _walk_ts_tree(root):
+            ntype = node.type
+
+            # ── import paths ────────────────────────────────────────────
+            if ntype == "import_spec":
+                for child in node.children:
+                    if child.type == "interpreted_string_literal":
+                        raw = _strip_quotes(_ts_node_text(child, source))
+                        # Keep the final path segment as the short name
+                        short = raw.split("/")[-1]
+                        if short and short not in seen_imports:
+                            seen_imports.add(short)
+                            rels.append(
+                                Relationship(
+                                    source=rel_path,
+                                    target=raw,
+                                    relation_type="imports_module",
+                                    metadata={
+                                        "line": node.start_point[0] + 1,
+                                        "lang": lang,
+                                    },
+                                )
+                            )
+
+            # ── type declarations (struct / interface) ──────────────────
+            elif ntype == "type_spec":
+                name_node = node.child_by_field_name("name")
+                type_node = node.child_by_field_name("type")
+                if name_node:
+                    name = _ts_node_text(name_node, source)
+                    etype = "struct"
+                    if type_node and type_node.type == "interface_type":
+                        etype = "interface"
+                    self.entities[f"{rel_path}::{name}"] = CodeEntity(
+                        name=name,
+                        entity_type=etype,
+                        file_path=rel_path,
+                        line_number=node.start_point[0] + 1,
+                        metadata={"lang": lang},
+                    )
+
+            # ── call expressions ────────────────────────────────────────
+            elif ntype == "call_expression":
+                func_node = node.child_by_field_name("function")
+                if func_node is None:
+                    continue
+                if func_node.type == "identifier":
+                    name = _ts_node_text(func_node, source)
+                elif func_node.type == "selector_expression":
+                    field = func_node.child_by_field_name("field")
+                    name = _ts_node_text(field, source) if field else ""
+                else:
+                    continue
+
+                if name and name not in seen_calls and _is_valid_identifier(name, lang):
+                    seen_calls.add(name)
+                    rels.append(
+                        Relationship(
+                            source=rel_path,
+                            target=name,
+                            relation_type="calls",
+                            metadata={"line": node.start_point[0] + 1, "lang": lang},
+                        )
+                    )
+
+        return rels
+
+
+# ---------------------------------------------------------------------------
+# Combined extractor — Python via AST, everything else via tree-sitter
+# ---------------------------------------------------------------------------
+
+
+class CombinedExtractor:
+    """Routes .py to PythonASTExtractor, other languages to TreeSitterExtractor."""
+
+    def __init__(self, project_root: Path):
+        self.project_root = Path(project_root)
+        self._py = PythonASTExtractor(project_root)
+        self._ts = TreeSitterExtractor(project_root)
+
+    @property
+    def relationships(self) -> List[Relationship]:
+        return self._py.relationships + self._ts.relationships
+
+    @property
+    def entities(self) -> Dict[str, CodeEntity]:
+        return {**self._py.entities, **self._ts.entities}
+
+    def extract_from_file(self, file_path: Path) -> List[Relationship]:
+        if file_path.suffix.lower() == ".py":
+            return self._py.extract_from_file(file_path)
+        return self._ts.extract_from_file(file_path)
+
+    def extract_from_directory(self, directory: Path) -> List[Relationship]:
+        """Walk directory, routing each file to the right extractor."""
+        found: List[Relationship] = []
+        supported_exts = set(EXTENSION_TO_LANGUAGE.keys())
+
+        for path in sorted(directory.rglob("*")):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in supported_exts:
+                continue
+            if _should_exclude(path):
+                continue
+            try:
+                rel = path.relative_to(self.project_root)
+            except ValueError:
+                rel = path
+            lang = EXTENSION_TO_LANGUAGE[path.suffix.lower()]
+            tag = "PY " if lang == "python" else lang.upper()[:3]
+            print(f"  [{tag}] {rel}")
+            rels = self.extract_from_file(path)
+            found.extend(rels)
+        return found
+
+    def save_to_file(self, output_path: Path) -> None:
+        data = {
+            "relationships": [r.to_dict() for r in self.relationships],
+            "entities": {k: asdict(v) for k, v in self.entities.items()},
+        }
+        with open(output_path, "w") as f:
+            json.dump(data, f, indent=2)
+        print(f"\n✅ Saved {len(self.relationships)} relationships → {output_path}")
+
+    def get_stats(self) -> Dict:
+        type_counts: Dict[str, int] = defaultdict(int)
+        lang_counts: Dict[str, int] = defaultdict(int)
+        for r in self.relationships:
+            type_counts[r.relation_type] += 1
+            lang_counts[r.metadata.get("lang", "python")] += 1
         return {
             "total_relationships": len(self.relationships),
             "total_entities": len(self.entities),
@@ -600,217 +1025,23 @@ class TreeSitterExtractor:
 
 
 # ---------------------------------------------------------------------------
-# Python-only AST extractor (original implementation, kept as fallback)
+# Factory
 # ---------------------------------------------------------------------------
 
 
-class ASTRelationshipExtractor:
-    """Extract relationships from Python code using AST parsing (Python only)."""
-
-    def __init__(self, project_root: Path):
-        self.project_root = Path(project_root)
-        self.relationships: List[Relationship] = []
-        self.entities: Dict[str, CodeEntity] = {}
-
-    def extract_from_file(self, file_path: Path) -> List[Relationship]:
-        if file_path.suffix.lower() != ".py":
-            return []
-        relationships = []
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                source = f.read()
-            tree = ast.parse(source)
-            relative_path = file_path.relative_to(self.project_root)
-            relationships.extend(self._extract_imports(tree, relative_path))
-            relationships.extend(self._extract_inheritance(tree, relative_path))
-            relationships.extend(self._extract_function_calls(tree, relative_path))
-            relationships.extend(self._extract_class_methods(tree, relative_path))
-        except SyntaxError as e:
-            print(f"  Syntax error in {file_path}: {e}")
-        except Exception as e:
-            print(f"  Error processing {file_path}: {e}")
-        return relationships
-
-    def _extract_imports(self, tree, file_path) -> List[Relationship]:
-        rels = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    rels.append(
-                        Relationship(
-                            source=str(file_path),
-                            target=alias.name,
-                            relation_type="imports_module",
-                            metadata={
-                                "line": node.lineno,
-                                "asname": alias.asname,
-                                "import_type": "import",
-                            },
-                        )
-                    )
-            elif isinstance(node, ast.ImportFrom):
-                module = node.module or ""
-                for alias in node.names:
-                    target = f"{module}.{alias.name}" if module else alias.name
-                    rels.append(
-                        Relationship(
-                            source=str(file_path),
-                            target=target,
-                            relation_type="imports_from",
-                            metadata={
-                                "line": node.lineno,
-                                "module": module,
-                                "name": alias.name,
-                                "asname": alias.asname,
-                                "import_type": "from_import",
-                            },
-                        )
-                    )
-        return rels
-
-    def _extract_inheritance(self, tree, file_path) -> List[Relationship]:
-        rels = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ClassDef):
-                for base in node.bases:
-                    if isinstance(base, ast.Name):
-                        rels.append(
-                            Relationship(
-                                source=str(file_path),
-                                target=base.id,
-                                relation_type="inherits_from",
-                                metadata={
-                                    "line": node.lineno,
-                                    "class": node.name,
-                                    "parent": base.id,
-                                },
-                            )
-                        )
-                    elif isinstance(base, ast.Attribute):
-                        chain = self._get_attribute_chain(base)
-                        rels.append(
-                            Relationship(
-                                source=str(file_path),
-                                target=chain,
-                                relation_type="inherits_from",
-                                metadata={
-                                    "line": node.lineno,
-                                    "class": node.name,
-                                    "parent": chain,
-                                },
-                            )
-                        )
-                self.entities[f"{file_path}::{node.name}"] = CodeEntity(
-                    name=node.name,
-                    entity_type="class",
-                    file_path=str(file_path),
-                    line_number=node.lineno,
-                    metadata={"bases": [self._get_base_name(b) for b in node.bases]},
-                )
-        return rels
-
-    def _extract_function_calls(self, tree, file_path) -> List[Relationship]:
-        rels = []
-        call_targets: Set[tuple] = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                func_name = self._get_call_name(node.func)
-                if func_name:
-                    call_targets.add((func_name, node.lineno))
-        for target, line in call_targets:
-            rels.append(
-                Relationship(
-                    source=str(file_path),
-                    target=target,
-                    relation_type="calls",
-                    metadata={"line": line, "call_type": "function_call"},
-                )
-            )
-        return rels
-
-    def _extract_class_methods(self, tree, file_path) -> List[Relationship]:
-        rels = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ClassDef):
-                for item in node.body:
-                    if isinstance(item, ast.FunctionDef):
-                        rels.append(
-                            Relationship(
-                                source=f"{file_path}::{node.name}",
-                                target=f"{file_path}::{node.name}.{item.name}",
-                                relation_type="has_method",
-                                metadata={
-                                    "line": item.lineno,
-                                    "class": node.name,
-                                    "method": item.name,
-                                },
-                            )
-                        )
-                        self.entities[f"{file_path}::{node.name}.{item.name}"] = (
-                            CodeEntity(
-                                name=item.name,
-                                entity_type="method",
-                                file_path=str(file_path),
-                                line_number=item.lineno,
-                                metadata={
-                                    "class": node.name,
-                                    "args": [arg.arg for arg in item.args.args],
-                                },
-                            )
-                        )
-        return rels
-
-    def _get_call_name(self, node) -> Optional[str]:
-        if isinstance(node, ast.Name):
-            return node.id
-        elif isinstance(node, ast.Attribute):
-            return self._get_attribute_chain(node)
-        return None
-
-    def _get_attribute_chain(self, node) -> str:
-        if isinstance(node, ast.Name):
-            return node.id
-        elif isinstance(node, ast.Attribute):
-            return f"{self._get_attribute_chain(node.value)}.{node.attr}"
-        return ""
-
-    def _get_base_name(self, node) -> str:
-        if isinstance(node, ast.Name):
-            return node.id
-        elif isinstance(node, ast.Attribute):
-            return self._get_attribute_chain(node)
-        return ""
-
-    def extract_from_directory(self, directory: Path) -> List[Relationship]:
-        all_rels = []
-        for py_file in directory.rglob("*.py"):
-            if any(part in EXCLUDE_DIRS for part in py_file.parts):
-                continue
-            print(f"  [PY ] {py_file.relative_to(self.project_root)}")
-            rels = self.extract_from_file(py_file)
-            all_rels.extend(rels)
-        self.relationships.extend(all_rels)
-        return all_rels
-
-    def save_to_file(self, output_path: Path):
-        data = {
-            "relationships": [r.to_dict() for r in self.relationships],
-            "entities": {k: asdict(v) for k, v in self.entities.items()},
-        }
-        with open(output_path, "w") as f:
-            json.dump(data, f, indent=2)
-        print(f"\n✅ Saved {len(self.relationships)} relationships to {output_path}")
-
-    def get_stats(self) -> Dict:
-        type_counts = defaultdict(int)
-        for rel in self.relationships:
-            type_counts[rel.relation_type] += 1
-        return {
-            "total_relationships": len(self.relationships),
-            "total_entities": len(self.entities),
-            "by_type": dict(type_counts),
-            "by_language": {"python": len(self.relationships)},
-        }
+def _make_extractor(
+    project_root: Path,
+) -> "CombinedExtractor | PythonASTExtractor":
+    get_parser, _ = _try_import_treesitter()
+    if get_parser is not None:
+        print("🌍  Multi-language extraction (Python AST + tree-sitter)")
+        return CombinedExtractor(project_root)
+    else:
+        print(
+            "🐍  Python-only extraction via ast\n"
+            "    Install tree-sitter-languages for TS/JS/Rust/Go support."
+        )
+        return PythonASTExtractor(project_root)
 
 
 # ---------------------------------------------------------------------------
@@ -818,61 +1049,68 @@ class ASTRelationshipExtractor:
 # ---------------------------------------------------------------------------
 
 
-def _make_extractor(project_root: Path):
-    """Return a TreeSitterExtractor if available, otherwise ASTRelationshipExtractor."""
-    get_parser, _ = _try_import_treesitter()
-    if get_parser is not None:
-        print("🌍 Multi-language extraction via tree-sitter")
-        return TreeSitterExtractor(project_root)
-    else:
-        print(
-            "🐍 Python-only extraction via ast (install tree-sitter-languages for multi-language)"
-        )
-        return ASTRelationshipExtractor(project_root)
-
-
 def extract_code_relationships(
     project_root: Path,
     output_dir: Optional[Path] = None,
     code_dirs: Optional[List[str]] = None,
     from_index: bool = False,
-) -> "ASTRelationshipExtractor | TreeSitterExtractor":
-    """Extract code relationships from a project.
-
-    Args:
-        project_root:  Root directory of the project.
-        output_dir:    Where to save code_relationships.json
-                       (default: PROJECT/.knowledge).
-        code_dirs:     Directory names to scan (default: ["src"]).
-        from_index:    Use files from the index manifest instead of
-                       scanning directories.
+) -> "CombinedExtractor | PythonASTExtractor":
     """
-    print(f"🔍 Extracting code relationships from {project_root}")
-    print()
+    Extract code relationships from *project_root*.
+
+    Parameters
+    ----------
+    project_root : Path
+        Root of the project to analyse.
+    output_dir : Path, optional
+        Where to write code_relationships.json.
+        Defaults to ``project_root/.knowledge``.
+    code_dirs : list of str, optional
+        Sub-directory names to scan (default: ``["src"]``).
+        Ignored when *from_index* is True.
+    from_index : bool
+        If True, read the list of files from the Mimir manifest instead of
+        scanning directories. Useful to stay in sync with what was indexed.
+
+    Returns
+    -------
+    The extractor instance — inspect `.relationships` and `.entities`
+    or call `.get_stats()` for a summary.
+    """
+    print(f"🔍  Extracting code relationships from {project_root}\n")
 
     extractor = _make_extractor(project_root)
 
     if from_index:
         indexed_files = load_indexed_files(project_root)
-        supported_extensions = set(EXTENSION_TO_LANGUAGE.keys())
-        indexed_files = [
-            f for f in indexed_files if f.suffix.lower() in supported_extensions
-        ]
-        if indexed_files:
-            print(f"📚 Using {len(indexed_files)} indexed source files from manifest")
-            for file_path in indexed_files:
-                if file_path.exists():
-                    try:
-                        rel = file_path.relative_to(project_root)
-                    except ValueError:
-                        rel = file_path
-                    print(f"  {rel}")
-                    rels = extractor.extract_from_file(file_path)
-                    extractor.relationships.extend(rels)
-        else:
+        supported = set(EXTENSION_TO_LANGUAGE.keys())
+        indexed_files = [f for f in indexed_files if f.suffix.lower() in supported]
+        if not indexed_files:
             print(
-                "⚠️  No indexed source files found in manifest. Run mimir-index.py first."
+                "⚠️   No indexed source files found in manifest. Run mimir-index.py first."
             )
+        else:
+            print(f"📚  Using {len(indexed_files)} files from manifest\n")
+            for fp in indexed_files:
+                if fp.exists():
+                    try:
+                        rel = fp.relative_to(project_root)
+                    except ValueError:
+                        rel = fp
+                    lang = EXTENSION_TO_LANGUAGE.get(fp.suffix.lower(), "?")
+                    tag = "PY " if lang == "python" else lang.upper()[:3]
+                    print(f"  [{tag}] {rel}")
+                    rels = extractor.extract_from_file(fp)
+                    # For non-combined extractor, we need to extend relationships manually
+                    if isinstance(extractor, PythonASTExtractor):
+                        extractor.relationships.extend(rels)
+                    elif isinstance(extractor, CombinedExtractor):
+                        # CombinedExtractor routes to internal extractors, but we need to
+                        # ensure relationships are stored based on file type
+                        if fp.suffix.lower() == ".py":
+                            extractor._py.relationships.extend(rels)
+                        else:
+                            extractor._ts.relationships.extend(rels)
     else:
         if code_dirs is None:
             code_dirs = ["src"]
@@ -880,36 +1118,53 @@ def extract_code_relationships(
         for dir_name in code_dirs:
             dir_path = project_root / dir_name
             if dir_path.exists():
-                print(f"📁 Scanning {dir_name}/...")
+                print(f"📁  Scanning {dir_name}/…")
                 extractor.extract_from_directory(dir_path)
             else:
-                print(f"⚠️  Directory not found: {dir_path}")
+                print(f"⚠️   Directory not found: {dir_path}")
 
-        print("📁 Scanning root-level source files...")
-        for path in project_root.iterdir():
-            if path.is_file() and path.suffix.lower() in EXTENSION_TO_LANGUAGE:
-                print(f"  {path.name}")
+        # Also scan root-level source files
+        print("\n📁  Scanning project root source files…")
+        supported_exts = set(EXTENSION_TO_LANGUAGE.keys())
+        for path in sorted(project_root.iterdir()):
+            if path.is_file() and path.suffix.lower() in supported_exts:
+                lang = EXTENSION_TO_LANGUAGE[path.suffix.lower()]
+                tag = "PY " if lang == "python" else lang.upper()[:3]
+                print(f"  [{tag}] {path.name}")
                 rels = extractor.extract_from_file(path)
-                extractor.relationships.extend(rels)
+                if isinstance(extractor, PythonASTExtractor):
+                    extractor.relationships.extend(rels)
+                elif isinstance(extractor, CombinedExtractor):
+                    # CombinedExtractor routes to internal extractors, but we need to
+                    # ensure relationships are stored based on file type
+                    if path.suffix.lower() == ".py":
+                        extractor._py.relationships.extend(rels)
+                    else:
+                        extractor._ts.relationships.extend(rels)
 
+    # Save
     if output_dir is None:
         output_dir = project_root / ".knowledge"
     output_dir.mkdir(exist_ok=True)
     extractor.save_to_file(output_dir / "code_relationships.json")
 
     stats = extractor.get_stats()
-    print(f"\n📊 Statistics:")
-    print(f"  Total relationships: {stats['total_relationships']}")
-    print(f"  Total entities:      {stats['total_entities']}")
-    print(f"  By type:")
-    for rel_type, count in stats["by_type"].items():
-        print(f"    - {rel_type}: {count}")
-    if stats.get("by_language"):
-        print(f"  By language:")
-        for lang, count in stats["by_language"].items():
-            print(f"    - {lang}: {count}")
+    print(f"\n📊  Statistics:")
+    print(f"    Total relationships : {stats['total_relationships']}")
+    print(f"    Total entities      : {stats['total_entities']}")
+    print(f"    By relationship type:")
+    for rel_type, count in sorted(stats["by_type"].items()):
+        print(f"      {rel_type:<20} {count}")
+    print(f"    By language:")
+    for lang, count in sorted(stats["by_language"].items()):
+        print(f"      {lang:<20} {count}")
 
     return extractor
+
+
+# ---------------------------------------------------------------------------
+# Supporting helpers (used by extract_code_relationships and mimir-index.py)
+# ---------------------------------------------------------------------------
 
 
 def load_project_config(project_root: Path) -> dict:
@@ -924,7 +1179,8 @@ def load_project_config(project_root: Path) -> dict:
 
 
 def load_indexed_files(
-    project_root: Path, knowledge_dir: Optional[Path] = None
+    project_root: Path,
+    knowledge_dir: Optional[Path] = None,
 ) -> List[Path]:
     if knowledge_dir is None:
         knowledge_dir = project_root / ".knowledge" / "llamaindex"
@@ -936,15 +1192,176 @@ def load_indexed_files(
             manifest = json.load(f)
     except (json.JSONDecodeError, IOError):
         return []
-    indexed_files = []
+
+    supported = set(EXTENSION_TO_LANGUAGE.keys())
+    files: List[Path] = []
     for _, info in manifest.get("indexed_directories", {}).items():
-        for file_path in info.get("files", []):
-            path = Path(file_path)
+        for file_path_str in info.get("files", []):
+            path = Path(file_path_str)
             if not path.is_absolute():
                 path = project_root / path
-            if path.suffix.lower() in EXTENSION_TO_LANGUAGE:
-                indexed_files.append(path)
-    return indexed_files
+            if path.suffix.lower() in supported:
+                files.append(path)
+    return files
+
+
+# ---------------------------------------------------------------------------
+# Incremental graph update
+# ---------------------------------------------------------------------------
+
+
+def incremental_graph_update(
+    project_root: Path,
+    changed_files: Dict[str, List[str]],
+    output_dir: Optional[Path] = None,
+) -> Tuple[int, int, int]:
+    """
+    Apply incremental changes to the existing knowledge graph without a full rebuild.
+
+    Parameters
+    ----------
+    project_root : Path
+        Root of the project.
+    changed_files : dict
+        Keys are change types: ``"added"``, ``"modified"``, ``"deleted"``.
+        Values are lists of file paths (relative or absolute).
+        Example::
+
+            {
+                "added":    ["src/new_module.py"],
+                "modified": ["src/existing.py"],
+                "deleted":  ["src/old_module.py"],
+            }
+
+    output_dir : Path, optional
+        Directory containing ``code_relationships.json``.
+        Defaults to ``project_root/.knowledge``.
+
+    Returns
+    -------
+    tuple of (added_count, removed_count, modified_count)
+        ``added_count``    – net new entities added
+        ``removed_count``  – entities removed (deleted + old versions of modified)
+        ``modified_count`` – relationships changed (re-extracted for modified files)
+    """
+    project_root = Path(project_root)
+    if output_dir is None:
+        output_dir = project_root / ".knowledge"
+    graph_path = output_dir / "code_relationships.json"
+
+    # ── Load existing graph ────────────────────────────────────────────────
+    existing_entities: Dict[str, dict] = {}
+    existing_relationships: List[dict] = []
+
+    if graph_path.exists():
+        try:
+            with open(graph_path) as f:
+                data = json.load(f)
+            existing_entities = data.get("entities", {})
+            existing_relationships = data.get("relationships", [])
+        except (json.JSONDecodeError, IOError) as exc:
+            print(f"  [WARN] Could not load existing graph: {exc}. Starting fresh.")
+
+    # ── Normalise file paths to relative strings ───────────────────────────
+    def _to_rel(fp: str) -> str:
+        p = Path(fp)
+        if p.is_absolute():
+            try:
+                return str(p.relative_to(project_root))
+            except ValueError:
+                return str(p)
+        return str(p)
+
+    deleted_files: Set[str] = {_to_rel(f) for f in changed_files.get("deleted", [])}
+    modified_files: Set[str] = {_to_rel(f) for f in changed_files.get("modified", [])}
+    added_files: List[str] = [_to_rel(f) for f in changed_files.get("added", [])]
+
+    # Files whose old data must be purged (deleted + modified old versions)
+    files_to_purge: Set[str] = deleted_files | modified_files
+
+    # ── Remove entities/relationships for purged files ─────────────────────
+    removed_entity_keys: Set[str] = {
+        key
+        for key, ent in existing_entities.items()
+        if ent.get("file_path") in files_to_purge
+    }
+    removed_count = len(removed_entity_keys)
+
+    surviving_entities: Dict[str, dict] = {
+        k: v for k, v in existing_entities.items() if k not in removed_entity_keys
+    }
+    surviving_relationships: List[dict] = [
+        r for r in existing_relationships if r.get("source") not in files_to_purge
+    ]
+
+    # ── Re-extract modified + added files ─────────────────────────────────
+    files_to_extract: List[str] = list(modified_files) + added_files
+    added_count = 0
+    modified_rel_count = 0
+
+    if files_to_extract:
+        extractor = _make_extractor(project_root)
+
+        for rel_path_str in files_to_extract:
+            abs_path = project_root / rel_path_str
+            if not abs_path.exists():
+                print(f"  [WARN] File not found, skipping: {abs_path}")
+                continue
+
+            lang = EXTENSION_TO_LANGUAGE.get(abs_path.suffix.lower())
+            if lang is None:
+                print(f"  [SKIP] Unsupported extension: {rel_path_str}")
+                continue
+
+            tag = "PY " if lang == "python" else lang.upper()[:3]
+            print(f"  [{tag}] {rel_path_str}")
+
+            new_rels = extractor.extract_from_file(abs_path)
+
+            # Collect new entities from the extractor (populated as side-effect)
+            new_entity_keys = {
+                k
+                for k, ent in extractor.entities.items()
+                if ent.file_path == rel_path_str
+            }
+            for key in new_entity_keys:
+                surviving_entities[key] = asdict(extractor.entities[key])
+                added_count += 1
+
+            # Merge new relationships
+            new_rel_dicts = [r.to_dict() for r in new_rels]
+            surviving_relationships.extend(new_rel_dicts)
+            modified_rel_count += len(new_rel_dicts)
+
+    # ── Build final graph data ─────────────────────────────────────────────
+    final_data = {
+        "relationships": surviving_relationships,
+        "entities": surviving_entities,
+    }
+
+    # ── Atomic write via temp file + rename ───────────────────────────────
+    output_dir.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        dir=str(output_dir), prefix=".code_relationships_", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(tmp_fd, "w") as f:
+            json.dump(final_data, f, indent=2)
+        os.rename(tmp_path, str(graph_path))
+    except Exception:
+        # Clean up temp file on failure
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+    print(
+        f"\n✅ Knowledge graph updated: "
+        f"+{added_count} entities, -{removed_count} entities, "
+        f"~{modified_rel_count} relationships changed"
+    )
+    return added_count, removed_count, modified_rel_count
 
 
 # ---------------------------------------------------------------------------
@@ -955,41 +1372,74 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Extract code relationships from a project (multi-language via tree-sitter)",
+        description=(
+            "Extract code relationships from a project.\n"
+            "Uses Python AST for .py and tree-sitter for TS/JS/Rust/Go.\n\n"
+            "  pip install tree-sitter-languages   # optional multi-lang support"
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Supported languages (requires tree-sitter-languages):
-  Python (.py), TypeScript (.ts/.tsx), JavaScript (.js/.jsx/.mjs),
-  Rust (.rs), Go (.go)
-
-Install multi-language support:
-  pip install tree-sitter-languages
-
-Examples:
-  python knowledge_graph.py
-  python knowledge_graph.py /path/to/project --dirs src,lib
-  python knowledge_graph.py /path/to/project --from-index
-        """,
     )
-    parser.add_argument("project", nargs="?", type=Path, default=Path.cwd())
-    parser.add_argument("--dirs", type=str, default=None)
-    parser.add_argument("--output", type=Path, default=None)
-    parser.add_argument("--from-index", action="store_true", dest="from_index")
+    parser.add_argument(
+        "project",
+        nargs="?",
+        type=Path,
+        default=Path.cwd(),
+        help="Project root directory (default: current directory)",
+    )
+    parser.add_argument(
+        "--dirs",
+        type=str,
+        default=None,
+        help="Comma-separated list of sub-directories to scan (default: src)",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Output directory for code_relationships.json",
+    )
+    parser.add_argument(
+        "--from-index",
+        action="store_true",
+        dest="from_index",
+        help="Use files listed in the Mimir index manifest",
+    )
+    parser.add_argument(
+        "--incremental",
+        type=str,
+        default=None,
+        metavar="JSON",
+        help=(
+            "JSON object of changed files, e.g. "
+            '\'{"added":["src/new.py"],"modified":["src/x.py"],"deleted":["src/old.py"]}\''
+        ),
+    )
     args = parser.parse_args()
 
     project_root = args.project.resolve()
-    if not project_root.exists() or not project_root.is_dir():
-        print(f"❌ Error: {project_root} is not a directory")
+    if not project_root.is_dir():
+        print(f"❌  Not a directory: {project_root}")
         raise SystemExit(1)
 
-    if args.from_index:
+    project_config = load_project_config(project_root)
+
+    if args.incremental is not None:
+        try:
+            changed_files = json.loads(args.incremental)
+        except json.JSONDecodeError as exc:
+            print(f"❌  Invalid JSON for --incremental: {exc}")
+            raise SystemExit(1)
+        if not isinstance(changed_files, dict):
+            print("❌  --incremental must be a JSON object")
+            raise SystemExit(1)
+        incremental_graph_update(project_root, changed_files, args.output)
+    elif args.from_index:
         extract_code_relationships(project_root, args.output, from_index=True)
     else:
-        project_config = load_project_config(project_root)
         if args.dirs:
             code_dirs = [d.strip() for d in args.dirs.split(",") if d.strip()]
         elif "code_dirs" in project_config:
             code_dirs = project_config["code_dirs"]
         else:
             code_dirs = ["src"]
-        extract_code_relationships(project_root, args.output, code_dirs)
+        extract_code_relationships(project_root, args.output, code_dirs=code_dirs)

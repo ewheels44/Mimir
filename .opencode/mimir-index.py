@@ -421,11 +421,18 @@ def main():
             sys.path.insert(0, str(MIMIR_DIR / "src"))
             from mimir.knowledge_graph import extract_code_relationships
 
-            extractor = extract_code_relationships(project_root)
+            # Use from_index=True to extract from indexed files, not directories
+            extractor = extract_code_relationships(project_root, from_index=True)
             stats = extractor.get_stats()
-            print(
-                f"   Extracted {stats['total_relationships']} relationships from {stats['total_entities']} entities"
-            )
+            if stats["total_relationships"] == 0:
+                print(
+                    "   ⚠️  No relationships found. Add code_dirs to .mimir/config.json"
+                )
+                print('      Example: {"code_dirs": ["src", "lib"]}')
+            else:
+                print(
+                    f"   Extracted {stats['total_relationships']} relationships from {stats['total_entities']} entities"
+                )
         except Exception as e:
             print(f"   ⚠️  Knowledge graph extraction failed: {e}")
             print("   Continuing without knowledge graph...")

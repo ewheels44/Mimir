@@ -104,7 +104,15 @@ if [ -n "$OPENROUTER_API_KEY" ] && [ -z "$OPENAI_BASE_URL" ]; then
     log "Set OPENAI_BASE_URL: $OPENAI_BASE_URL"
 fi
 
+# Find uv executable
+UV_PATH=$(which uv 2>/dev/null || echo "/opt/homebrew/bin/uv")
+if [ ! -x "$UV_PATH" ]; then
+    log "ERROR: uv not found. Install with: curl -LsSf https://astral.sh/uv/install.sh | sh"
+    exit 1
+fi
+log "Using uv: $UV_PATH"
+
 # Run the MCP server from SCRIPT_DIR
 cd "$SCRIPT_DIR"
 log "Starting MCP server with uv..."
-exec /opt/homebrew/bin/uv run --python '>=3.11' "$SCRIPT_DIR/mcp_server_llamaindex.py" "$@"
+exec "$UV_PATH" run --python '>=3.11' "$SCRIPT_DIR/mcp_server_llamaindex.py" "$@"

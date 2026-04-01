@@ -488,6 +488,22 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
     return mcp
 
 
+def find_available_port(start_port: int = 8001, max_attempts: int = 100) -> int:
+    """Find an available port starting from start_port."""
+    import socket
+
+    for port in range(start_port, start_port + max_attempts):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("", port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError(
+        f"Could not find available port in range {start_port}-{start_port + max_attempts}"
+    )
+
+
 class WatcherStatusHandler(BaseHTTPRequestHandler):
     _server_instance: Optional["KnowledgeServer"] = None
 
@@ -533,11 +549,40 @@ class WatcherStatusHandler(BaseHTTPRequestHandler):
         pass
 
 
-def start_watcher_server(port: int = 8001, server: Optional[KnowledgeServer] = None):
+def start_watcher_server(
+    port: Optional[int] = None, server: Optional[KnowledgeServer] = None
+) -> HTTPServer:
+    """Start the watcher status HTTP server.
+
+    Args:
+        port: Port to use (default: env WATCHER_PORT or 8001, auto-increments if busy)
+        server: KnowledgeServer instance for status queries
+
+    Returns:
+        Running HTTPServer instance
+    """
+    if port is None:
+        port = int(os.environ.get("WATCHER_PORT", "8001"))
+
+    try:
+        actual_port = find_available_port(port)
+        if actual_port != port:
+            print(
+                f"[Knowledge Server] Port {port} busy, using {actual_port}",
+                file=sys.stderr,
+            )
+    except RuntimeError as e:
+        print(f"[Knowledge Server] Error: {e}", file=sys.stderr)
+        raise
+
     WatcherStatusHandler._server_instance = server
-    http_server = HTTPServer(("", port), WatcherStatusHandler)
+    http_server = HTTPServer(("", actual_port), WatcherStatusHandler)
     thread = threading.Thread(target=http_server.serve_forever, daemon=True)
     thread.start()
+    print(
+        f"[Knowledge Server] Watcher status server on port {actual_port}",
+        file=sys.stderr,
+    )
     return http_server
 
 
@@ -600,12 +645,23 @@ def main():
         print(format_report(days=30))
         return
 
-    http_server = start_watcher_server(server=server)
+    try:
+        http_server = start_watcher_server(server=server)
+    except Exception as e:
+        print(
+            f"[Knowledge Server] Failed to start watcher server: {e}", file=sys.stderr
+        )
+        print(
+            "[Knowledge Server] Continuing without watcher status server...",
+            file=sys.stderr,
+        )
+        http_server = None
 
     def shutdown_watcher(signum=None, frame=None):
         if server._watcher is not None:
             server.stop_watcher()
-        http_server.shutdown()
+        if http_server is not None:
+            http_server.shutdown()
 
     atexit.register(shutdown_watcher)
     signal.signal(signal.SIGINT, shutdown_watcher)
@@ -628,8 +684,23 @@ def main():
         )
 
     mcp = create_mcp_server(server)
-    mcp.run(transport=args.transport)
+    try:
+        print(
+            f"[Knowledge Server] MCP server starting (transport: {args.transport})...",
+            file=sys.stderr,
+        )
+        mcp.run(transport=args.transport)
+    except Exception as e:
+        print(f"[Knowledge Server] MCP server error: {e}", file=sys.stderr)
+        raise
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n[Knowledge Server] Shutting down...", file=sys.stderr)
+        sys.exit(0)
+    except Exception as e:
+        print(f"[Knowledge Server] Fatal error: {e}", file=sys.stderr)
+        sys.exit(1)

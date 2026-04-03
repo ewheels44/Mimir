@@ -1,0 +1,45 @@
+.root {
+  height: 100vh;
+  overflow-y: auto;
+  background: var(--bg-base);
+  color: var(--text-main);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 28px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.heading { font-size: 20px; font-weight: 700; color: var(--accent-light); }
+
+.backLink {
+  padding: 6px 14px;
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 13px;
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+.backLink:hover { background: var(--bg-raised); color: var(--text-main); }
+
+.coming {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: calc(100vh - 57px);
+  gap: 16px;
+}
+
+.comingIcon { font-size: 48px; }
+
+.comingText {
+  font-size: 18px;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+}

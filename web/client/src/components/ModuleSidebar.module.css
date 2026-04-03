@@ -1,0 +1,105 @@
+.panel {
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 380px;
+  height: 100%;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border);
+  padding: 20px 16px;
+  overflow-y: auto;
+  z-index: 200;
+  transform: translateX(100%);
+  transition: transform 0.28s cubic-bezier(0.4,0,0.2,1);
+  box-shadow: -4px 0 24px rgba(0,0,0,0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.panel.visible { transform: translateX(0); }
+
+.closeBtn {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 22px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+.closeBtn:hover { background: var(--bg-raised); color: var(--text-main); }
+
+.title {
+  font-size: 16px;
+  color: var(--accent-light);
+  margin-bottom: 14px;
+  padding-right: 28px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  word-break: break-all;
+}
+
+.statRow {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.loading { color: var(--text-muted); font-size: 13px; padding: 20px 0; text-align: center; }
+.error { color: var(--red); font-size: 13px; padding: 12px 0; }
+
+.item {
+  padding: 7px 10px;
+  background: var(--bg-raised);
+  border-radius: var(--radius-sm);
+  margin-bottom: 5px;
+  color: var(--text-main);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.itemType {
+  font-size: 10px;
+  text-transform: uppercase;
+  font-weight: 600;
+  min-width: 22px;
+}
+
+.dirLabel {
+  display: block;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin: 6px 0 4px;
+}
+
+.relItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 10px;
+  background: var(--bg-raised);
+  border: none;
+  border-radius: var(--radius-sm);
+  margin-bottom: 5px;
+  color: var(--text-main);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+.relItem:hover { background: var(--bg-hover); }
+
+.arrow { color: var(--text-muted); font-size: 12px; flex-shrink: 0; }
+
+.relType {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-dim);
+}

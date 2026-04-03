@@ -70,19 +70,56 @@ Two powerful workflows for querying your knowledge base:
 - **Knowledge Agent**: Agentic workflow with tool usage
 
 ### Web UI 🌐
-Browser-based interface for visualizing and exploring your knowledge base:
-- **Interactive Graph Visualization**: Navigate documents and relationships
+
+Browser-based interface for visualizing and exploring your knowledge base with a modern React + Rust/Axum stack:
+
+- **Interactive Graph Visualization**: Navigate documents and relationships with Cytoscape.js
 - **Search Interface**: Semantic search with visual results
 - **Query Interface**: Ask natural language questions
 - **Detail Panels**: Inspect document metadata and relationships
+- **Metrics Dashboard**: View cost tracking and usage statistics
+- **Smart Caching**: Graph state persists across navigation
+
+**Architecture:**
+```
+web/
+├── server/          Rust/Axum HTTP server
+│   └── src/
+│       ├── main.rs          Routing + handlers
+│       ├── graph.rs         Docstore parser, graph builder, cache
+│       ├── metrics.rs       JSONL metrics reader
+│       ├── proxy.rs         HTTP proxy to Python sidecar
+│       └── sidecar.rs       Child process manager
+├── sidecar/
+│   └── sidecar.py           Python sidecar (search + query only)
+├── client/          React/Vite frontend
+│   └── src/
+│       ├── pages/           GraphPage, MetricsPage
+│       ├── components/      Sidebar, ModuleSidebar, ContextPanel
+│       ├── hooks/           useGraphSettings, useGraphCache
+│       └── lib/             cytoscapeSetup, physics, insights
+├── dev.sh           Development runner
+└── build.sh         Production build
+```
+
+**Quick Start:**
 
 ```bash
-# Start the Web UI
-python ~/Documents/Mimir/scripts/start_web_ui.sh
-# Or directly
-python ~/Documents/Mimir/web/server.py
+# Development mode (Rust + Vite in parallel)
+cd ~/Documents/Mimir/web
+./dev.sh --project /path/to/your/project
+
+# Production mode
+./build.sh
+./server/target/release/mimir-web --project /path/to/your/project
 ```
-Then open http://localhost:8000 in your browser.
+
+- Development: http://localhost:5173 (Vite proxies `/api` to Rust on 8000)
+- Production: http://localhost:8000 (Rust serves React build statically)
+
+The Python sidecar starts automatically on port 18001 for LlamaIndex queries.
+
+See [web/server/README.md](web/server/README.md) for detailed documentation.
 
 ### Knowledge Graph 📊
 
@@ -190,41 +227,72 @@ See `src/mimir/metrics.py` for complete pricing table.
 ```
 ~/Documents/Mimir/                   # Central installation
 ├── mcp_server_llamaindex.py         # MCP server (LlamaIndex + LangGraph)
-├── mimir-init.py           # Multi-project initializer
+├── mimir-init.py                    # Multi-project initializer
 ├── src/                             # Core source code
 │   └── mimir/
 │       ├── __init__.py
 │       ├── indexing.py              # Full indexing utilities
-│       └── metrics.py               # Cost tracking and ROI metrics
+│       ├── knowledge_graph.py       # Code relationship extraction
+│       ├── watcher.py               # File watcher for auto-reindex
+│       ├── metrics.py               # Cost tracking and ROI metrics
+│       └── token_callback.py        # Token usage tracking
 ├── tests/                           # Test files
 │   ├── __init__.py
 │   └── test_workflows.py
 ├── scripts/                         # Utility scripts
-│   └── run_mcp_server.sh            # MCP server launch script
+│   ├── run_mcp_server.sh            # MCP server launch script
+│   ├── start_web_ui.sh              # Web UI starter (legacy)
+│   └── sync-to-dev.sh               # Development sync script
 ├── langgraph/                       # LangGraph workflows
 │   ├── cli.py                       # CLI for running workflows
 │   └── workflows/                   # RAG and Knowledge Agent
+│       ├── __init__.py
 │       ├── rag.py
 │       ├── knowledge_agent.py
 │       └── utils.py
 ├── examples/                        # Usage examples
 │   └── run_workflow.py
-├── web/                             # Web UI
-│   ├── server.py                    # FastAPI backend
-│   ├── static/                      # Static assets
-│   └── templates/                   # HTML templates
+├── web/                             # Web UI (React + Rust/Axum)
+│   ├── server/                      # Rust/Axum backend
+│   │   └── src/
+│   │       ├── main.rs              # Routing + handlers
+│   │       ├── graph.rs             # Graph builder + cache
+│   │       ├── metrics.rs           # Metrics reader
+│   │       ├── proxy.rs             # Proxy to Python sidecar
+│   │       └── sidecar.rs           # Child process manager
+│   ├── sidecar/                     # Python sidecar
+│   │   └── sidecar.py               # Search/query handler
+│   ├── client/                      # React/Vite frontend
+│   │   └── src/
+│   │       ├── pages/               # GraphPage, MetricsPage
+│   │       ├── components/          # UI components
+│   │       ├── hooks/               # React hooks
+│   │       └── lib/                 # Graph setup utilities
+│   ├── dev.sh                       # Development runner
+│   └── build.sh                     # Production build
+├── docs/                            # Documentation
+│   ├── README.md
+│   ├── mimir-updates-coming.md      # Future enhancements
+│   └── future-dreams.md
+├── pyproject.toml                   # Modern Python packaging
 ├── requirements.txt                 # Python dependencies
 └── .opencode/
-    └── setup.py                     # Per-project setup script
+    ├── mimir-index.py               # Per-project indexing script
+    └── skills/
+        └── mimir.md                 # Mimir skill for subagents
 
 Your Project/                         # Any project directory
 ├── docs/                            # Your documentation
 ├── .knowledge/
 │   ├── llamaindex/                  # Project-specific vector index
-│   └── cost_metrics.jsonl           # Usage and cost tracking data
-├── .mimir/config.json               # Project configuration
-├── .mimir/AGENTS.md                 # Local copy of Mimir AGENTS.md
-├── .opencode/mimir-index.py               # Auto-generated setup script
+│   ├── cost_metrics.jsonl           # Usage and cost tracking data
+│   └── code_relationships.json      # Knowledge graph relationships
+├── .mimir/
+│   ├── config.json                  # Project configuration
+│   └── AGENTS.md                    # Local copy of Mimir AGENTS.md
+├── .opencode/
+│   ├── mimir-index.py               # Auto-generated setup script
+│   └── skills/mimir.md              # Mimir skill for subagents
 └── opencode.json                    # OpenCode configuration (optional)
 ```
 
@@ -234,10 +302,13 @@ Your Project/                         # Any project directory
 - **Workspace-Aware**: Auto-detects project root via `.opencode/`, `.git/`, markers
 - **Per-Project Isolation**: Each project has its own vector store in `.knowledge/`
 - **Incremental Indexing**: Add directories without full rebuilds
+- **File Watching**: Auto-reindex on file changes (optional)
 - **LangGraph Integration**: Advanced workflows with RAG and agentic patterns
 - **OpenCode Integration**: Pre-configured MCP server with auto-discovery
 - **OpenRouter Support**: Uses OpenRouter for embeddings and LLM inference
 - **Cost Tracking**: Built-in ROI metrics and savings calculation
+- **Knowledge Graph**: Extract and visualize code relationships
+- **Modern Web UI**: React + Rust/Axum stack with real-time visualization
 
 ## Why Mimir? Real-World Benefits
 
@@ -787,6 +858,40 @@ python .opencode/mimir-index.py --reindex
 
 **Note:** Setup.py automatically excludes cache directories (`__pycache__`, `node_modules`, etc.).
 
+### File Watcher (Auto-Reindex)
+
+Mimir can watch your project files and automatically reindex when changes are detected:
+
+```bash
+# Import and use in Python
+from src.mimir.watcher import MimirFileWatcher
+from pathlib import Path
+
+watcher = MimirFileWatcher(
+    project_root=Path("/path/to/project"),
+    watched_dirs=[Path("/path/to/project/src")],
+    knowledge_dir=Path("/path/to/project/.knowledge/llamaindex")
+)
+
+# Start watching
+watcher.start()
+
+# Check status
+print(watcher.status())
+
+# Stop watching
+watcher.stop()
+```
+
+**Features:**
+- Debounced reindexing (2 second delay to batch rapid changes)
+- Incremental knowledge graph updates (5 second delay)
+- Excludes common cache directories and hidden folders
+- Non-blocking - runs in background thread
+- Cache invalidation for Web UI when graph updates
+
+**Excluded directories:** `.knowledge`, `node_modules`, `__pycache__`, `.git`, `.github`, `.venv`, `venv`, `.pytest_cache`, `.ruff_cache`, `.mypy_cache`, `.sisyphus`, `.opencode`
+
 ### CLI Queries
 
 ```bash
@@ -862,12 +967,22 @@ python ~/Documents/Mimir/mcp_server_llamaindex.py --transport http --port 8000
 |------|---------|
 | `mcp_server_llamaindex.py` | MCP server with LlamaIndex + LangGraph |
 | `mimir-init.py` | Multi-project initializer |
+| `full_index.py` | Standalone full reindex script |
+| `src/mimir/indexing.py` | Document loading and indexing utilities |
+| `src/mimir/knowledge_graph.py` | Code relationship extraction and graph building |
+| `src/mimir/watcher.py` | File watcher for auto-reindex |
+| `src/mimir/metrics.py` | Cost tracking and ROI metrics |
+| `src/mimir/token_callback.py` | Token usage tracking for LangChain |
 | `.opencode/mimir-index.py` | Per-project setup and indexing |
 | `langgraph/cli.py` | CLI for LangGraph workflows |
 | `langgraph/workflows/rag.py` | RAG workflow implementation |
 | `langgraph/workflows/knowledge_agent.py` | Knowledge Agent implementation |
 | `langgraph/workflows/utils.py` | Shared utilities |
-| `src/mimir/metrics.py` | Cost tracking and ROI metrics |
+| `web/dev.sh` | Web UI development runner |
+| `web/build.sh` | Web UI production build |
+| `web/server/` | Rust/Axum backend |
+| `web/sidecar/sidecar.py` | Python sidecar for LlamaIndex queries |
+| `web/client/` | React/Vite frontend |
 | `AGENTS.md` | Comprehensive agent documentation |
 | `examples/run_workflow.py` | Workflow usage examples |
 
@@ -875,13 +990,28 @@ python ~/Documents/Mimir/mcp_server_llamaindex.py --transport http --port 8000
 
 Core:
 ```bash
-pip install llama-index openai
+pip install llama-index openai mcp
 ```
 
 LangGraph workflows:
 ```bash
 pip install langgraph>=0.2.0 langchain>=0.3.0 \
     langchain-openai>=0.2.0 langchain-mcp-adapters>=0.1.0
+```
+
+File watching (optional):
+```bash
+pip install watchdog
+```
+
+Web UI (Rust + Node.js):
+```bash
+# Install Rust (https://rustup.rs)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Install Node.js 20+ (https://nodejs.org)
+# Then install dependencies:
+cd web/client && npm install
 ```
 
 ## License

@@ -1,0 +1,79 @@
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg-base:    #0f172a;
+  --bg-surface: #1e293b;
+  --bg-raised:  #334155;
+  --bg-hover:   #475569;
+  --border:     #334155;
+  --border-mid: #475569;
+  --text-main:  #e2e8f0;
+  --text-muted: #94a3b8;
+  --text-dim:   #64748b;
+  --accent:     #3b82f6;
+  --accent-light: #60a5fa;
+  --purple:     #8b5cf6;
+  --green:      #10b981;
+  --amber:      #f59e0b;
+  --pink:       #ec4899;
+  --red:        #ef4444;
+  --glass-bg:   rgba(30, 41, 59, 0.95);
+  --glass-border: rgba(51, 65, 85, 0.6);
+  --radius-sm:  6px;
+  --radius-md:  10px;
+  --radius-lg:  14px;
+  --shadow-panel: 0 8px 32px rgba(0,0,0,0.5);
+}
+
+html, body, #root {
+  height: 100%;
+  background: var(--bg-base);
+  color: var(--text-main);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* ── Scrollbars ─────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--bg-hover); border-radius: 3px; }
+
+/* ── Shared panel glass style ───────────────────────────────────────────── */
+.glass-panel {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* ── Markdown rendered content ──────────────────────────────────────────── */
+.markdown h1, .markdown h2, .markdown h3 { color: var(--accent-light); margin: 12px 0 6px; }
+.markdown p { margin-bottom: 10px; line-height: 1.6; }
+.markdown code {
+  background: var(--bg-raised);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.85em;
+  color: var(--amber);
+}
+.markdown pre {
+  background: var(--bg-base);
+  padding: 14px;
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+}
+.markdown pre code { background: transparent; padding: 0; color: var(--text-main); }
+.markdown ul, .markdown ol { padding-left: 18px; margin-bottom: 10px; }
+.markdown li { margin-bottom: 4px; }
+
+/* ── Utility ────────────────────────────────────────────────────────────── */
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+}

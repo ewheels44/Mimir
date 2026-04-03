@@ -57,3 +57,10 @@ Thumbs.db
 
 # LangGraph
 .langgraph/
+
+# Rust
+target/
+Cargo.lock
+
+# node modules
+node_modules/

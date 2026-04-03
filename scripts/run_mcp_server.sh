@@ -1,6 +1,7 @@
 #!/bin/bash
 # Wrapper script for Mimir MCP server
 # Auto-detects project root from CWD and sets environment variables
+# Includes robust cleanup to prevent stale processes
 
 set -e
 
@@ -10,6 +11,86 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 log() {
     echo "[Mimir Wrapper] $1" >&2
 }
+
+# Create a unique identifier for this project instance
+get_project_id() {
+    echo "$PROJECT_ROOT" | tr '/' '_'
+}
+
+# Get the PID file path
+get_pid_file() {
+    local project_id=$(get_project_id)
+    echo "/tmp/mimir-mcp-${project_id}.pid"
+}
+
+# Cleanup function - kill stale processes and remove PID file
+cleanup_stale() {
+    local pid_file=$(get_pid_file)
+    
+    # Check if there's a PID file from a previous run
+    if [ -f "$pid_file" ]; then
+        local old_pid=$(cat "$pid_file" 2>/dev/null)
+        if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+            log "Found stale MCP server process (PID: $old_pid), terminating..."
+            kill -TERM "$old_pid" 2>/dev/null || true
+            sleep 1
+            # Force kill if still running
+            if kill -0 "$old_pid" 2>/dev/null; then
+                log "Force killing stale process..."
+                kill -9 "$old_pid" 2>/dev/null || true
+            fi
+        fi
+        rm -f "$pid_file"
+    fi
+    
+    # Also kill any other MCP servers for this project that might be orphaned
+    local project_pattern=$(echo "$PROJECT_ROOT" | sed 's/\//\\\//g')
+    local stale_pids=$(ps aux | grep "mcp_server_llamaindex.py" | grep "$PROJECT_ROOT" | grep -v grep | awk '{print $2}')
+    if [ -n "$stale_pids" ]; then
+        log "Cleaning up additional orphaned MCP processes..."
+        echo "$stale_pids" | while read -r pid; do
+            if [ "$pid" != "$$" ] && [ "$pid" != "$MCP_PID" ]; then
+                kill -TERM "$pid" 2>/dev/null || true
+                sleep 0.5
+                kill -9 "$pid" 2>/dev/null || true
+            fi
+        done
+    fi
+}
+
+# Cleanup on exit - remove PID file
+on_exit() {
+    local exit_code=$?
+    local pid_file=$(get_pid_file)
+    
+    if [ -f "$pid_file" ]; then
+        local saved_pid=$(cat "$pid_file" 2>/dev/null)
+        # Only remove if it's our PID
+        if [ "$saved_pid" = "$$" ] || [ "$saved_pid" = "$MCP_PID" ]; then
+            rm -f "$pid_file"
+            log "Cleaned up PID file"
+        fi
+    fi
+    
+    # If the MCP server is still running, kill it
+    if [ -n "$MCP_PID" ] && kill -0 "$MCP_PID" 2>/dev/null; then
+        log "Terminating MCP server (PID: $MCP_PID)..."
+        kill -TERM "$MCP_PID" 2>/dev/null || true
+        wait "$MCP_PID" 2>/dev/null || true
+    fi
+    
+    exit $exit_code
+}
+
+# Signal handlers
+cleanup_on_signal() {
+    log "Received signal, cleaning up..."
+    on_exit
+}
+
+# Register cleanup handlers
+trap on_exit EXIT
+trap cleanup_on_signal INT TERM HUP
 
 # Detect project root by walking up from current directory
 detect_project_root() {
@@ -37,6 +118,9 @@ if [ -z "$PROJECT_ROOT" ]; then
 else
     log "Using provided PROJECT_ROOT: $PROJECT_ROOT"
 fi
+
+# Clean up any stale processes before starting
+cleanup_stale
 
 # Set KNOWLEDGE_DIR and DOCS_DIR based on PROJECT_ROOT if not set
 if [ -z "$KNOWLEDGE_DIR" ]; then
@@ -112,7 +196,19 @@ if [ ! -x "$UV_PATH" ]; then
 fi
 log "Using uv: $UV_PATH"
 
+# Set PYTHONPATH to include src directory for mimir imports
+export PYTHONPATH="$SCRIPT_DIR/src:$PYTHONPATH"
+log "Set PYTHONPATH: $PYTHONPATH"
+
 # Run the MCP server from SCRIPT_DIR
 cd "$SCRIPT_DIR"
 log "Starting MCP server with uv..."
+
+# Create PID file before starting
+PID_FILE=$(get_pid_file)
+echo $$ > "$PID_FILE"
+log "Created PID file: $PID_FILE (wrapper PID: $$)"
+
+# Start the MCP server - exec replaces this shell with the Python process
+# The trap handlers will still work because exec preserves signal handlers
 exec "$UV_PATH" run --python '>=3.11' "$SCRIPT_DIR/mcp_server_llamaindex.py" "$@"

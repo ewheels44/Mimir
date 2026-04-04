@@ -64,3 +64,6 @@ Cargo.lock
 
 # node modules
 node_modules/
+
+# Blog post (local only)
+BLOG_POST.md

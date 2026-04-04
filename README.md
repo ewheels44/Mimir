@@ -2,6 +2,8 @@
 
 A centralized knowledge base system that supercharges [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) agents with semantic search and persistent project memory.
 
+**Optimized for [OpenAgents](https://github.com/darrenhinde/OpenAgentsControl/tree/main)** - Custom plugin integration available.
+
 **The Problem**: Every session, agents re-discover the same codebase patterns, wasting tokens and time.  
 **The Solution**: Mimir indexes your docs and code once, then gives oh-my-opencode agents instant semantic access via MCP tools.
 
@@ -68,6 +70,26 @@ python .opencode/mimir-index.py --add tests
 Two powerful workflows for querying your knowledge base:
 - **RAG Workflow**: Simple retrieve → generate
 - **Knowledge Agent**: Agentic workflow with tool usage
+
+### OpenAgents Integration 🤖
+
+Mimir is now optimized for [OpenAgents](https://github.com/darrenhinde/OpenAgentsControl/tree/main) with a custom plugin system.
+
+**Custom Plugin Location:** `~/.config/opencode/plugin/system-prompt.ts`
+
+This plugin automatically injects Mimir context into every OpenAgents session:
+- Loads `~/.config/opencode-openagents/prompts/system-context.md`
+- Supports dynamic variables: `{{date}}`, `{{git_branch}}`, `{{cwd}}`, `{{platform}}`
+- Injects context silently on session creation (no AI response triggered)
+
+**Setup:**
+```bash
+# OpenAgents config is at ~/.config/opencode-openagents/
+# Custom prompts: ~/.config/opencode-openagents/prompts/system-context.md
+# Custom plugins: ~/.config/opencode-openagents/plugin/
+```
+
+The plugin reads the system prompt file and injects it on every `session.created` event.
 
 ### Web UI 🌐
 

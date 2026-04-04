@@ -58,6 +58,11 @@ export default function ContextPanel({ visible, insights, selectedNode }: Props)
                 {insights.isolatedCount === 1 ? 'node has' : 'nodes have'} no connections.
                 Consider documenting or linking these modules.
               </p>
+              <p className={styles.gapNote}>
+                Some nodes are phantom references from method calls on local variables
+                (e.g. <code>room.GetParticipant</code>) that the extractor can't resolve
+                without type analysis. These will be cleaned up as the extractor improves.
+              </p>
             </div>
           )}
         </>

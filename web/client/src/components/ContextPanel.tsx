@@ -64,8 +64,9 @@ export default function ContextPanel({ visible, insights, selectedNode }: Props)
                 without type analysis.
               </p>
               <p className={styles.gapTip}>
-                <strong>Tip:</strong> Set the min connections slider to <strong>2</strong> to
-                filter out phantom nodes and focus on well-connected modules.
+                <strong>Tip:</strong> Use the min connections slider to filter these out.
+                Setting it to <strong>2</strong> removes most phantom nodes and shows only
+                well-connected modules.
               </p>
             </div>
           )}

@@ -230,9 +230,7 @@ fn filtered_nodes(
         .nodes
         .iter()
         .filter(|n| {
-            // External modules always shown regardless of degree filter
-            n.node_type == "module"
-                || cache.degree.get(&n.id).copied().unwrap_or(0) >= effective_min
+            cache.degree.get(&n.id).copied().unwrap_or(0) >= effective_min
         })
         .cloned()
         .collect()

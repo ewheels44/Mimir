@@ -255,14 +255,7 @@ pub fn build_graph(knowledge_dir: &Path) -> Result<GraphCache> {
         let target_id = match lookup_suffix(&rel.target, &suffix_idx) {
             Some(id) => id,
             None => {
-                // Only create external nodes for things that look like actual
-                // module/package paths (contain / or .).  Bare identifiers like
-                // "notifySession", "Sprintf", "Lock" are unresolved local calls
-                // from the relationship extractor — skip them to avoid noise.
-                let looks_like_module = rel.target.contains('/') || rel.target.contains('.');
-                if !looks_like_module {
-                    continue;
-                }
+                // External module not in the index
 
                 let ext_id = format!("external:{}", rel.target);
                 if !existing_ids.contains(&ext_id) && ext_ids.insert(ext_id.clone()) {

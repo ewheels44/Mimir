@@ -20,6 +20,7 @@ export interface GraphNode {
   label: string;
   type: 'code' | 'document' | 'module' | 'function' | 'class';
   metadata: NodeMetadata;
+  position?: { x: number; y: number };
 }
 
 export interface GraphEdge {

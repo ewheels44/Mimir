@@ -86,6 +86,7 @@ pub struct GraphCache {
     pub degree: HashMap<String, u32>,
     pub file_path_to_id: HashMap<String, String>,
     pub entities: HashMap<String, EntityData>,
+    pub positions: HashMap<String, (f64, f64)>,
 }
 
 // ── Cache key (mtime fingerprint) ─────────────────────────────────────────────
@@ -112,6 +113,7 @@ pub fn cache_key(knowledge_dir: &Path) -> String {
 // ── Main graph builder ────────────────────────────────────────────────────────
 
 pub fn build_graph(knowledge_dir: &Path) -> Result<GraphCache> {
+    let t_total = std::time::Instant::now();
     let key = cache_key(knowledge_dir);
 
     // ── Parse docstore ───────────────────────────────────────────────────────
@@ -171,6 +173,7 @@ pub fn build_graph(knowledge_dir: &Path) -> Result<GraphCache> {
                 last_modified_date: meta.last_modified_date.clone(),
                 ..Default::default()
             },
+            position: None,
         });
     }
 
@@ -252,7 +255,15 @@ pub fn build_graph(knowledge_dir: &Path) -> Result<GraphCache> {
         let target_id = match lookup_suffix(&rel.target, &suffix_idx) {
             Some(id) => id,
             None => {
-                // External module not in the index
+                // Only create external nodes for things that look like actual
+                // module/package paths (contain / or .).  Bare identifiers like
+                // "notifySession", "Sprintf", "Lock" are unresolved local calls
+                // from the relationship extractor — skip them to avoid noise.
+                let looks_like_module = rel.target.contains('/') || rel.target.contains('.');
+                if !looks_like_module {
+                    continue;
+                }
+
                 let ext_id = format!("external:{}", rel.target);
                 if !existing_ids.contains(&ext_id) && ext_ids.insert(ext_id.clone()) {
                     let ext_label = if rel.target.contains('/') || rel.target.contains('\\') {
@@ -276,6 +287,7 @@ pub fn build_graph(knowledge_dir: &Path) -> Result<GraphCache> {
                             external: Some(true),
                             ..Default::default()
                         },
+                        position: None,
                     });
                 }
                 ext_id
@@ -304,6 +316,21 @@ pub fn build_graph(knowledge_dir: &Path) -> Result<GraphCache> {
         *degree.entry(edge.target.clone()).or_insert(0) += 1;
     }
 
+    // ── Pre-compute layout positions ───────────────────────────────────────
+    let positions = compute_layout(&nodes, &edges);
+    for node in &mut nodes {
+        if let Some(&(x, y)) = positions.get(&node.id) {
+            node.position = Some(crate::models::NodePosition { x, y });
+        }
+    }
+
+    tracing::info!(
+        "build_graph total: {:.1?} ({} nodes, {} edges)",
+        t_total.elapsed(),
+        nodes.len(),
+        edges.len()
+    );
+
     Ok(GraphCache {
         cache_key: key,
         nodes,
@@ -311,6 +338,7 @@ pub fn build_graph(knowledge_dir: &Path) -> Result<GraphCache> {
         degree,
         file_path_to_id,
         entities,
+        positions,
     })
 }
 
@@ -351,6 +379,7 @@ pub fn get_module_children(
                     line_number: ent.line_number,
                     ..Default::default()
                 },
+                position: None,
             });
             added_ids.insert(ent_key.clone());
         }
@@ -380,6 +409,227 @@ pub fn get_module_children(
     }
 
     (child_nodes, edges)
+}
+
+// ── Force-directed layout ──────────────────────────────────────────────────────
+
+/// Spatial hash grid for O(n) approximate repulsion.
+/// Nodes are bucketed into cells; repulsion is only computed between
+/// nodes in the same or adjacent cells.  Distant cells are skipped
+/// because their contribution is negligible at that distance.
+struct SpatialGrid {
+    cell_size: f64,
+    cells: HashMap<(i64, i64), Vec<usize>>,
+}
+
+impl SpatialGrid {
+    fn new(cell_size: f64) -> Self {
+        Self {
+            cell_size,
+            cells: HashMap::new(),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.cells.clear();
+    }
+
+    fn insert(&mut self, x: f64, y: f64, idx: usize) {
+        let key = (
+            (x / self.cell_size).floor() as i64,
+            (y / self.cell_size).floor() as i64,
+        );
+        self.cells.entry(key).or_default().push(idx);
+    }
+
+    /// Returns indices of nodes in the same cell and all 8 neighbors.
+    fn neighbors(&self, x: f64, y: f64) -> Vec<usize> {
+        let cx = (x / self.cell_size).floor() as i64;
+        let cy = (y / self.cell_size).floor() as i64;
+        let mut result = Vec::new();
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                if let Some(bucket) = self.cells.get(&(cx + dx, cy + dy)) {
+                    result.extend_from_slice(bucket);
+                }
+            }
+        }
+        result
+    }
+}
+
+/// Pre-compute node positions using a force-directed layout algorithm.
+/// Uses a spatial hash grid so repulsion is O(n) instead of O(n²).
+pub fn compute_layout(nodes: &[GraphNode], edges: &[GraphEdge]) -> HashMap<String, (f64, f64)> {
+    let n = nodes.len();
+    if n == 0 {
+        return HashMap::new();
+    }
+    if n == 1 {
+        let mut pos = HashMap::new();
+        pos.insert(nodes[0].id.clone(), (0.0, 0.0));
+        return pos;
+    }
+
+    let t_start = std::time::Instant::now();
+
+    // ── Parameters ─────────────────────────────────────────────────────────
+    let iterations: usize = 200;
+    let repulsion_strength: f64 = 8000.0;
+    let ideal_edge_length: f64 = 100.0;
+    let edge_elasticity: f64 = 0.45;
+    let gravity: f64 = 0.1;
+    let cooling_factor: f64 = 0.95;
+    let initial_temp: f64 = 200.0;
+    let min_temp: f64 = 1.0;
+    let padding: f64 = 50.0;
+    // Grid cell size — nodes farther than this contribute negligible force
+    let cell_size = (repulsion_strength * 4.0).sqrt();
+
+    // ── Build adjacency list ───────────────────────────────────────────────
+    let id_to_idx: HashMap<&str, usize> = nodes
+        .iter()
+        .enumerate()
+        .map(|(i, node)| (node.id.as_str(), i))
+        .collect();
+
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for edge in edges {
+        if let (Some(&si), Some(&ti)) = (
+            id_to_idx.get(edge.source.as_str()),
+            id_to_idx.get(edge.target.as_str()),
+        ) {
+            adj[si].push(ti);
+            adj[ti].push(si);
+        }
+    }
+
+    // ── Initialize positions in a circle ───────────────────────────────────
+    let radius = (n as f64).sqrt() * ideal_edge_length;
+    let mut px = vec![0.0f64; n];
+    let mut py = vec![0.0f64; n];
+    for i in 0..n {
+        let angle = 2.0 * std::f64::consts::PI * (i as f64) / (n as f64);
+        px[i] = radius * angle.cos();
+        py[i] = radius * angle.sin();
+    }
+
+    let mut vx = vec![0.0f64; n];
+    let mut vy = vec![0.0f64; n];
+    let mut temp = initial_temp;
+    let mut grid = SpatialGrid::new(cell_size);
+
+    // ── Main simulation loop ───────────────────────────────────────────────
+    for _iter in 0..iterations {
+        vx.fill(0.0);
+        vy.fill(0.0);
+
+        // Rebuild spatial grid
+        grid.clear();
+        for i in 0..n {
+            grid.insert(px[i], py[i], i);
+        }
+
+        // ── Repulsion (nearby pairs only via spatial grid) ─────────────────
+        for i in 0..n {
+            let neighbors = grid.neighbors(px[i], py[i]);
+            for &j in &neighbors {
+                if j <= i {
+                    continue;
+                }
+                let dx = px[i] - px[j];
+                let dy = py[i] - py[j];
+                let dist_sq = dx * dx + dy * dy;
+                let dist = dist_sq.sqrt().max(1.0);
+
+                let force = repulsion_strength / dist_sq;
+                let fx = (dx / dist) * force;
+                let fy = (dy / dist) * force;
+
+                vx[i] += fx;
+                vy[i] += fy;
+                vx[j] -= fx;
+                vy[j] -= fy;
+            }
+        }
+
+        // ── Attraction (edges) ─────────────────────────────────────────────
+        for i in 0..n {
+            for &j in &adj[i] {
+                if j <= i {
+                    continue;
+                }
+                let dx = px[j] - px[i];
+                let dy = py[j] - py[i];
+                let dist = (dx * dx + dy * dy).sqrt().max(1.0);
+
+                let displacement = dist - ideal_edge_length;
+                let force = edge_elasticity * displacement;
+                let fx = (dx / dist) * force;
+                let fy = (dy / dist) * force;
+
+                vx[i] += fx;
+                vy[i] += fy;
+                vx[j] -= fx;
+                vy[j] -= fy;
+            }
+        }
+
+        // ── Gravity (pull toward center) ───────────────────────────────────
+        for i in 0..n {
+            let dist = (px[i] * px[i] + py[i] * py[i]).sqrt().max(1.0);
+            vx[i] -= gravity * px[i] / dist;
+            vy[i] -= gravity * py[i] / dist;
+        }
+
+        // ── Apply forces with temperature cap ──────────────────────────────
+        let mut total_movement = 0.0f64;
+        for i in 0..n {
+            let speed = (vx[i] * vx[i] + vy[i] * vy[i]).sqrt();
+            if speed > temp {
+                let scale = temp / speed;
+                vx[i] *= scale;
+                vy[i] *= scale;
+            }
+            px[i] += vx[i];
+            py[i] += vy[i];
+            total_movement += vx[i].abs() + vy[i].abs();
+        }
+
+        temp = (temp * cooling_factor).max(min_temp);
+
+        // Early stopping: if total movement is negligible, converged
+        if total_movement < (n as f64) * 0.01 {
+            tracing::info!(
+                "layout converged at iteration {} (total_movement={:.2})",
+                _iter,
+                total_movement
+            );
+            break;
+        }
+    }
+
+    // ── Normalize to positive coordinates with padding ─────────────────────
+    let min_x = px.iter().copied().fold(f64::INFINITY, f64::min);
+    let min_y = py.iter().copied().fold(f64::INFINITY, f64::min);
+
+    let mut positions = HashMap::with_capacity(n);
+    for i in 0..n {
+        positions.insert(
+            nodes[i].id.clone(),
+            (px[i] - min_x + padding, py[i] - min_y + padding),
+        );
+    }
+
+    let elapsed = t_start.elapsed();
+    tracing::info!(
+        "compute_layout: {} nodes, {} edges, completed in {:.1?}",
+        n,
+        edges.len(),
+        elapsed
+    );
+
+    positions
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

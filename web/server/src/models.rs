@@ -30,6 +30,12 @@ pub struct NodeMetadata {
     pub line_number: Option<u32>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NodePosition {
+    pub x: f64,
+    pub y: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphNode {
     pub id: String,
@@ -37,6 +43,8 @@ pub struct GraphNode {
     #[serde(rename = "type")]
     pub node_type: String,
     pub metadata: NodeMetadata,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<NodePosition>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

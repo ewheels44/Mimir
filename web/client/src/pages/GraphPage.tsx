@@ -44,6 +44,12 @@ export default function GraphPage() {
   const [settings, updateSettings] = useGraphSettings();
   const graphCache = useGraphCache();
 
+  // Track current settings for save-on-unmount
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const graphCacheRef = useRef(graphCache);
+  graphCacheRef.current = graphCache;
+
   // Loading state
   const [loadingNodes, setLoadingNodes] = useState(true);
   const [loadingEdges, setLoadingEdges] = useState(false);
@@ -97,6 +103,28 @@ export default function GraphPage() {
     return () => {
       document.removeEventListener('keydown', keyHandler);
       physicsRef.current?.stop();
+
+      // Save current positions to cache before destroying
+      const cyInstance = cyRef.current;
+      if (cyInstance && cyInstance.nodes().length > 0) {
+        try {
+          const s = settingsRef.current;
+          const nodesWithPositions = cyInstance.nodes().map(n => {
+            const data = n.data() as GraphNode;
+            const pos = n.position();
+            return { ...data, position: { x: pos.x, y: pos.y } };
+          });
+          const edges = cyInstance.edges().map(e => e.data() as GraphEdge);
+          graphCacheRef.current.set(s.minDegree, s.layout, {
+            nodes: nodesWithPositions,
+            edges,
+            viewport: { zoom: cyInstance.zoom(), pan: cyInstance.pan() },
+          });
+        } catch {
+          // Best-effort save; don't block unmount
+        }
+      }
+
       cy.destroy();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -171,7 +199,11 @@ export default function GraphPage() {
           const cached = graphCache.get(minDegree, settings.layout);
           if (cached) {
             cy.elements().remove();
-            cy.add(cached.nodes.map((n: GraphNode) => ({ data: n })));
+            const hasPositions = cached.nodes.some(n => n.position);
+            cy.add(cached.nodes.map((n: GraphNode) => ({
+              data: n,
+              ...(hasPositions && n.position ? { position: { x: n.position.x, y: n.position.y } } : {}),
+            })));
             cy.add(cached.edges.map((e: GraphEdge) => ({ data: e })));
             if (cached.viewport) {
               cy.viewport(cached.viewport);
@@ -190,10 +222,26 @@ export default function GraphPage() {
 
         cy.elements().remove();
         if (nodesData.nodes.length > 0) {
-          cy.add(nodesData.nodes.map((n: GraphNode) => ({ data: n })));
-          cy.layout(layoutOptions(settings.layout)).run();
+          const hasPositions = nodesData.nodes.some((n: GraphNode) => n.position);
+          cy.add(nodesData.nodes.map((n: GraphNode) => ({
+            data: n,
+            ...(hasPositions && n.position ? { position: { x: n.position.x, y: n.position.y } } : {}),
+          })));
+
+          if (hasPositions) {
+            // Pre-computed positions from server — skip layout entirely
+            cy.fit(undefined, 50);
+            setLoadingNodes(false);
+          } else {
+            // No positions — fall back to client-side layout
+            const layout = cy.layout(layoutOptions(settings.layout));
+            layout.run();
+            layout.one('layoutstop', () => setLoadingNodes(false));
+            setTimeout(() => setLoadingNodes(false), Math.min(nodesData.nodes.length * 8, 5000));
+          }
+        } else {
+          setLoadingNodes(false);
         }
-        setLoadingNodes(false);
 
         if (nodesData.nodes.length === 0) return;
 
@@ -213,9 +261,14 @@ export default function GraphPage() {
               updateNodeSizes(cy);
             }
 
-            // Persist to client cache
+            // Persist to client cache (capture actual positions from cytoscape)
+            const nodesWithPositions = cy.nodes().map(n => {
+              const data = n.data() as GraphNode;
+              const pos = n.position();
+              return { ...data, position: { x: pos.x, y: pos.y } };
+            });
             graphCache.set(minDegree, settings.layout, {
-              nodes: nodesData.nodes,
+              nodes: nodesWithPositions,
               edges: valid,
               viewport: { zoom: cy.zoom(), pan: cy.pan() },
             });

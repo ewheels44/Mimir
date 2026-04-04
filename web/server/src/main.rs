@@ -186,16 +186,14 @@ async fn api_graph_edges(
     }
     let cache = state.graph_cache.read().await;
     let min = params.min_degree.unwrap_or(0);
+    let effective_min = if min == 0 { 1 } else { min };
 
     let edges: Vec<_> = cache
         .edges
         .iter()
         .filter(|e| {
-            if min == 0 {
-                return true;
-            }
-            cache.degree.get(&e.source).copied().unwrap_or(0) >= min
-                && cache.degree.get(&e.target).copied().unwrap_or(0) >= min
+            cache.degree.get(&e.source).copied().unwrap_or(0) >= effective_min
+                && cache.degree.get(&e.target).copied().unwrap_or(0) >= effective_min
         })
         .collect();
 
@@ -227,16 +225,14 @@ fn filtered_nodes(
     cache: &GraphCache,
     min_degree: u32,
 ) -> Vec<crate::models::GraphNode> {
-    if min_degree == 0 {
-        return cache.nodes.clone();
-    }
+    let effective_min = if min_degree == 0 { 1 } else { min_degree };
     cache
         .nodes
         .iter()
         .filter(|n| {
             // External modules always shown regardless of degree filter
             n.node_type == "module"
-                || cache.degree.get(&n.id).copied().unwrap_or(0) >= min_degree
+                || cache.degree.get(&n.id).copied().unwrap_or(0) >= effective_min
         })
         .cloned()
         .collect()

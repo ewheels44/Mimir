@@ -248,15 +248,8 @@ class MimirFileWatcher:
                 self._project_root, changed_str
             )
 
-            # Invalidate web UI graph cache
-            project_root_str = str(self._project_root)
-            if project_root_str not in sys.path:
-                sys.path.insert(0, project_root_str)
-            import web.server
-
-            web.server._graph_cache.clear()
-            logger.info("Graph cache invalidated")
-
+            # Rust web server auto-detects changes via mtime-based cache key
+            # (see web/server/src/graph.rs cache_key function)
             self._last_graph_update = datetime.now().isoformat()
 
             logger.info(

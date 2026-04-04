@@ -61,7 +61,11 @@ export default function ContextPanel({ visible, insights, selectedNode }: Props)
               <p className={styles.gapNote}>
                 Some nodes are phantom references from method calls on local variables
                 (e.g. <code>room.GetParticipant</code>) that the extractor can't resolve
-                without type analysis. These will be cleaned up as the extractor improves.
+                without type analysis.
+              </p>
+              <p className={styles.gapTip}>
+                <strong>Tip:</strong> Set the min connections slider to <strong>2</strong> to
+                filter out phantom nodes and focus on well-connected modules.
               </p>
             </div>
           )}

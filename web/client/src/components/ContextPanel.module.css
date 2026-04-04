@@ -101,6 +101,16 @@
   padding: 1px 4px;
   border-radius: 3px;
 }
+.gapTip {
+  font-size: 11px;
+  color: var(--accent-light);
+  line-height: 1.5;
+  margin-top: 8px;
+  padding: 6px 8px;
+  background: rgba(59,130,246,0.1);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--accent);
+}
 
 .nodeContext {
   border-top: 1px solid var(--border);

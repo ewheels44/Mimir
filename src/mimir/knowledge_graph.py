@@ -210,7 +210,7 @@ _LANG_KEYWORDS: Dict[str, FrozenSet[str]] = {
 }
 
 # Valid identifier pattern (covers Python, JS/TS, Rust, Go, with $ for JS)
-_VALID_NAME_RE = re.compile(r"^[a-zA-Z_$][a-zA-Z0-9_$]*$")
+_VALID_NAME_RE = re.compile(r"^[a-zA-Z_$][a-zA-Z0-9_$.:]*$")
 
 
 # ---------------------------------------------------------------------------
@@ -741,13 +741,8 @@ class TreeSitterExtractor:
                 if func_node.type == "identifier":
                     name = _ts_node_text(func_node, source)
                 elif func_node.type in ("member_expression", "subscript_expression"):
-                    # grab the final property name: foo.bar() → bar
-                    for prop in reversed(list(_walk_ts_tree(func_node))):
-                        if prop.type in ("property_identifier", "identifier"):
-                            name = _ts_node_text(prop, source)
-                            break
-                    else:
-                        continue
+                    # Full qualified name: foo.bar() → "foo.bar"
+                    name = _ts_node_text(func_node, source)
                 else:
                     continue
 
@@ -853,10 +848,10 @@ class TreeSitterExtractor:
                 if func_node.type == "identifier":
                     name = _ts_node_text(func_node, source)
                 elif func_node.type == "scoped_identifier":
-                    name = _ts_node_text(func_node, source).split("::")[-1]
+                    name = _ts_node_text(func_node, source)
                 elif func_node.type == "field_expression":
-                    field = func_node.child_by_field_name("field")
-                    name = _ts_node_text(field, source) if field else ""
+                    # Full qualified name: receiver.method → "receiver.method"
+                    name = _ts_node_text(func_node, source)
                 else:
                     continue
 
@@ -933,8 +928,8 @@ class TreeSitterExtractor:
                 if func_node.type == "identifier":
                     name = _ts_node_text(func_node, source)
                 elif func_node.type == "selector_expression":
-                    field = func_node.child_by_field_name("field")
-                    name = _ts_node_text(field, source) if field else ""
+                    # Full qualified name: fmt.Sprintf → "fmt.Sprintf"
+                    name = _ts_node_text(func_node, source)
                 else:
                     continue
 
@@ -975,8 +970,12 @@ class CombinedExtractor:
 
     def extract_from_file(self, file_path: Path) -> List[Relationship]:
         if file_path.suffix.lower() == ".py":
-            return self._py.extract_from_file(file_path)
-        return self._ts.extract_from_file(file_path)
+            rels = self._py.extract_from_file(file_path)
+            self._py.relationships.extend(rels)
+        else:
+            rels = self._ts.extract_from_file(file_path)
+            self._ts.relationships.extend(rels)
+        return rels
 
     def extract_from_directory(self, directory: Path) -> List[Relationship]:
         """Walk directory, routing each file to the right extractor."""

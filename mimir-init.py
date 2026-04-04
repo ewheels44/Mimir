@@ -17,9 +17,72 @@ or use --add with mimir-index.py for incremental indexing.
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+
+def find_opencode_config_dir() -> Path | None:
+    """Detect the OpenCode global config directory.
+
+    Checks common locations:
+    - ~/.config/opencode-openagents/
+    - ~/.config/opencode/
+    - ~/.config/oh-my-opencode/
+
+    Returns the first existing directory, or None if not found.
+    """
+    candidates = [
+        Path.home() / ".config" / "opencode-openagents",
+        Path.home() / ".config" / "opencode",
+        Path.home() / ".config" / "oh-my-opencode",
+    ]
+
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_dir():
+            return candidate
+
+    return None
+
+
+def install_opencode_plugin(
+    mimir_root: Path, config_dir: Path, force: bool = False
+) -> list[Path]:
+    """Install the Mimir system-prompt plugin into OpenCode's config directory.
+
+    Copies:
+    - opencode-plugin/plugin/system-prompt.ts -> {config_dir}/plugin/
+    - opencode-plugin/prompts/system-context.md -> {config_dir}/prompts/
+
+    Returns list of installed file paths.
+    """
+    plugin_source = mimir_root / "opencode-plugin" / "plugin" / "system-prompt.ts"
+    prompt_source = mimir_root / "opencode-plugin" / "prompts" / "system-context.md"
+
+    if not plugin_source.exists():
+        print(f"   ⚠️  Plugin source not found: {plugin_source}")
+        return []
+
+    installed = []
+
+    plugin_dir = config_dir / "plugin"
+    plugin_dir.mkdir(parents=True, exist_ok=True)
+    plugin_dest = plugin_dir / "system-prompt.ts"
+
+    if not plugin_dest.exists() or force:
+        shutil.copy2(plugin_source, plugin_dest)
+        installed.append(plugin_dest)
+
+    prompt_dir = config_dir / "prompts"
+    prompt_dir.mkdir(parents=True, exist_ok=True)
+    prompt_dest = prompt_dir / "system-context.md"
+
+    if not prompt_dest.exists() or force:
+        shutil.copy2(prompt_source, prompt_dest)
+        installed.append(prompt_dest)
+
+    return installed
 
 
 def find_server_script() -> Path:
@@ -74,8 +137,6 @@ def create_project_setup_script(project_root: Path, server_script: Path) -> Path
     template_script = server_script.parent / ".opencode" / "mimir-index.py"
 
     if template_script.exists():
-        import shutil
-
         shutil.copy2(template_script, setup_script)
         setup_script.chmod(0o755)
     else:
@@ -112,8 +173,6 @@ def create_agents_md(project_root: Path, mimir_root: Path) -> Path:
     This provides a local copy of the Mimir documentation that can be
     referenced in opencode.json for AGENTS.md chaining.
     """
-    import shutil
-
     mimir_dir = project_root / ".mimir"
     mimir_dir.mkdir(exist_ok=True)
 
@@ -346,6 +405,27 @@ def init_project(project_root: Path, server_script: Path, args) -> bool:
             f"   ⏭️  Skipped: {mimir_skill_path} (exists, use --force to overwrite)"
         )
 
+    if args.opencode_config:
+        opencode_config_dir = Path(args.opencode_config).resolve()
+    else:
+        opencode_config_dir = find_opencode_config_dir()
+
+    if opencode_config_dir and opencode_config_dir.exists():
+        installed = install_opencode_plugin(mimir_root, opencode_config_dir, args.force)
+        if installed:
+            for f in installed:
+                tqdm.write(f"   ✓ Installed plugin: {f}")
+            tqdm.write("   ⚠️  Restart OpenCode for plugin changes to take effect")
+        else:
+            tqdm.write(
+                f"   ⏭️  Plugin already installed in {opencode_config_dir}/plugin/ (use --force to overwrite)"
+            )
+    else:
+        tqdm.write("   ⚠️  OpenCode config dir not found — plugin not installed")
+        tqdm.write(
+            "      Use --opencode-config=/path/to/config or create ~/.config/opencode-openagents/"
+        )
+
     local_server = project_root / "mcp_server_llamaindex.py"
     if not local_server.exists() and not args.server_path:
         tqdm.write(f"ℹ️  Server script at: {server_script}")
@@ -442,6 +522,10 @@ def main():
     parser.add_argument(
         "--code-dirs",
         help="Comma-separated list of code directories to index (e.g., 'src,tests,lib')",
+    )
+    parser.add_argument(
+        "--opencode-config",
+        help="Path to OpenCode config directory (auto-detected if not provided)",
     )
 
     args = parser.parse_args()

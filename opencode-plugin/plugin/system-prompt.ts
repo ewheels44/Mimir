@@ -6,12 +6,11 @@ import { homedir } from "os"
 const ENABLED = true
 const PROMPT_FILE = `${homedir()}/.config/opencode-openagents/prompts/system-context.md`
 const REMINDER_INTERVAL = 6
-const MIMIR_REMINDER_TEXT = `\n\n[System Reminder - Message #{{count.next}}]: \n**Mimir Context**: Remember to leverage Mimir tools (search, query, rag_workflow, knowledge_agent) for code exploration. Prefer the indexed knowledge graph over raw searches when available.\n`
+const MIMIR_REMINDER_TEXT = `[System Reminder - Message #{{count}}]: **Mimir Context**: Remember to leverage Mimir tools (search, query, rag_workflow, knowledge_agent) for code exploration. Prefer the indexed knowledge graph over raw searches when available.`
 
 interface SessionState {
   messageCount: number
   lastReminderAt: number
-  systemContextInjected: boolean
 }
 
 const sessionStates = new Map<string, SessionState>()
@@ -49,17 +48,9 @@ function interpolate(text: string): string {
 
 function getSessionState(sessionId: string): SessionState {
   if (!sessionStates.has(sessionId)) {
-    sessionStates.set(sessionId, { messageCount: 0, lastReminderAt: 0, systemContextInjected: false })
+    sessionStates.set(sessionId, { messageCount: 0, lastReminderAt: 0 })
   }
   return sessionStates.get(sessionId)!
-}
-
-function cleanupSession(sessionId: string): void {
-  sessionStates.delete(sessionId)
-}
-
-function buildMimirReminder(state: SessionState): string {
-  return MIMIR_REMINDER_TEXT.replace("{{count.next}}", String(state.messageCount + 1))
 }
 
 export const SystemPrompt: Plugin = async ({ client }) => {
@@ -79,52 +70,28 @@ export const SystemPrompt: Plugin = async ({ client }) => {
     async event(input) {
       const sessionId = input.event.properties?.info?.id
 
-      if (input.event.type === "session.created") {
-        if (!sessionId) return
-        getSessionState(sessionId)
-        return
-      }
-
       if (input.event.type === "message.updated" && sessionId) {
         const state = getSessionState(sessionId)
         state.messageCount++
-
-        if (!state.systemContextInjected) {
-          state.systemContextInjected = true
-          console.log(`[system-prompt] injecting system context into session: ${sessionId}`)
-
-          await client.session.prompt({
-            path: { id: sessionId },
-            body: {
-              noReply: true,
-              parts: [{ type: "text", text: promptContent }],
-            },
-          })
-        }
-
-        const messagesSinceReminder = state.messageCount - state.lastReminderAt
-        if (messagesSinceReminder >= REMINDER_INTERVAL) {
-          state.lastReminderAt = state.messageCount
-          const reminder = buildMimirReminder(state)
-
-          console.log(`[system-prompt] injecting Mimir reminder at message ${state.messageCount}`)
-
-          await client.session.prompt({
-            path: { id: sessionId },
-            body: {
-              noReply: true,
-              parts: [{ type: "text", text: reminder }],
-            },
-          })
-        }
-        return
       }
+    },
 
-      if (input.event.type === "session.idle" || input.event.type === "session.error") {
-        if (sessionId) {
-          cleanupSession(sessionId)
-        }
-        return
+    "experimental.chat.system.transform": async (input, output) => {
+      const sessionId = input.sessionID
+      if (!sessionId) return
+
+      const state = getSessionState(sessionId)
+
+      // Always inject system context
+      output.system.push(promptContent)
+
+      // Inject Mimir reminder every N messages
+      const messagesSinceReminder = state.messageCount - state.lastReminderAt
+      if (messagesSinceReminder >= REMINDER_INTERVAL) {
+        state.lastReminderAt = state.messageCount
+        const reminder = MIMIR_REMINDER_TEXT.replace("{{count}}", String(state.messageCount))
+        output.system.push(reminder)
+        console.log(`[system-prompt] injecting Mimir reminder at message ${state.messageCount}`)
       }
     },
   }

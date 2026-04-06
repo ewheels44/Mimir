@@ -171,6 +171,178 @@ python ~/Documents/Mimir/langgraph/cli.py agent "Find all API endpoints"
 # Just ask questions — agents use Mimir tools automatically
 ```
 
+### Enable Auto-Indexing (Recommended)
+
+Install the git hook so your knowledge base stays current automatically:
+
+```bash
+# Install in current project
+bash ~/Documents/Mimir/scripts/install-git-hooks.sh
+
+# Install in a specific project
+bash ~/Documents/Mimir/scripts/install-git-hooks.sh /path/to/project
+
+# Install in all Mimir projects
+bash ~/Documents/Mimir/scripts/install-git-hooks.sh --all
+```
+
+After installation, every `git commit` triggers a background incremental reindex. No manual steps needed.
+
+---
+
+## Auto-Indexing
+
+Mimir keeps your knowledge base current automatically via git hooks.
+
+### How It Works
+
+```
+git commit
+    │
+    ▼
+post-commit hook fires (background, non-blocking)
+    │
+    ▼
+Detects changed files (SHA-256 content hashing)
+    │
+    ▼
+Incremental reindex (only changed files)
+    │
+    ▼
+Knowledge base updated — agents see fresh context
+```
+
+### Features
+
+- **Zero manual steps** — runs after every commit
+- **Content-aware** — only reindexes files whose content actually changed
+- **Non-blocking** — runs in background, never blocks git operations
+- **Lock-protected** — prevents concurrent reindex runs
+- **macOS compatible** — works on macOS and Linux
+
+### Logs
+
+```bash
+# Check reindex activity
+cat .mimir/reindex.log
+
+# Check tracked files
+python .opencode/mimir-index.py --list
+```
+
+---
+
+## SDK Documentation Cache
+
+Mimir caches SDK documentation locally so agents get current API references without repeated API calls.
+
+### How It Works
+
+```
+Agent needs Stripe docs
+    │
+    ▼
+Check .knowledge/sdk-cache/stripe/
+    │
+    ├── Fresh (< 7 days) → Use cached docs (instant)
+    │
+    └── Stale or missing → Fetch from Context7 API → Cache locally
+```
+
+### MCP Tools
+
+| Tool | Purpose |
+|------|---------|
+| `sdk_cache_get` | Get SDK docs (fetches + caches if stale) |
+| `sdk_cache_list` | List all cached libraries with freshness info |
+
+### Usage
+
+```
+# In opencode sessions — agents use these automatically
+"How do I create a Stripe checkout session?"
+# → Agent calls sdk_cache_get(library="stripe", topic="checkout sessions")
+# → Gets live API docs, cached for 7 days
+```
+
+### Cache Location
+
+```
+.knowledge/sdk-cache/
+├── stripe/
+│   ├── checkout-sessions.md
+│   └── meta.json          # { "fetched_at": "...", "ttl_days": 7 }
+├── react/
+│   ├── usestate-hooks.md
+│   └── meta.json
+└── ...
+```
+
+### CLI
+
+```bash
+# List cached libraries
+python src/mimir/sdk_cache.py list
+
+# Get docs for a library
+python src/mimir/sdk_cache.py get stripe --topic "checkout sessions"
+
+# Force refresh
+python src/mimir/sdk_cache.py refresh stripe --topic "webhooks"
+```
+
+---
+
+## Skills
+
+Mimir includes seed skills that give agents immediate knowledge for common tasks.
+
+### Available Skills
+
+| Skill | Purpose |
+|-------|---------|
+| `mimir-knowledge` | Search the project knowledge base before executing tasks |
+| `unified-query` | Single entry point — searches OpenSpace skills, SDK cache, and Mimir automatically |
+| `sdk-onboarding` | Guide for onboarding developers to any SDK or library |
+| `sdk-integration-pattern` | Common patterns for integrating external SDKs (config, errors, testing) |
+| `find-and-follow-pattern` | "How do I add a new X?" — find existing patterns and follow them |
+| `codebase-analysis-workflow` | Systematic codebase analysis in 5 steps |
+| `system-health-check` | Comprehensive system diagnostics |
+
+### Unified Query
+
+The `unified-query` skill automatically hits all knowledge layers:
+
+```
+Your question
+    │
+    ▼
+Layer 1: OpenSpace Skills ─── "Do I already know the answer?"
+    │
+    ▼
+Layer 2: SDK Doc Cache ────── "Do I have fresh docs for this?"
+    │
+    ▼
+Layer 3: Mimir Knowledge ──── "What does the project codebase say?"
+    │
+    ▼
+Layer 4: Synthesize ───────── Combined answer with source attribution
+```
+
+### SDK Onboarding Flow
+
+For new developers learning a project's SDK integrations:
+
+```
+Dev: "How do I add Stripe checkout to the billing page?"
+
+1. Mimir: Finds existing payment code in the project
+2. SDK cache: Fetches live Stripe API docs
+3. Skill: Guides integration following project patterns
+4. Agent: Proposes plan using all three sources
+5. Dev: Approves → Agent implements → OpenSpace learns
+```
+
 ---
 
 ## Usage Examples
@@ -199,6 +371,10 @@ Agent: [Calls mimir-knowledge/rag_workflow] → Structured analysis with sources
 | `knowledge_agent` | Agentic exploration | Deep research tasks |
 | `stats` | Index statistics | Checking coverage |
 | `reindex` | Rebuild index | After major changes |
+| `sdk_cache_get` | Get SDK docs | Fetching library documentation |
+| `sdk_cache_list` | List cached SDKs | Checking what's cached |
+| `enrich_task` | Project context for tasks | Before executing OpenSpace tasks |
+| `openspace_health` | Check Mimir-OpenSpace bridge | Before depending on enrich_task |
 
 ### Subagent Context (Critical)
 
@@ -232,15 +408,35 @@ Here's a complete working setup from a real installation:
 ├── mcp_server_llamaindex.py
 ├── mimir-init.py
 ├── scripts/
-│   └── run_mcp_server.sh    # MCP wrapper script
+│   ├── run_mcp_server.sh         # MCP wrapper script
+│   ├── git-hooks/
+│   │   └── post-commit           # Auto-index git hook
+│   ├── install-git-hooks.sh      # Hook installer
+│   └── mimir-reindex-hook.py     # Hook reindex logic
 ├── src/mimir/               # Core modules
+│   ├── indexing.py               # Document indexing
+│   ├── sdk_cache.py              # SDK doc caching
+│   ├── knowledge_graph.py        # Code relationship extraction
+│   ├── watcher.py                # File watcher
+│   └── metrics.py                # Cost tracking
 ├── langgraph/               # Workflows
+├── skills/                  # Agent skills
+│   ├── mimir-knowledge/          # Knowledge base search
+│   ├── unified-query/            # Multi-layer query orchestration
+│   ├── sdk-onboarding/           # SDK onboarding guide
+│   ├── sdk-integration-pattern/  # Integration patterns
+│   └── find-and-follow-pattern/  # Pattern discovery
 └── opencode-plugin/         # System context plugin
 
 ~/Projects/AnyProject/       # Any project using Mimir
 ├── docs/
-├── .knowledge/llamaindex/
-├── .mimir/config.json
+├── .knowledge/
+│   ├── llamaindex/               # Vector index
+│   └── sdk-cache/                # Cached SDK docs
+├── .mimir/
+│   ├── config.json
+│   ├── index_state.json          # File hash tracking
+│   └── reindex.log               # Auto-index logs
 └── .opencode/mimir-index.py
 ```
 

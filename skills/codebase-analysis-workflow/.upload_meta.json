@@ -1,0 +1,7 @@
+{
+  "origin": "captured",
+  "parent_skill_ids": [],
+  "change_summary": "Systematic codebase analysis workflow that explores project structure, identifies relevant files by keywords, reads dependencies, and produces structured audit reports with concrete recommendations.",
+  "created_by": "openspace",
+  "tags": []
+}

@@ -485,6 +485,70 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         )
         return result["messages"][-1].content
 
+    @mcp.tool()
+    async def enrich_task(task: str, top_k: int = 5) -> str:
+        """Search Mimir for project context relevant to an OpenSpace task.
+
+        Call this BEFORE executing tasks to get project-specific context
+        (conventions, APIs, patterns) that generic skills lack.
+
+        Args:
+            task: Task description in natural language.
+            top_k: Number of context chunks to retrieve (default: 5).
+        """
+        from src.mimir.openspace_bridge import enrich_task_for_openspace
+
+        result = enrich_task_for_openspace(task, server.config.project_root)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    @mcp.tool()
+    async def openspace_health() -> str:
+        """Check if the Mimir ↔ OpenSpace bridge is healthy.
+
+        Returns bridge status, circuit breaker state, and index availability.
+        Call this before depending on enrich_task.
+        """
+        from src.mimir.openspace_bridge import get_bridge
+
+        bridge = get_bridge(server.config.project_root)
+        return json.dumps(bridge.health_check(), indent=2)
+
+    @mcp.tool()
+    async def sdk_cache_get(library: str, topic: str = "general") -> str:
+        """Get SDK documentation from local cache (fetches from Context7 if stale).
+
+        Use this to get up-to-date docs for any library/framework without
+        burning tokens on repeated API calls. Docs are cached for 7 days.
+
+        Args:
+            library: Library name (e.g., "stripe", "nextjs", "react").
+            topic: Specific topic to fetch (e.g., "checkout sessions", "routing").
+        """
+        from src.mimir.sdk_cache import SDKCache
+
+        cache = SDKCache(server.config.project_root)
+        docs = cache.get(library, topic)
+        if docs:
+            return docs
+        return json.dumps(
+            {
+                "error": f"No docs found for {library}/{topic}",
+                "suggestion": "Try a different topic or check the library name",
+            }
+        )
+
+    @mcp.tool()
+    async def sdk_cache_list() -> str:
+        """List all cached SDK documentation libraries with freshness info.
+
+        Returns a list of cached libraries, their freshness status, and topics.
+        """
+        from src.mimir.sdk_cache import SDKCache
+
+        cache = SDKCache(server.config.project_root)
+        cached = cache.list_cached()
+        return json.dumps(cached, indent=2)
+
     return mcp
 
 

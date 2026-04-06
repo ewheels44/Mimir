@@ -107,3 +107,4 @@ Opens at http://localhost:5173 (dev) or http://localhost:8000 (production).
 │  - Knowledge graph visualization                        │
 └─────────────────────────────────────────────────────────┘
 ```
+

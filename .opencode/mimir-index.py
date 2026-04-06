@@ -7,6 +7,7 @@ Usage:
     python .opencode/mimir-index.py --reindex    # Force rebuild index
     python .opencode/mimir-index.py --add src    # Add specific directory
     python .opencode/mimir-index.py --add-file file.txt  # Add single file
+    python .opencode/mimir-index.py --remove-file file.txt  # Remove single file
     python .opencode/mimir-index.py --list       # Show indexed contents
     python .opencode/mimir-index.py --update     # Update this script
     python .opencode/mimir-index.py --no-knowledge-graph  # Skip KG extraction
@@ -257,6 +258,9 @@ def main():
         "--add-file", metavar="FILE", help="Add a single file to existing index"
     )
     parser.add_argument(
+        "--remove-file", metavar="FILE", help="Remove a single file from the index"
+    )
+    parser.add_argument(
         "--list", action="store_true", help="List all indexed files and directories"
     )
     parser.add_argument(
@@ -355,7 +359,35 @@ def main():
 
         from mimir.indexing import add_file_to_index
 
-        success = add_file_to_index(source_file, knowledge_dir, verbose=True)
+        success = add_file_to_index(
+            source_file, knowledge_dir, verbose=True, project_root=project_root
+        )
+        return 0 if success else 1
+
+    if args.remove_file:
+        source_file = Path(args.remove_file).resolve()
+        if not (knowledge_dir / "index_store.json").exists():
+            print("\n❌ No existing index found.")
+            return 1
+
+        from mimir.indexing import remove_file_from_index
+
+        # Also remove from config files list if present
+        config_path = mimir_config_dir / "config.json"
+        try:
+            with open(config_path) as f:
+                config = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            config = {}
+
+        file_entry = get_relative_or_absolute_path(source_file, project_root)
+        if "files" in config and file_entry in config["files"]:
+            config["files"].remove(file_entry)
+            with open(config_path, "w") as f:
+                json.dump(config, f, indent=2)
+            print(f"📝 Removed from config: {file_entry}")
+
+        success = remove_file_from_index(source_file, knowledge_dir, verbose=True)
         return 0 if success else 1
 
     if args.list:
@@ -411,7 +443,9 @@ def main():
             if not file_path.is_absolute():
                 file_path = project_root / file_path
             if file_path.exists():
-                add_file_to_index(file_path, knowledge_dir, verbose=False)
+                add_file_to_index(
+                    file_path, knowledge_dir, verbose=False, project_root=project_root
+                )
             else:
                 print(f"   ⚠️  File not found: {file_path}")
 

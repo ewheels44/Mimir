@@ -53,6 +53,7 @@ except ImportError:
 
 MIMIR_DIR = Path.home() / "Documents" / "Mimir"
 sys.path.insert(0, str(MIMIR_DIR))
+sys.path.insert(0, str(MIMIR_DIR / "src"))
 from src.mimir.metrics import get_tracker
 
 from mcp.server.fastmcp import FastMCP
@@ -344,6 +345,26 @@ class KnowledgeServer:
                 return f"Successfully added documents from {source_dir}"
             return "Error adding documents"
 
+    def remove_file(self, source_file: Path) -> str:
+        from mimir.indexing import remove_file_from_index
+
+        resolved = source_file.resolve()
+        if not resolved.exists():
+            # Still attempt removal — file may have been deleted from disk
+            pass
+
+        with _index_lock:
+            success = remove_file_from_index(
+                source_file=resolved,
+                knowledge_dir=self.config.knowledge_dir,
+                verbose=True,
+            )
+
+            if success:
+                self._index = None
+                return f"Successfully removed {resolved} from index"
+            return f"File not found in index: {resolved}"
+
     def get_stats(self) -> dict:
         index = self.get_index()
         stats = {
@@ -455,6 +476,18 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
     async def reindex() -> str:
         """Rebuild the knowledge base from the docs directory."""
         return server.index_documents()
+
+    @mcp.tool()
+    async def remove_file(file_path: str) -> str:
+        """Remove a specific file from the knowledge base index.
+
+        Args:
+            file_path: Absolute or relative path of the file to remove from the index.
+        """
+        path = Path(file_path)
+        if not path.is_absolute():
+            path = server.config.project_root / path
+        return server.remove_file(path)
 
     @mcp.tool()
     async def stats() -> str:
@@ -661,6 +694,7 @@ def main():
     parser.add_argument(
         "--add", metavar="DIR", help="Add documents from DIR to existing index"
     )
+    parser.add_argument("--remove", metavar="FILE", help="Remove a file from the index")
     parser.add_argument("--query", metavar="QUESTION", help="Query the knowledge base")
     parser.add_argument(
         "--stats", action="store_true", help="Show knowledge base statistics"
@@ -693,6 +727,11 @@ def main():
     if args.add:
         source_dir = Path(args.add)
         print(server.add_documents(source_dir))
+        return
+
+    if args.remove:
+        source_file = Path(args.remove)
+        print(server.remove_file(source_file))
         return
 
     if args.query:

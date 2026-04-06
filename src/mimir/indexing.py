@@ -730,6 +730,7 @@ def add_file_to_index(
     source_file: Path,
     knowledge_dir: Path,
     verbose: bool = True,
+    project_root: Optional[Path] = None,
 ) -> bool:
     """
     Add a single file to existing index.
@@ -738,6 +739,7 @@ def add_file_to_index(
         source_file: File to add
         knowledge_dir: Where the existing index is stored
         verbose: Whether to print progress output
+        project_root: Optional project root for hash state tracking
 
     Returns:
         True if successful, False otherwise
@@ -805,14 +807,157 @@ def add_file_to_index(
         if verbose:
             print("   ✓ File indexed")
             print("   ✓ Manifest updated")
-            print("\n✅ File added successfully!")
 
         index.storage_context.persist(persist_dir=str(knowledge_dir))
+
+        # Update hash state for incremental change detection
+        if project_root:
+            file_hash = compute_file_hash(source_file)
+            if file_hash:
+                state = load_hash_state(project_root)
+                state["file_hashes"][str(source_file.resolve())] = file_hash
+                save_hash_state(project_root, state)
+                if verbose:
+                    print("   ✓ Hash state updated")
+
+        if verbose:
+            print("\n✅ File added successfully!")
+
         return True
 
     except Exception as e:
         if verbose:
             print(f"   ❌ Failed to index file: {e}")
+        return False
+
+
+def remove_from_manifest(knowledge_dir: Path, file_path: Path) -> bool:
+    """Remove a file from the indexing manifest.
+
+    Args:
+        knowledge_dir: Where the index is stored
+        file_path: Absolute path of the file to remove
+
+    Returns:
+        True if the file was found and removed from manifest, False otherwise
+    """
+    manifest = load_manifest(knowledge_dir)
+    resolved = str(file_path.resolve())
+    found = False
+
+    for dir_key, info in list(manifest["indexed_directories"].items()):
+        files = info.get("files", [])
+        if resolved in files:
+            files.remove(resolved)
+            info["files"] = files
+            info["file_count"] = len(files)
+            info["document_count"] = max(0, info.get("document_count", 1) - 1)
+            info["last_indexed"] = datetime.now().isoformat()
+            found = True
+
+            # Remove directory entry if no files left
+            if not files:
+                del manifest["indexed_directories"][dir_key]
+
+    if found:
+        manifest["total_documents"] = sum(
+            entry.get("document_count", 0)
+            for entry in manifest["indexed_directories"].values()
+        )
+        save_manifest(knowledge_dir, manifest)
+
+    return found
+
+
+def remove_file_from_index(
+    source_file: Path,
+    knowledge_dir: Path,
+    verbose: bool = True,
+) -> bool:
+    """Remove a single file from the existing index.
+
+    Searches by stable doc_id first (file:// URI), then falls back to
+    matching by file_path metadata for documents indexed via SimpleDirectoryReader.
+
+    Args:
+        source_file: File to remove (matched by absolute path)
+        knowledge_dir: Where the existing index is stored
+        verbose: Whether to print progress output
+
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        from llama_index.core import (
+            load_index_from_storage,
+            StorageContext,
+        )
+    except ImportError as e:
+        print(f"❌ Missing dependency: {e}")
+        return False
+
+    if not (knowledge_dir / "index_store.json").exists():
+        if verbose:
+            print("❌ No existing index found.")
+        return False
+
+    resolved = source_file.resolve()
+    resolved_str = str(resolved)
+
+    if verbose:
+        print(f"\n🗑️  Removing file from index: {resolved}")
+
+    try:
+        storage_context = StorageContext.from_defaults(persist_dir=str(knowledge_dir))
+        index = load_index_from_storage(storage_context)
+
+        docstore = index.storage_context.docstore
+
+        # Strategy 1: Try stable doc_id (used by add_file_to_index)
+        doc_id = _get_stable_doc_id(resolved)
+        if doc_id in docstore.docs:
+            index.delete_ref_doc(doc_id, delete_from_docstore=True)
+            if verbose:
+                print("   ✓ Removed from vector index (matched by doc_id)")
+        else:
+            # Strategy 2: Search by file_path metadata (used by SimpleDirectoryReader)
+            matched_ids = [
+                did
+                for did, doc in docstore.docs.items()
+                if getattr(doc, "metadata", {}).get("file_path") == resolved_str
+            ]
+
+            if not matched_ids:
+                if verbose:
+                    print(f"   ⚠️  File not found in index: {resolved_str}")
+                return False
+
+            for did in matched_ids:
+                index.delete_ref_doc(did, delete_from_docstore=True)
+            if verbose:
+                print(
+                    f"   ✓ Removed {len(matched_ids)} node(s) from vector index "
+                    "(matched by file_path metadata)"
+                )
+
+        # Update manifest
+        manifest_updated = remove_from_manifest(knowledge_dir, resolved)
+        if verbose and manifest_updated:
+            print("   ✓ Manifest updated")
+        elif verbose:
+            print("   ⚠️  File not found in manifest (already removed from index)")
+
+        index.storage_context.persist(persist_dir=str(knowledge_dir))
+
+        if verbose:
+            print("   ✓ Index persisted")
+            print("\n✅ File removed successfully!")
+
+        return True
+
+    except Exception as e:
+        if verbose:
+            print(f"   ❌ Failed to remove file: {e}")
         return False
 
 

@@ -6,9 +6,8 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMe
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
-from langchain_mcp_adapters.client import MultiServerMCPClient
 
-from .utils import create_llm, get_mcp_server_path, get_mcp_env, detect_project_root
+from .utils import create_llm, detect_project_root, get_mcp_client
 
 
 class AgentState(TypedDict):
@@ -18,19 +17,8 @@ class AgentState(TypedDict):
 
 async def check_knowledge(state: AgentState) -> AgentState:
     project_root = detect_project_root()
-    server_path = get_mcp_server_path()
-    env = get_mcp_env(project_root)
+    client = get_mcp_client(project_root)
 
-    client = MultiServerMCPClient(
-        {
-            "llamaindex": {
-                "command": "python",
-                "args": [str(server_path)],
-                "transport": "stdio",
-                "env": env,
-            }
-        }
-    )
     try:
         tools = await client.get_tools()
         stats_tool = next((t for t in tools if t.name == "stats"), None)
@@ -82,19 +70,8 @@ async def agent(state: AgentState) -> AgentState:
 Use the search or query tools to find information. Be concise and cite sources."""
 
     project_root = detect_project_root()
-    server_path = get_mcp_server_path()
-    env = get_mcp_env(project_root)
+    client = get_mcp_client(project_root)
 
-    client = MultiServerMCPClient(
-        {
-            "llamaindex": {
-                "command": "python",
-                "args": [str(server_path)],
-                "transport": "stdio",
-                "env": env,
-            }
-        }
-    )
     tools = await client.get_tools()
     llm_with_tools = llm.bind_tools(tools)
 
@@ -112,19 +89,8 @@ async def execute_tools(state: AgentState) -> AgentState:
         return state
 
     project_root = detect_project_root()
-    server_path = get_mcp_server_path()
-    env = get_mcp_env(project_root)
+    client = get_mcp_client(project_root)
 
-    client = MultiServerMCPClient(
-        {
-            "llamaindex": {
-                "command": "python",
-                "args": [str(server_path)],
-                "transport": "stdio",
-                "env": env,
-            }
-        }
-    )
     tools = await client.get_tools()
     tools_by_name = {tool.name: tool for tool in tools}
 

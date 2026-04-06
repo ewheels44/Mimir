@@ -5,9 +5,8 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
-from langchain_mcp_adapters.client import MultiServerMCPClient
 
-from .utils import create_llm, get_mcp_server_path, get_mcp_env, detect_project_root
+from .utils import create_llm, detect_project_root, get_mcp_client
 from src.mimir.token_callback import create_token_callback, TokenUsageCallbackHandler
 
 
@@ -20,19 +19,8 @@ class AgentState(TypedDict):
 async def retrieve(state: AgentState) -> AgentState:
     last_message = state["messages"][-1].content
     project_root = detect_project_root()
-    server_path = get_mcp_server_path()
-    env = get_mcp_env(project_root)
+    client = get_mcp_client(project_root)
 
-    client = MultiServerMCPClient(
-        {
-            "llamaindex": {
-                "command": "python",
-                "args": [str(server_path)],
-                "transport": "stdio",
-                "env": env,
-            }
-        }
-    )
     tools = await client.get_tools()
     search_tool = next((t for t in tools if t.name == "search"), None)
 

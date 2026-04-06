@@ -7,9 +7,10 @@ Handles OpenRouter API configuration and MCP client setup.
 import json
 import os
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, Any
 
 from langchain_openai import ChatOpenAI
+from langchain_mcp_adapters.client import MultiServerMCPClient
 
 
 def get_openrouter_config() -> Tuple[str, str]:
@@ -121,3 +122,56 @@ def detect_project_root() -> Path:
         current = current.parent
 
     return cwd
+
+
+def get_mcp_config(project_root: Optional[Path] = None) -> Dict[str, Any]:
+    """Get MCP client configuration.
+
+    Centralizes the MCP server configuration that was previously duplicated
+    in knowledge_agent.py and rag.py.
+
+    Args:
+        project_root: Project root directory (auto-detected if not provided)
+
+    Returns:
+        Dictionary with MCP server configuration for MultiServerMCPClient
+    """
+    if project_root is None:
+        project_root = detect_project_root()
+
+    server_path = get_mcp_server_path()
+    env = get_mcp_env(project_root)
+
+    # Use virtual environment Python if available, otherwise fall back to system Python
+    venv_python = project_root / ".venv" / "bin" / "python"
+    python_command = str(venv_python) if venv_python.exists() else "python"
+
+    return {
+        "llamaindex": {
+            "command": python_command,
+            "args": [str(server_path)],
+            "transport": "stdio",
+            "env": env,
+        }
+    }
+
+
+def get_mcp_client(project_root: Optional[Path] = None) -> MultiServerMCPClient:
+    """Get an MCP client instance.
+
+    Note: As of langchain-mcp-adapters 0.1.0, MultiServerMCPClient no longer
+    supports context manager usage. Use client.get_tools() directly instead.
+
+    Args:
+        project_root: Project root directory (auto-detected if not provided)
+
+    Returns:
+        MultiServerMCPClient instance
+
+    Example:
+        client = get_mcp_client()
+        tools = await client.get_tools()
+        # ... use tools ...
+    """
+    config = get_mcp_config(project_root)
+    return MultiServerMCPClient(config)

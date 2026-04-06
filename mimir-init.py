@@ -20,6 +20,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -81,6 +82,65 @@ def install_opencode_plugin(
     if not prompt_dest.exists() or force:
         shutil.copy2(prompt_source, prompt_dest)
         installed.append(prompt_dest)
+
+    return installed
+
+
+def install_opencode_agents(
+    mimir_root: Path, config_dir: Path, force: bool = False
+) -> list[Path]:
+    """Install Mimir-enhanced agent definitions into OpenCode's config directory.
+
+    These agent definitions include Mimir MCP tool permissions, ensuring subagents
+    can use mimir-knowledge_* tools for project-specific queries.
+
+    Copies:
+    - opencode-config/agent/subagents/core/*.md -> {config_dir}/agent/subagents/core/
+    - opencode-config/agent/subagents/code/*.md -> {config_dir}/agent/subagents/code/
+
+    Backs up existing files before overwriting.
+
+    Returns list of installed file paths.
+    """
+    agent_source_dir = mimir_root / "opencode-config" / "agent"
+
+    if not agent_source_dir.exists():
+        print(f"   ⚠️  Agent source directory not found: {agent_source_dir}")
+        return []
+
+    installed = []
+    agent_dest_dir = config_dir / "agent"
+
+    # Define which agent files to install
+    agent_files = [
+        ("subagents/core/contextscout.md", "ContextScout"),
+        ("subagents/core/task-manager.md", "TaskManager"),
+        ("subagents/code/coder-agent.md", "CoderAgent"),
+    ]
+
+    for rel_path, agent_name in agent_files:
+        source_file = agent_source_dir / rel_path
+        dest_file = agent_dest_dir / rel_path
+
+        if not source_file.exists():
+            print(f"   ⚠️  Agent source not found: {source_file}")
+            continue
+
+        # Create parent directories
+        dest_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Backup existing file if it exists and we're forcing
+        if dest_file.exists() and force:
+            backup_file = dest_file.with_suffix(f".md.backup-{int(time.time())}")
+            shutil.copy2(dest_file, backup_file)
+            print(f"   📦 Backed up: {backup_file.name}")
+
+        if not dest_file.exists() or force:
+            shutil.copy2(source_file, dest_file)
+            installed.append(dest_file)
+            print(f"   ✓ Installed agent: {agent_name}")
+        else:
+            print(f"   ⏭️  Skipped: {agent_name} (exists, use --force to overwrite)")
 
     return installed
 
@@ -243,22 +303,24 @@ def create_opencode_json(project_root: Path, mimir_root: Path) -> Path:
 def create_mimir_skill(project_root: Path, mimir_root: Path) -> Path:
     """Create a Mimir skill file for subagent context inheritance.
 
-    When oh-my-opencode spawns subagents (explore, librarian) via task(),
-    those subagents do NOT inherit the parent agent's AGENTS.md context.
-    They only receive their base agent configuration from the global
-    oh-my-opencode.json, missing project-specific Mimir directives.
+    NOTE: The load_skills parameter does NOT exist in the task tool.
+    Instead, subagents now have Mimir tool permissions built-in.
 
-    This skill file allows subagents to receive the full Mimir context
-    by loading it via the load_skills parameter:
+    This skill file is kept for reference and can be used to embed
+    Mimir instructions directly in prompts for subagents that don't
+    have built-in Mimir permissions (explore, librarian).
 
+    Usage for subagents with built-in Mimir permissions (ContextScout, CoderAgent, TaskManager):
         task(
-            subagent_type="explore",
-            load_skills=["mimir"],
-            prompt="..."
+            subagent_type="ContextScout",
+            prompt="Find patterns. Use mimir-knowledge_search for project queries."
         )
 
-    The skill content is injected into the subagent's system prompt,
-    ensuring they follow Mimir's tool priority directives.
+    Usage for other subagents (explore, librarian):
+        task(
+            subagent_type="explore",
+            prompt="Find patterns. IMPORTANT: Use mimir-knowledge_search instead of grep."
+        )
     """
     skills_dir = project_root / ".opencode" / "skills"
     skills_dir.mkdir(parents=True, exist_ok=True)
@@ -268,12 +330,12 @@ def create_mimir_skill(project_root: Path, mimir_root: Path) -> Path:
 
     skill_content = f"""---
 name: mimir
-description: Mimir knowledge base directives for subagent context inheritance. Load this skill when spawning explore/librarian subagents to ensure they use Mimir tools by default.
+description: Mimir knowledge base directives for subagent context inheritance. Subagents now have Mimir tool permissions built-in - just include instructions in your prompt to use them.
 ---
 
 # Mimir Knowledge Base — Subagent Context
 
-This skill ensures that spawned subagents (explore, librarian) receive the full Mimir context
+This skill ensures that spawned subagents receive the full Mimir context
 that would otherwise be missing when they are created via task().
 
 ## Why This Skill Is Needed
@@ -289,34 +351,26 @@ The subagent starts with a clean context containing only:
 - NOT the project-specific opencode.json instructions
 - NOT the full AGENTS.md directives
 
-By loading this skill, the subagent receives the complete Mimir directive.
-
 ## How to Use
 
-Always load this skill when spawning parallel agents:
+**Note**: The `load_skills` parameter does NOT exist in the task tool. Instead, subagents now have Mimir tool permissions built-in.
+
+For subagents with built-in Mimir permissions (ContextScout, CoderAgent, TaskManager), just include instructions:
+
+```
+task(
+    subagent_type="ContextScout",
+    prompt="Find authentication patterns. Use mimir-knowledge_search for project-specific queries."
+)
+```
+
+For other subagents (explore, librarian), embed Mimir instructions in the prompt:
 
 ```
 task(
     subagent_type="explore",
-    load_skills=["mimir"],
-    prompt="Find authentication patterns..."
-)
-```
-
-Or for multiple subagents:
-
-```
-task(
-    subagent_type="explore",
-    load_skills=["mimir"],
     run_in_background=true,
-    prompt="Find auth implementations..."
-)
-task(
-    subagent_type="librarian",
-    load_skills=["mimir"],
-    run_in_background=true,
-    prompt="Research JWT best practices..."
+    prompt="Find auth implementations. IMPORTANT: Use mimir-knowledge_search for project-specific queries instead of grep when available."
 )
 ```
 
@@ -398,7 +452,10 @@ def init_project(project_root: Path, server_script: Path, args) -> bool:
         mimir_skill_path = create_mimir_skill(project_root, mimir_root)
         tqdm.write(f"   ✓ Created: {mimir_skill_path}")
         tqdm.write(
-            "   ⚠️  IMPORTANT: Load skill when spawning subagents: load_skills=['mimir']"
+            "   ⚠️  IMPORTANT: Subagents now have Mimir tool permissions built-in."
+        )
+        tqdm.write(
+            "      Just include instructions: 'Use mimir-knowledge_search for project queries.'"
         )
     else:
         tqdm.write(
@@ -420,6 +477,15 @@ def init_project(project_root: Path, server_script: Path, args) -> bool:
             tqdm.write(
                 f"   ⏭️  Plugin already installed in {opencode_config_dir}/plugin/ (use --force to overwrite)"
             )
+
+        # Install Mimir-enhanced agent definitions
+        tqdm.write("\n🤖 Installing Mimir-enhanced agent definitions...")
+        installed_agents = install_opencode_agents(
+            mimir_root, opencode_config_dir, args.force
+        )
+        if installed_agents:
+            tqdm.write(f"   ✓ Installed {len(installed_agents)} agent definitions")
+            tqdm.write("   ⚠️  Restart OpenCode for agent changes to take effect")
     else:
         tqdm.write("   ⚠️  OpenCode config dir not found — plugin not installed")
         tqdm.write(
@@ -485,14 +551,22 @@ def init_project(project_root: Path, server_script: Path, args) -> bool:
     print(
         "      Customize opencode.json to chain AGENTS.md files for multi-module projects."
     )
-    print("\n   6. Using with Subagents (explore/librarian):")
-    print("      When spawning parallel agents, always load the mimir skill:")
+    print("\n   6. Using with Subagents:")
+    print("      Subagents (ContextScout, CoderAgent, TaskManager) now have Mimir")
+    print("      tool permissions built-in. Just include instructions in your prompt:")
+    print("         task(")
+    print("             subagent_type='ContextScout',")
+    print(
+        "             prompt='Find patterns. Use mimir-knowledge_search for project queries.'"
+    )
+    print("         )")
+    print("      For other subagents (explore, librarian), embed Mimir instructions:")
     print("         task(")
     print("             subagent_type='explore',")
-    print("             load_skills=['mimir'],")
-    print("             prompt='...'")
+    print(
+        "             prompt='Find patterns. IMPORTANT: Use mimir-knowledge_search instead of grep.'"
+    )
     print("         )")
-    print("      This ensures subagents inherit Mimir tool priority directives.")
     print("\n🌐 Web UI:")
     print("   ./ ~/Documents/Mimir/scripts/start_web_ui.sh")
     print("   Then open http://localhost:8000")

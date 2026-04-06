@@ -1,11 +1,11 @@
 ---
 name: mimir
-description: Mimir knowledge base directives for subagent context inheritance. Load this skill when spawning explore/librarian subagents to ensure they use Mimir tools by default.
+description: Mimir knowledge base directives for subagent context inheritance. Subagents now have Mimir tool permissions built-in - just include instructions in your prompt to use them.
 ---
 
 # Mimir Knowledge Base — Subagent Context
 
-This skill ensures that spawned subagents (explore, librarian) receive the full Mimir context
+This skill ensures that spawned subagents receive the full Mimir context
 that would otherwise be missing when they are created via task().
 
 ## Why This Skill Is Needed
@@ -21,34 +21,26 @@ The subagent starts with a clean context containing only:
 - NOT the project-specific opencode.json instructions
 - NOT the full AGENTS.md directives
 
-By loading this skill, the subagent receives the complete Mimir directive.
-
 ## How to Use
 
-Always load this skill when spawning parallel agents:
+**Note**: The `load_skills` parameter does not exist in the task tool. Instead, subagents now have Mimir tool permissions built-in.
+
+For subagents with built-in Mimir permissions (ContextScout, CoderAgent, TaskManager), just include instructions:
+
+```
+task(
+    subagent_type="ContextScout",
+    prompt="Find authentication patterns. Use mimir-knowledge_search for project-specific queries."
+)
+```
+
+For other subagents (explore, librarian), embed Mimir instructions in the prompt:
 
 ```
 task(
     subagent_type="explore",
-    load_skills=["mimir"],
-    prompt="Find authentication patterns..."
-)
-```
-
-Or for multiple subagents:
-
-```
-task(
-    subagent_type="explore",
-    load_skills=["mimir"],
     run_in_background=true,
-    prompt="Find auth implementations..."
-)
-task(
-    subagent_type="librarian",
-    load_skills=["mimir"],
-    run_in_background=true,
-    prompt="Research JWT best practices..."
+    prompt="Find auth implementations. IMPORTANT: Use mimir-knowledge_search for project-specific queries instead of grep when available."
 )
 ```
 
@@ -127,40 +119,39 @@ When explicitly requested via directives like `[search-mode]`, "launch multiple 
 - **NOT** the project-specific `opencode.json` instructions
 - **NOT** the full AGENTS.md directives
 
-**Solution**: Always load the `mimir` skill when spawning subagents:
+**Solution**: Subagents now have Mimir tool permissions built-in!
+
+The following subagents have been updated with Mimir MCP tool permissions:
+- **ContextScout** — `mimir-knowledge_search`, `mimir-knowledge_query`, `mimir-knowledge_enrich_task`, etc.
+- **CoderAgent** — `mimir-knowledge_search`, `mimir-knowledge_query`, `mimir-knowledge_enrich_task`, etc.
+- **TaskManager** — `mimir-knowledge_search`, `mimir-knowledge_query`, `mimir-knowledge_enrich_task`, etc.
+
+**Usage**: When spawning these subagents, they will automatically have access to Mimir tools. Just include instructions in your prompt:
 
 ```typescript
-// CORRECT - Subagent receives full Mimir context
+// CORRECT - Subagent has Mimir tool access, instruct it to use them
 task(
-    subagent_type="explore",
-    load_skills=["mimir"],
-    run_in_background=true,
-    prompt="Find authentication patterns in the codebase..."
+    subagent_type="ContextScout",
+    description="Find auth patterns",
+    prompt="Find authentication patterns in the codebase. Use mimir-knowledge_search for project-specific queries, then fall back to context files for standards."
 )
 
-// CORRECT - Multiple parallel subagents
+// CORRECT - CoderAgent with Mimir
 task(
-    subagent_type="explore",
-    load_skills=["mimir"],
-    run_in_background=true,
-    prompt="Search for API route handlers..."
-)
-task(
-    subagent_type="librarian",
-    load_skills=["mimir"],
-    run_in_background=true,
-    prompt="Research best practices for JWT authentication..."
+    subagent_type="CoderAgent",
+    description="Implement auth",
+    prompt="Implement JWT authentication. Use mimir-knowledge_enrich_task to get project context first, then implement following project patterns."
 )
 
-// WRONG - Subagent will NOT use Mimir tools by default
+// For other subagents (explore, librarian), embed Mimir instructions in the prompt:
 task(
     subagent_type="explore",
     run_in_background=true,
-    prompt="Find authentication patterns..."  // Will use grep instead of mimir-knowledge
+    prompt="Find authentication patterns. IMPORTANT: Use mimir-knowledge_search for project-specific queries instead of grep when available."
 )
 ```
 
-The `mimir` skill is automatically created at `.opencode/skills/mimir.md` during project initialization. It contains the full AGENTS.md content and ensures subagents follow Mimir tool priority.
+**Note**: The `load_skills` parameter documented elsewhere does not exist in the task tool. Instead, we've added Mimir tool permissions directly to the subagent definitions.
 
 ## When to Use Knowledge Base
 

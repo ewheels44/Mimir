@@ -378,22 +378,45 @@ Agent: [Calls mimir-knowledge/rag_workflow] → Structured analysis with sources
 
 ### Subagent Context (Critical)
 
-When spawning subagents, they **don't inherit** Mimir context. Always load the skill:
+When spawning subagents, they **don't inherit** Mimir context. But now they have Mimir tool permissions built-in!
+
+**For subagents with built-in Mimir permissions (ContextScout, CoderAgent, TaskManager):**
 
 ```typescript
-// CORRECT
+// CORRECT - Just include instructions in your prompt
 task(
-    subagent_type="explore",
-    load_skills=["mimir"],
-    prompt="Find authentication patterns..."
+    subagent_type="ContextScout",
+    prompt="Find authentication patterns. Use mimir-knowledge_search for project-specific queries."
 )
 
-// WRONG - subagent will use grep instead of Mimir
+// WRONG - load_skills parameter does NOT exist
 task(
-    subagent_type="explore",
+    subagent_type="ContextScout",
+    load_skills=["mimir"],  // ❌ This parameter doesn't exist!
     prompt="Find authentication patterns..."
 )
 ```
+
+**For other subagents (explore, librarian), embed Mimir instructions in the prompt:**
+
+```typescript
+task(
+    subagent_type="explore",
+    run_in_background=true,
+    prompt="Find authentication patterns. IMPORTANT: Use mimir-knowledge_search for project-specific queries instead of grep when available."
+)
+```
+
+### How It Works
+
+The install script (`mimir-init.py`) copies Mimir-enhanced agent definitions to `~/.config/opencode/agent/`. These definitions include:
+
+- `mimir-knowledge_search` — Semantic search across indexed docs/code
+- `mimir-knowledge_query` — Synthesized answers from knowledge base
+- `mimir-knowledge_enrich_task` — Project-specific context before executing
+- `mimir-knowledge_sdk_cache_get` — Current API docs from cache
+
+This ensures subagents can use Mimir tools without needing a `load_skills` parameter.
 
 ---
 
@@ -629,10 +652,22 @@ python .opencode/mimir-index.py
 
 ### Subagents not using Mimir
 
-Make sure you're loading the skill:
+Subagents now have Mimir tool permissions built-in. Just include instructions in your prompt:
 
 ```typescript
-task(subagent_type="explore", load_skills=["mimir"], prompt="...")
+task(
+    subagent_type="ContextScout",
+    prompt="Find authentication patterns. Use mimir-knowledge_search for project-specific queries."
+)
+```
+
+For subagents without built-in Mimir permissions (explore, librarian), embed instructions:
+
+```typescript
+task(
+    subagent_type="explore",
+    prompt="Find patterns. IMPORTANT: Use mimir-knowledge_search for project-specific queries instead of grep."
+)
 ```
 
 ---

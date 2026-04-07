@@ -167,6 +167,10 @@ python ~/Documents/Mimir/mcp_server_llamaindex.py --query "How does auth work?"
 python ~/Documents/Mimir/langgraph/cli.py rag "Explain the database layer"
 python ~/Documents/Mimir/langgraph/cli.py agent "Find all API endpoints"
 
+# FDE workflows
+python ~/Documents/Mimir/langgraph/cli.py prep "video latency issues"
+python ~/Documents/Mimir/langgraph/cli.py session-diff --days 1
+
 # Via opencode (automatic)
 # Just ask questions — agents use Mimir tools automatically
 ```
@@ -308,6 +312,11 @@ Mimir includes seed skills that give agents immediate knowledge for common tasks
 | `find-and-follow-pattern` | "How do I add a new X?" — find existing patterns and follow them |
 | `codebase-analysis-workflow` | Systematic codebase analysis in 5 steps |
 | `system-health-check` | Comprehensive system diagnostics |
+| `fde-customer-onboarding` | Fast onboarding to a customer's codebase (FDE) |
+| `fde-call-prep` | Pre-call briefing with relevant code, patterns, and questions (FDE) |
+| `fde-technical-writeup` | Post-call customer-facing documentation (FDE) |
+| `fde-handoff` | Engagement-to-team transfer documentation (FDE) |
+| `fde-shared-index` | Cross-codebase search with shared SDK indices (FDE) |
 
 ### Unified Query
 
@@ -342,6 +351,162 @@ Dev: "How do I add Stripe checkout to the billing page?"
 4. Agent: Proposes plan using all three sources
 5. Dev: Approves → Agent implements → OpenSpace learns
 ```
+
+---
+
+## FDE Toolkit
+
+Mimir includes a complete toolkit for Forward Deployed Engineers managing multiple customer engagements.
+
+### Shared Index Composition
+
+Reference large SDKs (indexed once globally) alongside customer code in a single query. Results are tagged with their source so the LLM never confuses reference docs with customer code.
+
+```
+~/.mimir/shared-indexes/           ← Global store (indexed ONCE)
+├── livekit-sdk/
+│   └── llamaindex/
+└── stripe-sdk/
+    └── llamaindex/
+
+~/customer-a/                      ← References shared index
+├── .mimir/config.json
+│   └── shared_indexes: { "livekit-sdk": "~/.mimir/shared-indexes/livekit-sdk/llamaindex" }
+└── .knowledge/llamaindex/         ← Customer code only
+```
+
+**Setup:**
+
+```bash
+# 1. Index a shared SDK (once, globally)
+python ~/Documents/Mimir/mcp_server_llamaindex.py --shared-index ~/path/to/sdk/ --name livekit-sdk
+
+# 2. List available shared indices
+python ~/Documents/Mimir/mcp_server_llamaindex.py --shared-list
+
+# 3. Add to your project's .mimir/config.json:
+#    "shared_indexes": { "livekit-sdk": "~/.mimir/shared-indexes/livekit-sdk/llamaindex" }
+```
+
+**Searching with scope:**
+
+```
+# Search everything (local + shared)
+search(query="voice pipeline", scope="all")
+
+# Search only customer code
+search(query="voice pipeline", scope="local")
+
+# Search only the SDK
+search(query="voice pipeline", scope="shared:livekit-sdk")
+```
+
+**Results are source-tagged:**
+
+```
+[1] [LIVEKIT SDK] agents/voice_pipeline.py (score: 0.91)
+    Voice pipeline: STT → LLM → TTS...
+
+[2] [YOUR CODE] src/auth/middleware.ts (score: 0.82)
+    JWT validation for voice endpoints...
+```
+
+### Multi-Project Management
+
+Manage multiple customer engagements with isolated knowledge bases:
+
+```bash
+# Register projects
+python ~/Documents/Mimir/mimir-projects.py add ~/Projects/customer-a --name customer-a
+python ~/Documents/Mimir/mimir-projects.py add ~/Projects/customer-b --name customer-b
+
+# List all projects
+python ~/Documents/Mimir/mimir-projects.py list
+
+# Switch context
+python ~/Documents/Mimir/mimir-projects.py switch customer-a
+
+# Check status of all projects
+python ~/Documents/Mimir/mimir-projects.py status
+
+# Auto-discover projects in common locations
+python ~/Documents/Mimir/mimir-projects.py discover
+```
+
+```
+$ mimir-projects.py list
+Name                 Status     Index    Last Accessed
+------------------------------------------------------------
+customer-a           ✓          ✓        2026-04-07
+customer-b           ✓          ✗        never
+```
+
+### Customer Call Prep
+
+Generate a structured briefing before a customer call:
+
+```bash
+# Via LangGraph workflow
+python ~/Documents/Mimir/langgraph/cli.py prep "video latency issues"
+python ~/Documents/Mimir/langgraph/cli.py prep "payment integration" --customer acme-corp
+```
+
+The briefing includes:
+1. **Relevant Code Sections** — key files and functions related to the topic
+2. **Known Patterns** — how this codebase handles this type of functionality
+3. **Questions to Ask** — clarifying questions based on what's in the code
+4. **Common Pitfalls** — integration risks and edge cases
+5. **Proposed Approach** — high-level recommendation
+6. **Things to Verify** — what to check during the call
+
+### Session Diff
+
+See what you learned in recent sessions:
+
+```bash
+# What happened in the last day?
+python ~/Documents/Mimir/langgraph/cli.py session-diff
+
+# Last 3 days
+python ~/Documents/Mimir/langgraph/cli.py session-diff --days 3
+```
+
+The report includes:
+- Knowledge base status (freshness, coverage)
+- Activity summary (query types, costs)
+- What you learned (topics explored)
+- Focus areas for next session
+
+### Handoff Documentation
+
+Generate a handoff document when transferring to the permanent team:
+
+```bash
+# Generate for current directory
+python ~/Documents/Mimir/mimir-projects.py handoff
+
+# Generate for a registered project
+python ~/Documents/Mimir/mimir-projects.py handoff customer-a
+
+# With engagement summary
+python ~/Documents/Mimir/mimir-projects.py handoff customer-a \
+  --summary "Built video calling integration using LiveKit" \
+  --customer "Acme Corp"
+
+# Custom output path
+python ~/Documents/Mimir/mimir-projects.py handoff customer-a -o docs/handoff.md
+```
+
+The handoff document includes 9 sections:
+1. Project Overview
+2. Tech Stack
+3. Architecture
+4. Key Files
+5. What Was Built
+6. Integration Points
+7. How to Extend
+8. Knowledge Base (how to use it)
+9. Next Steps
 
 ---
 
@@ -429,8 +594,9 @@ Here's a complete working setup from a real installation:
 
 ```
 ~/Documents/Mimir/           # Central installation
-├── mcp_server_llamaindex.py
-├── mimir-init.py
+├── mcp_server_llamaindex.py       # MCP server + CLI
+├── mimir-init.py                  # Project initializer
+├── mimir-projects.py              # Multi-project CLI
 ├── scripts/
 │   ├── run_mcp_server.sh         # MCP wrapper script
 │   ├── git-hooks/
@@ -441,9 +607,12 @@ Here's a complete working setup from a real installation:
 │   ├── config.py                 # Unified configuration (MimirConfig)
 │   ├── utils.py                  # Shared utilities
 │   ├── indexing.py               # Document indexing
+│   ├── shared_index.py           # Shared index composition
 │   ├── sdk_cache.py              # SDK doc caching
 │   ├── knowledge_graph.py        # Code relationship extraction
 │   ├── openspace_bridge.py       # OpenSpace integration (circuit breaker, caching)
+│   ├── handoff.py                # Handoff document generator
+│   ├── projects.py               # Multi-project management
 │   ├── metrics.py                # Cost tracking
 │   └── watcher.py                # File watcher
 ├── tests/                   # Test suite (264 tests)
@@ -454,36 +623,24 @@ Here's a complete working setup from a real installation:
 │   ├── test_sdk_cache.py
 │   └── test_utils.py
 ├── langgraph/               # Workflows
+│   ├── workflows/
+│   │   ├── rag.py                # Basic RAG workflow
+│   │   ├── knowledge_agent.py    # Agentic exploration
+│   │   ├── call_prep.py          # Customer call briefing
+│   │   ├── session_diff.py       # Session diff report
+│   │   └── utils.py              # Shared workflow utilities
+│   └── cli.py                    # Workflow CLI
 ├── skills/                  # Agent skills
 │   ├── mimir-knowledge/          # Knowledge base search
 │   ├── unified-query/            # Multi-layer query orchestration
 │   ├── sdk-onboarding/           # SDK onboarding guide
 │   ├── sdk-integration-pattern/  # Integration patterns
-│   └── find-and-follow-pattern/  # Pattern discovery
-└── opencode-plugin/         # System context plugin
-```
-~/Documents/Mimir/           # Central installation
-├── mcp_server_llamaindex.py
-├── mimir-init.py
-├── scripts/
-│   ├── run_mcp_server.sh         # MCP wrapper script
-│   ├── git-hooks/
-│   │   └── post-commit           # Auto-index git hook
-│   ├── install-git-hooks.sh      # Hook installer
-│   └── mimir-reindex-hook.py     # Hook reindex logic
-├── src/mimir/               # Core modules
-│   ├── indexing.py               # Document indexing
-│   ├── sdk_cache.py              # SDK doc caching
-│   ├── knowledge_graph.py        # Code relationship extraction
-│   ├── watcher.py                # File watcher
-│   └── metrics.py                # Cost tracking
-├── langgraph/               # Workflows
-├── skills/                  # Agent skills
-│   ├── mimir-knowledge/          # Knowledge base search
-│   ├── unified-query/            # Multi-layer query orchestration
-│   ├── sdk-onboarding/           # SDK onboarding guide
-│   ├── sdk-integration-pattern/  # Integration patterns
-│   └── find-and-follow-pattern/  # Pattern discovery
+│   ├── find-and-follow-pattern/  # Pattern discovery
+│   ├── fde-customer-onboarding/  # FDE: fast codebase onboarding
+│   ├── fde-call-prep/            # FDE: pre-call briefing
+│   ├── fde-technical-writeup/    # FDE: post-call documentation
+│   ├── fde-handoff/              # FDE: engagement handoff
+│   └── fde-shared-index/         # FDE: shared index setup
 └── opencode-plugin/         # System context plugin
 
 ~/Projects/AnyProject/       # Any project using Mimir
@@ -492,10 +649,17 @@ Here's a complete working setup from a real installation:
 │   ├── llamaindex/               # Vector index
 │   └── sdk-cache/                # Cached SDK docs
 ├── .mimir/
-│   ├── config.json
+│   ├── config.json               # Project config (includes shared_indexes)
 │   ├── index_state.json          # File hash tracking
 │   └── reindex.log               # Auto-index logs
-└── .opencode/mimir-index.py
+├── .opencode/mimir-index.py
+└── HANDOFF.md                    # Generated handoff doc (if created)
+
+~/.mimir/                    # Global Mimir data
+├── shared-indexes/               # Shared SDK indices
+│   ├── livekit-sdk/llamaindex/
+│   └── stripe-sdk/llamaindex/
+└── projects.json                 # Multi-project registry
 ```
 
 ### Global Config: `~/.config/opencode/opencode.json`
@@ -582,6 +746,9 @@ All configuration flows through a single source of truth: `src/mimir/config.py` 
   "embedding_model": "text-embedding-3-small",
   "llm_model": "google/gemini-3.1-flash-lite-preview",
   "sdk_cache_ttl_days": 7,
+  "shared_indexes": {
+    "livekit-sdk": "~/.mimir/shared-indexes/livekit-sdk/llamaindex"
+  },
   "bridge": {
     "enabled": true,
     "cache_maxsize": 128,
@@ -617,6 +784,27 @@ Any config value can be overridden via environment variables:
 | `MIMIR_BRIDGE_TIMEOUT` | `bridge.search_timeout_seconds` | `30` |
 | `MIMIR_BRIDGE_MAX_TOKENS` | `bridge.max_context_tokens` | `2500` |
 | `MIMIR_BRIDGE_TOP_K` | `bridge.top_k` | `5` |
+
+### Shared Index Configuration
+
+Shared indices are configured in `.mimir/config.json` (not env vars):
+
+```json
+{
+  "shared_indexes": {
+    "livekit-sdk": "~/.mimir/shared-indexes/livekit-sdk/llamaindex",
+    "stripe-sdk": "~/.mimir/shared-indexes/stripe-sdk/llamaindex"
+  }
+}
+```
+
+| CLI Command | Purpose |
+|-------------|---------|
+| `mcp_server_llamaindex.py --shared-index DIR --name NAME` | Index a directory as a shared reference |
+| `mcp_server_llamaindex.py --shared-list` | List available shared indices |
+| `search(query="...", scope="all")` | Search local + all shared indices |
+| `search(query="...", scope="local")` | Search only local project code |
+| `search(query="...", scope="shared:NAME")` | Search only a specific shared index |
 
 ---
 
@@ -696,6 +884,49 @@ python ~/Documents/Mimir/langgraph/cli.py metrics --days 7
 ```
 
 **Typical Savings**: 60-80% reduction in token costs vs. traditional exploration.
+
+---
+
+## CLI Reference
+
+### MCP Server (`mcp_server_llamaindex.py`)
+
+```bash
+python mcp_server_llamaindex.py                    # Run MCP server
+python mcp_server_llamaindex.py --index [DIR]      # Index documents
+python mcp_server_llamaindex.py --reindex          # Rebuild index
+python mcp_server_llamaindex.py --query "question" # One-shot query
+python mcp_server_llamaindex.py --stats            # Show statistics
+python mcp_server_llamaindex.py --shared-index DIR --name NAME  # Index shared SDK
+python mcp_server_llamaindex.py --shared-list      # List shared indices
+```
+
+### LangGraph Workflows (`langgraph/cli.py`)
+
+```bash
+python langgraph/cli.py rag "question"             # RAG workflow
+python langgraph/cli.py agent "question"           # Knowledge agent
+python langgraph/cli.py prep "topic"               # Customer call briefing
+python langgraph/cli.py prep "topic" --customer NAME
+python langgraph/cli.py session-diff               # Session diff (last day)
+python langgraph/cli.py session-diff --days 3      # Session diff (last 3 days)
+python langgraph/cli.py metrics                    # Cost report (30 days)
+python langgraph/cli.py metrics --days 7           # Cost report (7 days)
+```
+
+### Multi-Project (`mimir-projects.py`)
+
+```bash
+python mimir-projects.py list                      # List registered projects
+python mimir-projects.py add /path/to/project      # Register a project
+python mimir-projects.py add /path --name NAME --description "..."
+python mimir-projects.py remove NAME               # Unregister a project
+python mimir-projects.py switch NAME               # Switch to a project
+python mimir-projects.py status                    # Show all project status
+python mimir-projects.py discover                  # Find projects in common locations
+python mimir-projects.py handoff [NAME]            # Generate handoff doc
+python mimir-projects.py handoff NAME --summary "..." --customer "..." -o output.md
+```
 
 ---
 

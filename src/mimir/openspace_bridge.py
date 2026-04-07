@@ -128,6 +128,9 @@ class EnrichmentResult:
     circuit_open: bool = False
     error: Optional[str] = None
     elapsed_ms: int = 0
+    status: str = (
+        "ok"  # "ok", "no_results", "no_index", "error", "disabled", "circuit_open"
+    )
 
     def to_dict(self) -> dict:
         return {
@@ -138,6 +141,7 @@ class EnrichmentResult:
             "circuit_open": self.circuit_open,
             "error": self.error,
             "elapsed_ms": self.elapsed_ms,
+            "status": self.status,
         }
 
 
@@ -212,6 +216,7 @@ class _TimedCache:
             circuit_open=result.circuit_open,
             error=result.error,
             elapsed_ms=0,
+            status=result.status,
         )
 
     def put(self, query: str, top_k: int, result: EnrichmentResult) -> None:
@@ -308,6 +313,38 @@ def _compute_freshness(index_timestamp: Optional[str], decay_hours: float) -> fl
         return 0.5
 
 
+# ─── API Key Resolution ───────────────────────────────────────────────────────
+
+
+def _resolve_api_key_from_env() -> tuple[str, Optional[str]]:
+    """Resolve API key and base URL from environment or auth file.
+
+    Returns (api_key, api_base) tuple. Empty string if no key found.
+    """
+    # Check env vars first
+    api_key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get(
+        "OPENAI_API_KEY", ""
+    )
+    if api_key:
+        return api_key, os.environ.get(
+            "OPENAI_BASE_URL", "https://openrouter.ai/api/v1"
+        )
+
+    # Fall back to opencode auth file
+    auth_path = Path.home() / ".local" / "share" / "opencode" / "auth.json"
+    if auth_path.exists():
+        try:
+            auth_data = json.loads(auth_path.read_text())
+            if openrouter := auth_data.get("openrouter"):
+                key = openrouter.get("key", "")
+                if key:
+                    return key, "https://openrouter.ai/api/v1"
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    return "", None
+
+
 # ─── Main Bridge ─────────────────────────────────────────────────────────────
 
 
@@ -345,35 +382,7 @@ class MimirOpenSpaceBridge:
     def _resolve_api_key(self) -> tuple[str, Optional[str]]:
         """Resolve API key and base URL from env or auth file."""
         with _timed("_resolve_api_key"):
-            # Check env vars first
-            api_key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get(
-                "OPENAI_API_KEY", ""
-            )
-            if api_key:
-                logger.debug("[BRIDGE] _resolve_api_key - FROM ENV")
-                return api_key, os.environ.get(
-                    "OPENAI_BASE_URL", "https://openrouter.ai/api/v1"
-                )
-
-            # Fall back to opencode auth file
-            auth_path = Path.home() / ".local" / "share" / "opencode" / "auth.json"
-            logger.debug(
-                "[BRIDGE] _resolve_api_key - checking auth file: %s", auth_path
-            )
-            if auth_path.exists():
-                try:
-                    with _timed("_resolve_api_key.read_auth_file"):
-                        auth_data = json.loads(auth_path.read_text())
-                    if openrouter := auth_data.get("openrouter"):
-                        key = openrouter.get("key", "")
-                        if key:
-                            logger.debug("[BRIDGE] _resolve_api_key - FROM AUTH FILE")
-                            return key, "https://openrouter.ai/api/v1"
-                except (json.JSONDecodeError, KeyError):
-                    pass
-
-            logger.warning("[BRIDGE] _resolve_api_key - NO KEY FOUND")
-            return "", None
+            return _resolve_api_key_from_env()
 
     def _resolve_embedding_model(self) -> str:
         """Resolve embedding model name from project config or env."""
@@ -517,6 +526,7 @@ class MimirOpenSpaceBridge:
                     success=False,
                     error="Bridge disabled via MIMIR_OPENSPACE_ENABLED=false",
                     elapsed_ms=0,
+                    status="disabled",
                 )
 
             # Circuit breaker
@@ -527,6 +537,7 @@ class MimirOpenSpaceBridge:
                     circuit_open=True,
                     error="Circuit breaker open — Mimir unavailable",
                     elapsed_ms=0,
+                    status="circuit_open",
                 )
 
             # Cache check
@@ -543,12 +554,27 @@ class MimirOpenSpaceBridge:
                 elapsed = int((time.time() - start) * 1000)
 
                 if not results:
-                    result = EnrichmentResult(
-                        success=True,
-                        context="",
-                        results=(),
-                        elapsed_ms=elapsed,
-                    )
+                    # Distinguish "no matches" from "no index"
+                    knowledge_dir = self._project_root / ".knowledge" / "llamaindex"
+                    has_index = (knowledge_dir / "index_store.json").exists()
+
+                    if not has_index:
+                        result = EnrichmentResult(
+                            success=False,
+                            context="",
+                            results=(),
+                            error="No knowledge base index found. Run indexing first.",
+                            elapsed_ms=elapsed,
+                            status="no_index",
+                        )
+                    else:
+                        result = EnrichmentResult(
+                            success=True,
+                            context="",
+                            results=(),
+                            elapsed_ms=elapsed,
+                            status="no_results",
+                        )
                 else:
                     # Build context string
                     chunks = [r.to_prompt_chunk() for r in results]
@@ -558,6 +584,7 @@ class MimirOpenSpaceBridge:
                         context=context,
                         results=tuple(results),
                         elapsed_ms=elapsed,
+                        status="ok",
                     )
 
                 self._circuit.record_success()
@@ -580,6 +607,7 @@ class MimirOpenSpaceBridge:
                     success=False,
                     error=str(e),
                     elapsed_ms=elapsed,
+                    status="error",
                 )
 
     def health_check(self) -> dict:

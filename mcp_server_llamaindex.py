@@ -51,9 +51,8 @@ except ImportError:
         "watchdog not installed - file watcher disabled"
     )
 
-MIMIR_DIR = Path.home() / "Documents" / "Mimir"
-sys.path.insert(0, str(MIMIR_DIR))
-sys.path.insert(0, str(MIMIR_DIR / "src"))
+# Detect MIMIR_DIR from the location of this script
+MIMIR_DIR = Path(__file__).resolve().parent
 from src.mimir.metrics import get_tracker
 
 from mcp.server.fastmcp import FastMCP
@@ -75,6 +74,7 @@ class ServerConfig:
     docs_dir: Path
     code_dirs: list[Path]
     embedding_model: str
+    llm_model: str
     api_key: str
     api_base: Optional[str]
 
@@ -148,6 +148,10 @@ class ServerConfig:
             code_dirs=code_dirs,
             embedding_model=project_config.get("embedding_model")
             or os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small"),
+            llm_model=project_config.get("llm_model")
+            or os.environ.get(
+                "MIMIR_LLM_MODEL", "google/gemini-3.1-flash-lite-preview"
+            ),
             api_key=api_key,
             api_base=api_base,
         )
@@ -203,9 +207,7 @@ class KnowledgeServer:
 
         Settings.embed_model = OpenAIEmbedding(**embed_kwargs)
         # Use a faster model for query synthesis to avoid timeouts
-        Settings.llm = OpenAILike(
-            model="google/gemini-3.1-flash-lite-preview", **llm_kwargs
-        )
+        Settings.llm = OpenAILike(model=config.llm_model, **llm_kwargs)
 
         self.config.knowledge_dir.mkdir(parents=True, exist_ok=True)
 
@@ -460,7 +462,7 @@ class KnowledgeServer:
 
 
 def create_mcp_server(server: KnowledgeServer) -> FastMCP:
-    mcp = FastMCP("raveneye-knowledge")
+    mcp = FastMCP("mimir-knowledge")
 
     @mcp.tool()
     async def search(query: str, top_k: int = 5) -> str:
@@ -532,6 +534,18 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         from src.mimir.openspace_bridge import enrich_task_for_openspace
 
         result = enrich_task_for_openspace(task, server.config.project_root)
+
+        # Add status field to distinguish empty results from errors
+        if not result.get("success", False):
+            result["status"] = "error"
+        elif result.get("result_count", 0) == 0:
+            result["status"] = "no_results"
+            result["suggestion"] = (
+                "Try a broader query or check if the index has been built"
+            )
+        else:
+            result["status"] = "ok"
+
         return json.dumps(result, ensure_ascii=False, indent=2)
 
     @mcp.tool()
@@ -684,7 +698,7 @@ def start_watcher_server(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="RavenEye Knowledge MCP Server")
+    parser = argparse.ArgumentParser(description="Mimir Knowledge MCP Server")
     parser.add_argument(
         "--index", metavar="DIR", nargs="?", const=True, help="Index documents"
     )

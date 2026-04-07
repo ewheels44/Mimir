@@ -14,6 +14,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
+from src.mimir.utils import EXCLUDE_PATTERNS, should_exclude as _should_exclude
+
 
 def get_progress_bar(iterable=None, desc="", total=None, unit="it", ncols=80):
     try:
@@ -74,66 +76,6 @@ class FallbackProgressBar:
     def close(self):
         if self.total and self.n >= self.total:
             print(f"   {self.desc}: complete ({self.total} {self.unit})", flush=True)
-
-
-EXCLUDE_PATTERNS = [
-    "__pycache__",
-    "*.pyc",
-    "*.pyo",
-    ".git",
-    ".github",
-    ".gitignore",
-    "node_modules",
-    "target",
-    "dist",
-    "build",
-    ".next",
-    ".nuxt",
-    "out",
-    ".venv",
-    "venv",
-    ".env",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".mypy_cache",
-    "*.png",
-    "*.jpg",
-    "*.jpeg",
-    "*.gif",
-    "*.ico",
-    "*.svg",
-    "*.woff",
-    "*.woff2",
-    "*.ttf",
-    "*.eot",
-    "*.mp4",
-    "*.webm",
-    "*.mov",
-    "*.mp3",
-    "*.wav",
-    "*.ogg",
-    "*.pdf",
-    "*.zip",
-    "*.tar",
-    "*.gz",
-    "*.rar",
-    "*.pt",
-    "*.pth",
-    "*.onnx",
-    "*.tflite",
-    "*.lock",
-    "package-lock.json",
-    "yarn.lock",
-    "uv.lock",
-    "*.min.js",
-    "*.min.css",
-    "*.map",
-    ".DS_Store",
-    "Thumbs.db",
-    "test-results",
-    "playwright-report",
-    "blob-report",
-]
 
 
 def get_manifest_path(knowledge_dir: Path) -> Path:
@@ -361,15 +303,6 @@ def detect_changed_files(
         "modified": modified,
         "deleted": deleted,
     }
-
-
-def _should_exclude(file_path: Path) -> bool:
-    """Check if a file should be excluded from hashing."""
-    path_str = str(file_path)
-    for pattern in EXCLUDE_PATTERNS:
-        if pattern in path_str:
-            return True
-    return False
 
 
 def index_with_progress(

@@ -32,6 +32,8 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
+from src.mimir.utils import should_exclude as _should_exclude_files
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -265,8 +267,12 @@ def _strip_quotes(text: str) -> str:
 
 
 def _should_exclude(path: Path) -> bool:
-    """True if any path component is in EXCLUDE_DIRS."""
-    return any(part in EXCLUDE_DIRS for part in path.parts)
+    """True if path should be excluded (directory or file pattern)."""
+    # Check directory components
+    if any(part in EXCLUDE_DIRS for part in path.parts):
+        return True
+    # Also check file-level patterns from shared utils
+    return _should_exclude_files(path)
 
 
 def _walk_ts_tree(node):

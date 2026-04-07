@@ -21,11 +21,13 @@ Usage:
 
 import json
 import logging
-import subprocess
 import sys
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +43,7 @@ class SDKCache:
         self.cache_dir = self.project_root / CACHE_DIR_NAME
         self.ttl_days = ttl_days
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self._write_lock = threading.Lock()
 
     def _library_dir(self, library: str) -> Path:
         """Get cache directory for a library (sanitized name)."""
@@ -113,61 +116,49 @@ class SDKCache:
         return None
 
     def _fetch_from_context7(self, library: str, topic: str) -> Optional[str]:
-        """Fetch docs from Context7 API."""
+        """Fetch docs from Context7 API using httpx."""
         try:
             import urllib.parse
 
-            # Step 1: Search for library ID (URL-encode parameters)
             encoded_library = urllib.parse.quote(library)
             encoded_topic = urllib.parse.quote(topic)
-            search_url = (
-                f"https://context7.com/api/v2/libs/search"
-                f"?libraryName={encoded_library}&query={encoded_topic}"
-            )
-            search_cmd = ["curl", "-s", "--max-time", "15", search_url]
-            result = subprocess.run(
-                search_cmd, capture_output=True, text=True, timeout=20
-            )
 
-            if result.returncode != 0:
-                logger.warning(f"Context7 search failed for {library}")
-                return None
+            with httpx.Client(timeout=20.0) as client:
+                # Step 1: Search for library ID
+                search_url = f"https://context7.com/api/v2/libs/search?libraryName={encoded_library}&query={encoded_topic}"
+                search_resp = client.get(search_url)
+                search_resp.raise_for_status()
+                search_data = search_resp.json()
 
-            search_data = json.loads(result.stdout)
-            results = search_data.get("results", [])
+                results = search_data.get("results", [])
+                if not results:
+                    logger.warning(f"No Context7 results for {library}")
+                    return None
 
-            if not results:
-                logger.warning(f"No Context7 results for {library}")
-                return None
+                library_id = results[0].get("id", "")
+                if not library_id:
+                    logger.warning(f"No library ID in Context7 results for {library}")
+                    return None
 
-            library_id = results[0].get("id", "")
-            if not library_id:
-                logger.warning(f"No library ID in Context7 results for {library}")
-                return None
+                # Step 2: Fetch documentation
+                encoded_id = urllib.parse.quote(library_id)
+                fetch_url = f"https://context7.com/api/v2/context?libraryId={encoded_id}&query={encoded_topic}&type=txt"
+                fetch_resp = client.get(fetch_url)
+                fetch_resp.raise_for_status()
 
-            # Step 2: Fetch documentation (URL-encode parameters)
-            encoded_id = urllib.parse.quote(library_id)
-            encoded_topic = urllib.parse.quote(topic)
-            fetch_url = (
-                f"https://context7.com/api/v2/context"
-                f"?libraryId={encoded_id}&query={encoded_topic}&type=txt"
-            )
-            fetch_cmd = ["curl", "-s", "--max-time", "30", fetch_url]
-            result = subprocess.run(
-                fetch_cmd, capture_output=True, text=True, timeout=35
-            )
+                if not fetch_resp.text.strip():
+                    logger.warning(
+                        f"Context7 fetch returned empty for {library}/{topic}"
+                    )
+                    return None
 
-            if result.returncode != 0 or not result.stdout.strip():
-                logger.warning(f"Context7 fetch failed for {library}/{topic}")
-                return None
+                return fetch_resp.text.strip()
 
-            return result.stdout.strip()
-
-        except subprocess.TimeoutExpired:
+        except httpx.TimeoutException:
             logger.warning(f"Context7 timeout for {library}/{topic}")
             return None
-        except json.JSONDecodeError:
-            logger.warning(f"Context7 JSON parse failed for {library}")
+        except httpx.HTTPStatusError as e:
+            logger.warning(f"Context7 HTTP error for {library}/{topic}: {e}")
             return None
         except Exception as e:
             logger.warning(f"Context7 fetch error: {e}")
@@ -175,34 +166,35 @@ class SDKCache:
 
     def _write_cache(self, library: str, topic: str, docs: str):
         """Write docs and metadata to cache."""
-        lib_dir = self._library_dir(library)
-        lib_dir.mkdir(parents=True, exist_ok=True)
+        with self._write_lock:
+            lib_dir = self._library_dir(library)
+            lib_dir.mkdir(parents=True, exist_ok=True)
 
-        # Write docs
-        docs_path = self._docs_path(library, topic)
-        docs_path.write_text(docs)
+            # Write docs
+            docs_path = self._docs_path(library, topic)
+            docs_path.write_text(docs)
 
-        # Update metadata
-        meta_path = self._meta_path(library)
-        meta = {}
-        if meta_path.exists():
-            try:
-                meta = json.loads(meta_path.read_text())
-            except json.JSONDecodeError:
-                pass
+            # Update metadata
+            meta_path = self._meta_path(library)
+            meta = {}
+            if meta_path.exists():
+                try:
+                    meta = json.loads(meta_path.read_text())
+                except json.JSONDecodeError:
+                    pass
 
-        meta["fetched_at"] = datetime.now().isoformat()
-        meta["ttl_days"] = self.ttl_days
-        meta["library"] = library
+            meta["fetched_at"] = datetime.now().isoformat()
+            meta["ttl_days"] = self.ttl_days
+            meta["library"] = library
 
-        # Track topics
-        topics = meta.get("topics", [])
-        if topic not in topics:
-            topics.append(topic)
-        meta["topics"] = topics
+            # Track topics
+            topics = meta.get("topics", [])
+            if topic not in topics:
+                topics.append(topic)
+            meta["topics"] = topics
 
-        meta_path.write_text(json.dumps(meta, indent=2))
-        logger.info(f"Cached: {library}/{topic} ({len(docs)} chars)")
+            meta_path.write_text(json.dumps(meta, indent=2))
+            logger.info(f"Cached: {library}/{topic} ({len(docs)} chars)")
 
     def _read_stale(self, library: str, topic: str) -> Optional[str]:
         """Read stale cache as fallback."""

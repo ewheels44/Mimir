@@ -613,7 +613,7 @@ def main():
         server_script = find_server_script()
         if not server_script:
             print("❌ Could not find mcp_server_llamaindex.py")
-            print("   Provide --server-path or run from the RavenEye project")
+            print("   Provide --server-path or run from the Mimir project")
             return 1
 
     print(f"📜 Server script: {server_script}")

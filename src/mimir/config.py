@@ -105,6 +105,7 @@ class MimirConfig:
     docs_dir: Path
     knowledge_dir: Path
     code_dirs: tuple[Path, ...] = ()
+    shared_indexes: dict[str, Path] = field(default_factory=dict)
 
     # SDK cache
     sdk_cache_ttl_days: int = 7
@@ -166,6 +167,13 @@ class MimirConfig:
         # Code dirs
         code_dirs = _resolve_code_dirs(actual_project_root, file_config)
 
+        # Shared indexes
+        raw_shared = file_config.get("shared_indexes", {})
+        shared_indexes = {}
+        for name, path_str in raw_shared.items():
+            path = Path(path_str).expanduser()
+            shared_indexes[name] = path
+
         # Models
         embedding_model = (
             file_config.get("embedding_model")
@@ -197,6 +205,7 @@ class MimirConfig:
             docs_dir=docs_dir,
             knowledge_dir=knowledge_dir,
             code_dirs=tuple(code_dirs),
+            shared_indexes=shared_indexes,
             sdk_cache_ttl_days=sdk_cache_ttl,
             bridge_enabled=_env_bool(
                 "MIMIR_OPENSPACE_ENABLED", bridge.get("enabled", True)
@@ -260,6 +269,7 @@ class MimirConfig:
             "docs_dir": str(self.docs_dir),
             "knowledge_dir": str(self.knowledge_dir),
             "code_dirs": [str(d) for d in self.code_dirs],
+            "shared_indexes": {k: str(v) for k, v in self.shared_indexes.items()},
             "sdk_cache_ttl_days": self.sdk_cache_ttl_days,
             "bridge_enabled": self.bridge_enabled,
             "bridge_top_k": self.bridge_top_k,

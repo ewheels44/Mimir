@@ -77,6 +77,12 @@ except ImportError:
 
 from src.mimir.config import MimirConfig, get_config
 from src.mimir.metrics import get_tracker
+from src.mimir.shared_index import (
+    SharedIndexRegistry,
+    merge_results,
+    format_tagged_results,
+    validate_scope,
+)
 
 from mcp.server.fastmcp import FastMCP
 from llama_index.core import (
@@ -110,6 +116,10 @@ class KnowledgeServer:
         self._watcher: Optional[MimirFileWatcher] = None
         self._index_lock = threading.Lock()
         self._setup_llama_index()
+        self._shared_registry = SharedIndexRegistry(
+            config.shared_indexes,
+            config.embedding_model,
+        )
 
     def _setup_llama_index(self) -> None:
         """Configure LlamaIndex with models from config."""

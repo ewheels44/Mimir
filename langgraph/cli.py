@@ -8,6 +8,8 @@ from pathlib import Path
 from langchain_core.messages import HumanMessage
 from workflows.rag import graph as rag_graph
 from workflows.knowledge_agent import graph as agent_graph
+from workflows.call_prep import graph as prep_graph
+from workflows.session_diff import graph as diff_graph
 from src.mimir.metrics import format_report, get_tracker
 
 
@@ -85,6 +87,76 @@ async def run_agent(query: str):
     )
 
 
+async def run_prep(query: str, customer: str = ""):
+    """Generate a customer call briefing."""
+    print(f"Preparing call briefing for: {query}\n")
+    if customer:
+        print(f"Customer: {customer}\n")
+
+    start_time = time.time()
+    config = {"configurable": {"thread_id": f"prep-{int(start_time)}"}}
+    result = await prep_graph.ainvoke(
+        {
+            "messages": [HumanMessage(content=query)],
+            "topic": query,
+            "customer": customer,
+            "context": [],
+            "briefing": "",
+        },
+        config,
+    )
+    duration_ms = int((time.time() - start_time) * 1000)
+
+    briefing = result.get("briefing", result["messages"][-1].content)
+
+    print("\n" + "=" * 60)
+    print("CALL BRIEFING:")
+    print("=" * 60)
+    print(briefing)
+
+    # Track metrics
+    tracker = get_tracker()
+    tracker.record_query(
+        query_type="prep",
+        query_text=query,
+        duration_ms=duration_ms,
+    )
+
+
+async def run_session_diff(days: int = 1):
+    """Generate a session diff report."""
+    print(f"Generating session diff for last {days} day(s)...\n")
+
+    start_time = time.time()
+    config = {"configurable": {"thread_id": f"diff-{int(start_time)}"}}
+    result = await diff_graph.ainvoke(
+        {
+            "messages": [HumanMessage(content="Generate session diff")],
+            "days": days,
+            "current_stats": {},
+            "recent_queries": [],
+            "diff_report": "",
+        },
+        config,
+    )
+    duration_ms = int((time.time() - start_time) * 1000)
+
+    report = result.get("diff_report", result["messages"][-1].content)
+
+    print("\n" + "=" * 60)
+    print("SESSION DIFF:")
+    print("=" * 60)
+    print(report)
+
+    # Track metrics
+    tracker = get_tracker()
+    tracker.record_query(
+        query_type="session_diff",
+        query_text=f"session_diff:{days}d",
+        duration_ms=duration_ms,
+    )
+
+
 async def run_test():
     print("Testing LangGraph workflows...\n")
 
@@ -139,6 +211,19 @@ def main():
         help="Number of days to include in report (default: 30)",
     )
 
+    # Call prep subcommand
+    prep_parser = subparsers.add_parser("prep", help="Generate customer call briefing")
+    prep_parser.add_argument("topic", help="Call topic (e.g., 'video latency issues')")
+    prep_parser.add_argument("--customer", default="", help="Customer name")
+
+    # Session diff subcommand
+    diff_parser = subparsers.add_parser(
+        "session-diff", help="Compare current state to previous session"
+    )
+    diff_parser.add_argument(
+        "--days", type=int, default=1, help="Days to look back (default: 1)"
+    )
+
     args = parser.parse_args()
 
     if args.command == "rag":
@@ -149,6 +234,10 @@ def main():
         asyncio.run(run_test())
     elif args.command == "metrics":
         run_metrics(args.days)
+    elif args.command == "prep":
+        asyncio.run(run_prep(args.topic, args.customer))
+    elif args.command == "session-diff":
+        asyncio.run(run_session_diff(args.days))
     else:
         parser.print_help()
         sys.exit(1)

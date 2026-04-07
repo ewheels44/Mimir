@@ -364,14 +364,14 @@ Reference large SDKs (indexed once globally) alongside customer code in a single
 
 ```
 ~/.mimir/shared-indexes/           ← Global store (indexed ONCE)
-├── livekit-sdk/
+├── acme-sdk/
 │   └── llamaindex/
 └── stripe-sdk/
     └── llamaindex/
 
 ~/customer-a/                      ← References shared index
 ├── .mimir/config.json
-│   └── shared_indexes: { "livekit-sdk": "~/.mimir/shared-indexes/livekit-sdk/llamaindex" }
+│   └── shared_indexes: { "acme-sdk": "~/.mimir/shared-indexes/acme-sdk/llamaindex" }
 └── .knowledge/llamaindex/         ← Customer code only
 ```
 
@@ -379,13 +379,13 @@ Reference large SDKs (indexed once globally) alongside customer code in a single
 
 ```bash
 # 1. Index a shared SDK (once, globally)
-python ~/Documents/Mimir/mcp_server_llamaindex.py --shared-index ~/path/to/sdk/ --name livekit-sdk
+python ~/Documents/Mimir/mcp_server_llamaindex.py --shared-index ~/path/to/sdk/ --name acme-sdk
 
 # 2. List available shared indices
 python ~/Documents/Mimir/mcp_server_llamaindex.py --shared-list
 
 # 3. Add to your project's .mimir/config.json:
-#    "shared_indexes": { "livekit-sdk": "~/.mimir/shared-indexes/livekit-sdk/llamaindex" }
+#    "shared_indexes": { "acme-sdk": "~/.mimir/shared-indexes/acme-sdk/llamaindex" }
 ```
 
 **Searching with scope:**
@@ -398,13 +398,13 @@ search(query="voice pipeline", scope="all")
 search(query="voice pipeline", scope="local")
 
 # Search only the SDK
-search(query="voice pipeline", scope="shared:livekit-sdk")
+search(query="voice pipeline", scope="shared:acme-sdk")
 ```
 
 **Results are source-tagged:**
 
 ```
-[1] [LIVEKIT SDK] agents/voice_pipeline.py (score: 0.91)
+[1] [ACME SDK] agents/voice_pipeline.py (score: 0.91)
     Voice pipeline: STT → LLM → TTS...
 
 [2] [YOUR CODE] src/auth/middleware.ts (score: 0.82)
@@ -490,7 +490,7 @@ python ~/Documents/Mimir/mimir-projects.py handoff customer-a
 
 # With engagement summary
 python ~/Documents/Mimir/mimir-projects.py handoff customer-a \
-  --summary "Built video calling integration using LiveKit" \
+  --summary "Built video calling integration using WebRTC" \
   --customer "Acme Corp"
 
 # Custom output path
@@ -657,7 +657,7 @@ Here's a complete working setup from a real installation:
 
 ~/.mimir/                    # Global Mimir data
 ├── shared-indexes/               # Shared SDK indices
-│   ├── livekit-sdk/llamaindex/
+│   ├── acme-sdk/llamaindex/
 │   └── stripe-sdk/llamaindex/
 └── projects.json                 # Multi-project registry
 ```
@@ -747,7 +747,7 @@ All configuration flows through a single source of truth: `src/mimir/config.py` 
   "llm_model": "google/gemini-3.1-flash-lite-preview",
   "sdk_cache_ttl_days": 7,
   "shared_indexes": {
-    "livekit-sdk": "~/.mimir/shared-indexes/livekit-sdk/llamaindex"
+    "acme-sdk": "~/.mimir/shared-indexes/acme-sdk/llamaindex"
   },
   "bridge": {
     "enabled": true,
@@ -792,7 +792,7 @@ Shared indices are configured in `.mimir/config.json` (not env vars):
 ```json
 {
   "shared_indexes": {
-    "livekit-sdk": "~/.mimir/shared-indexes/livekit-sdk/llamaindex",
+    "acme-sdk": "~/.mimir/shared-indexes/acme-sdk/llamaindex",
     "stripe-sdk": "~/.mimir/shared-indexes/stripe-sdk/llamaindex"
   }
 }

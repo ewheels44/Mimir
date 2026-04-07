@@ -375,6 +375,7 @@ Agent: [Calls mimir-knowledge/rag_workflow] → Structured analysis with sources
 | `sdk_cache_list` | List cached SDKs | Checking what's cached |
 | `enrich_task` | Project context for tasks | Before executing OpenSpace tasks |
 | `openspace_health` | Check Mimir-OpenSpace bridge | Before depending on enrich_task |
+| `health_check` | Server health + config diagnostics | Debugging setup issues |
 
 ### Subagent Context (Critical)
 
@@ -426,6 +427,40 @@ Here's a complete working setup from a real installation:
 
 ### Directory Structure
 
+```
+~/Documents/Mimir/           # Central installation
+├── mcp_server_llamaindex.py
+├── mimir-init.py
+├── scripts/
+│   ├── run_mcp_server.sh         # MCP wrapper script
+│   ├── git-hooks/
+│   │   └── post-commit           # Auto-index git hook
+│   ├── install-git-hooks.sh      # Hook installer
+│   └── mimir-reindex-hook.py     # Hook reindex logic
+├── src/mimir/               # Core modules
+│   ├── config.py                 # Unified configuration (MimirConfig)
+│   ├── utils.py                  # Shared utilities
+│   ├── indexing.py               # Document indexing
+│   ├── sdk_cache.py              # SDK doc caching
+│   ├── knowledge_graph.py        # Code relationship extraction
+│   ├── openspace_bridge.py       # OpenSpace integration (circuit breaker, caching)
+│   ├── metrics.py                # Cost tracking
+│   └── watcher.py                # File watcher
+├── tests/                   # Test suite (264 tests)
+│   ├── test_config.py
+│   ├── test_indexing.py
+│   ├── test_metrics.py
+│   ├── test_openspace_bridge.py
+│   ├── test_sdk_cache.py
+│   └── test_utils.py
+├── langgraph/               # Workflows
+├── skills/                  # Agent skills
+│   ├── mimir-knowledge/          # Knowledge base search
+│   ├── unified-query/            # Multi-layer query orchestration
+│   ├── sdk-onboarding/           # SDK onboarding guide
+│   ├── sdk-integration-pattern/  # Integration patterns
+│   └── find-and-follow-pattern/  # Pattern discovery
+└── opencode-plugin/         # System context plugin
 ```
 ~/Documents/Mimir/           # Central installation
 ├── mcp_server_llamaindex.py
@@ -532,44 +567,96 @@ Read ~/Documents/Mimir/docs/mimir-sys-prompt.txt
 
 ### Project Config: `.mimir/config.json`
 
+All configuration flows through a single source of truth: `src/mimir/config.py` (`MimirConfig`).
+
+**Resolution order** (highest priority first):
+1. Environment variables
+2. `.mimir/config.json` (project-level)
+3. Defaults
+
 ```json
 {
   "docs_dir": "docs",
   "code_dirs": ["src", "tests"],
   "knowledge_dir": ".knowledge/llamaindex",
-  "embedding_model": "text-embedding-3-small"
+  "embedding_model": "text-embedding-3-small",
+  "llm_model": "google/gemini-3.1-flash-lite-preview",
+  "sdk_cache_ttl_days": 7,
+  "bridge": {
+    "enabled": true,
+    "cache_maxsize": 128,
+    "cache_ttl_seconds": 600,
+    "circuit_breaker_threshold": 3,
+    "circuit_breaker_reset_seconds": 60,
+    "search_timeout_seconds": 30.0,
+    "max_context_tokens": 2500,
+    "top_k": 5
+  }
 }
 ```
+
+### Environment Variable Overrides
+
+Any config value can be overridden via environment variables:
+
+| Variable | Config Key | Default |
+|----------|-----------|---------|
+| `OPENROUTER_API_KEY` | API key | — |
+| `OPENAI_API_KEY` | API key (fallback) | — |
+| `OPENAI_BASE_URL` | API base URL | `https://openrouter.ai/api/v1` |
+| `EMBEDDING_MODEL` | `embedding_model` | `text-embedding-3-small` |
+| `MIMIR_LLM_MODEL` | `llm_model` | `google/gemini-3.1-flash-lite-preview` |
+| `PROJECT_ROOT` | Project root | Auto-detected |
+| `MIMIR_ROOT` | Mimir install dir | Auto-detected |
+| `MIMIR_SDK_CACHE_TTL` | `sdk_cache_ttl_days` | `7` |
+| `MIMIR_OPENSPACE_ENABLED` | `bridge.enabled` | `true` |
+| `MIMIR_BRIDGE_CACHE_SIZE` | `bridge.cache_maxsize` | `128` |
+| `MIMIR_BRIDGE_CACHE_TTL` | `bridge.cache_ttl_seconds` | `600` |
+| `MIMIR_BRIDGE_CB_THRESHOLD` | `bridge.circuit_breaker_threshold` | `3` |
+| `MIMIR_BRIDGE_CB_RESET` | `bridge.circuit_breaker_reset_seconds` | `60` |
+| `MIMIR_BRIDGE_TIMEOUT` | `bridge.search_timeout_seconds` | `30` |
+| `MIMIR_BRIDGE_MAX_TOKENS` | `bridge.max_context_tokens` | `2500` |
+| `MIMIR_BRIDGE_TOP_K` | `bridge.top_k` | `5` |
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────┐
-│  opencode Agent                         │
-│  - Receives queries                     │
-│  - Uses MCP tools automatically         │
-└──────────────┬──────────────────────────┘
-               │ MCP Protocol
-               ▼
-┌─────────────────────────────────────────┐
-│  Mimir MCP Server                       │
-│  - search, query, rag_workflow, etc.    │
-│  - Project-aware (per-project indexes)  │
-└──────────────┬──────────────────────────┘
-               │
-       ┌───────┴───────┐
-       ▼               ▼
-┌─────────────┐ ┌─────────────┐
-│ LlamaIndex  │ │ LangGraph   │
-│ (Retrieval) │ │ (Workflows) │
-└─────────────┘ └─────────────┘
+┌─────────────────────────────────────────────────────────┐
+│  Entry Points                                           │
+│  mcp_server_llamaindex.py │ langgraph/cli.py │ mimir-init.py
+└──────────────────────┬──────────────────────────────────┘
+                       │ all use
+                       ▼
+┌─────────────────────────────────────────────────────────┐
+│  MimirConfig (src/mimir/config.py)                      │
+│  Single source of truth for ALL settings                │
+│  env vars → .mimir/config.json → defaults               │
+└──────────────────────┬──────────────────────────────────┘
+                       │ provides config to
+           ┌───────────┼───────────┐
+           ▼           ▼           ▼
+    ┌────────────┐ ┌────────┐ ┌──────────┐
+    │ MCP Server │ │ Bridge │ │ LangGraph│
+    │ (search,   │ │(OpenSp)│ │(RAG,     │
+    │  query,    │ │        │ │ agent)   │
+    │  health)   │ │        │ │          │
+    └─────┬──────┘ └───┬────┘ └────┬─────┘
+          │            │           │
+          └────────────┼───────────┘
+                       ▼
+              ┌─────────────────┐
+              │   LlamaIndex    │
+              │  (Vector Store) │
+              └─────────────────┘
 ```
 
 **Key Components**:
+- **MimirConfig**: Unified configuration — one class, all settings, all entry points
+- **MCP Server**: Tool discovery and transport (search, query, health_check, etc.)
+- **OpenSpace Bridge**: Integration with self-evolving skill engine (circuit breaker, caching, content filtering)
 - **LlamaIndex**: Document ingestion, chunking, embeddings, vector storage
-- **MCP Protocol**: Tool discovery and transport between opencode and Mimir
 - **LangGraph**: Advanced RAG workflows and agentic exploration
 
 ---
@@ -614,6 +701,22 @@ python ~/Documents/Mimir/langgraph/cli.py metrics --days 7
 
 ## Troubleshooting
 
+### Quick Diagnosis
+
+Use the `health_check` MCP tool to diagnose issues:
+
+```
+# In opencode — ask the agent:
+"Run the health_check tool"
+```
+
+This returns:
+- Server status (healthy/degraded)
+- Index availability and freshness
+- API key presence
+- Configuration summary
+- Validation warnings
+
 ### "No module named 'llama_index'"
 
 The MCP server uses `uv` to manage dependencies automatically. If this fails:
@@ -631,13 +734,20 @@ cat ~/.local/share/opencode/auth.json
 
 # Or set environment variable
 export OPENROUTER_API_KEY="sk-or-v1-your-key"
+
+# Or check what MimirConfig sees:
+cd ~/Documents/Mimir
+python -c "from src.mimir.config import get_config, reset_config; reset_config(); c = get_config(); print(c.to_dict())"
 ```
 
 ### "Knowledge base not found"
 
 ```bash
-# Make sure you've indexed the project
+# Check what MimirConfig resolves to:
 cd /path/to/your/project
+python -c "from src.mimir.config import get_config, reset_config; reset_config(); c = get_config(); print('knowledge_dir:', c.knowledge_dir); print('warnings:', c.validate())"
+
+# Make sure you've indexed the project
 python .opencode/mimir-index.py
 ```
 

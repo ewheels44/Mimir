@@ -29,13 +29,39 @@ import time
 import threading
 import atexit
 import signal
+import logging
 from pathlib import Path
 from typing import Optional
-from dataclasses import dataclass
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# Module-level RLock for thread-safe index access
-_index_lock = threading.RLock()
+
+def setup_logging(level: str = "INFO") -> None:
+    """Configure structured logging for Mimir."""
+    log_level = getattr(logging, level.upper(), logging.INFO)
+
+    # Check if already configured
+    if logging.getLogger().handlers:
+        return
+
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
+
+    logging.basicConfig(
+        level=log_level,
+        handlers=[handler],
+        force=True,
+    )
+
+    # Quieten noisy libraries
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("openai").setLevel(logging.WARNING)
+
 
 # Try to import file watcher (graceful degradation)
 try:
@@ -45,14 +71,11 @@ try:
 except ImportError:
     MimirFileWatcher = None
     WATCHER_AVAILABLE = False
-    import logging
-
     logging.getLogger(__name__).warning(
         "watchdog not installed - file watcher disabled"
     )
 
-# Detect MIMIR_DIR from the location of this script
-MIMIR_DIR = Path(__file__).resolve().parent
+from src.mimir.config import MimirConfig, get_config
 from src.mimir.metrics import get_tracker
 
 from mcp.server.fastmcp import FastMCP
@@ -67,147 +90,41 @@ from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.llms.openai_like import OpenAILike
 
 
-@dataclass(frozen=True)
-class ServerConfig:
-    project_root: Path
-    knowledge_dir: Path
-    docs_dir: Path
-    code_dirs: list[Path]
-    embedding_model: str
-    llm_model: str
-    api_key: str
-    api_base: Optional[str]
-
-    @classmethod
-    def _get_api_key(cls) -> tuple[str, Optional[str]]:
-        api_key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get(
-            "OPENAI_API_KEY", ""
-        )
-        if api_key:
-            return api_key, os.environ.get("OPENAI_BASE_URL")
-
-        auth_path = Path.home() / ".local" / "share" / "opencode" / "auth.json"
-        if auth_path.exists():
-            try:
-                with open(auth_path) as f:
-                    auth_data = json.load(f)
-                if openrouter := auth_data.get("openrouter"):
-                    return openrouter.get("key", ""), "https://openrouter.ai/api/v1"
-            except (json.JSONDecodeError, KeyError):
-                pass
-
-        return "", None
-
-    @classmethod
-    def _load_project_config(cls, project_root: Path) -> dict:
-        config_path = project_root / ".mimir" / "config.json"
-        if config_path.exists():
-            try:
-                with open(config_path) as f:
-                    return json.load(f)
-            except (json.JSONDecodeError, IOError):
-                pass
-        return {}
-
-    @classmethod
-    def from_env(cls) -> "ServerConfig":
-        project_root = cls._detect_project_root()
-        api_key, api_base = cls._get_api_key()
-        if api_key and not api_base:
-            api_base = "https://openrouter.ai/api/v1"
-
-        project_config = cls._load_project_config(project_root)
-
-        docs_dir = Path(
-            project_config.get("docs_dir")
-            or os.environ.get("DOCS_DIR")
-            or project_root / "docs"
-        )
-        if not docs_dir.is_absolute():
-            docs_dir = project_root / docs_dir
-
-        code_dirs = []
-        if "code_dirs" in project_config:
-            code_dirs = [Path(d) for d in project_config["code_dirs"]]
-        elif code_dirs_env := os.environ.get("CODE_DIRS", ""):
-            code_dirs = [Path(d.strip()) for d in code_dirs_env.split(",") if d.strip()]
-
-        knowledge_dir = Path(
-            project_config.get("knowledge_dir")
-            or os.environ.get("KNOWLEDGE_DIR")
-            or project_root / ".knowledge" / "llamaindex"
-        )
-        # Resolve relative paths against project_root
-        if not knowledge_dir.is_absolute():
-            knowledge_dir = project_root / knowledge_dir
-
-        return cls(
-            project_root=project_root,
-            knowledge_dir=knowledge_dir,
-            docs_dir=docs_dir,
-            code_dirs=code_dirs,
-            embedding_model=project_config.get("embedding_model")
-            or os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small"),
-            llm_model=project_config.get("llm_model")
-            or os.environ.get(
-                "MIMIR_LLM_MODEL", "google/gemini-3.1-flash-lite-preview"
-            ),
-            api_key=api_key,
-            api_base=api_base,
-        )
-
-    @staticmethod
-    def _detect_project_root() -> Path:
-        for env_var in ["PROJECT_ROOT", "WORKSPACE_FOLDER", "VSCODE_CWD"]:
-            if path := os.environ.get(env_var):
-                resolved = Path(path).resolve()
-                if resolved.exists():
-                    print(
-                        f"[Knowledge Server] Project root from {env_var}: {resolved}",
-                        file=sys.stderr,
-                    )
-                    return resolved
-
-        cwd = Path.cwd().resolve()
-        markers = [
-            ".opencode",
-            "opencode.json",
-            ".git",
-            "pyproject.toml",
-            "package.json",
-            "Cargo.toml",
-        ]
-
-        current = cwd
-        while current != current.parent:
-            for marker in markers:
-                if (current / marker).exists():
-                    print(
-                        f"[Knowledge Server] Project root via {marker}: {current}",
-                        file=sys.stderr,
-                    )
-                    return current
-            current = current.parent
-
-        print(f"[Knowledge Server] Using CWD: {cwd}", file=sys.stderr)
-        return cwd
+def create_server_config() -> MimirConfig:
+    """Create MimirConfig for the MCP server."""
+    return get_config()
 
 
 class KnowledgeServer:
-    def __init__(self, config: ServerConfig):
+    def __init__(self, config: MimirConfig):
         self.config = config
+        self.project_root = config.project_root
+        self.knowledge_dir = config.knowledge_dir
+        self.docs_dir = config.docs_dir
+        self.code_dirs = list(config.code_dirs)
+        self.embedding_model = config.embedding_model
+        self.llm_model = config.llm_model
+        self.api_key = config.api_key
+        self.api_base = config.api_base
         self._index: Optional[VectorStoreIndex] = None
         self._watcher: Optional[MimirFileWatcher] = None
+        self._index_lock = threading.Lock()
+        self._setup_llama_index()
 
-        embed_kwargs = {"model": config.embedding_model, "api_key": config.api_key}
-        llm_kwargs = {"api_key": config.api_key}
-        if config.api_base:
-            embed_kwargs["api_base"] = config.api_base
-            llm_kwargs["api_base"] = config.api_base
+    def _setup_llama_index(self) -> None:
+        """Configure LlamaIndex with models from config."""
+        embed_kwargs = {
+            "model": self.config.embedding_model,
+            "api_key": self.config.api_key,
+        }
+        llm_kwargs = {"api_key": self.config.api_key}
+        if self.config.api_base:
+            embed_kwargs["api_base"] = self.config.api_base
+            llm_kwargs["api_base"] = self.config.api_base
 
         Settings.embed_model = OpenAIEmbedding(**embed_kwargs)
         # Use a faster model for query synthesis to avoid timeouts
-        Settings.llm = OpenAILike(model=config.llm_model, **llm_kwargs)
+        Settings.llm = OpenAILike(model=self.config.llm_model, **llm_kwargs)
 
         self.config.knowledge_dir.mkdir(parents=True, exist_ok=True)
 
@@ -217,7 +134,7 @@ class KnowledgeServer:
             return self._index
 
         # Slow path: load index with lock
-        with _index_lock:
+        with self._index_lock:
             # Double-check after acquiring lock
             if self._index is not None:
                 return self._index
@@ -236,10 +153,10 @@ class KnowledgeServer:
         from mimir.indexing import index_with_progress
 
         success = index_with_progress(
-            project_root=self.config.project_root,
-            docs_dir=self.config.docs_dir,
-            code_dirs=self.config.code_dirs,
-            knowledge_dir=self.config.knowledge_dir,
+            project_root=self.project_root,
+            docs_dir=self.docs_dir,
+            code_dirs=self.code_dirs,
+            knowledge_dir=self.knowledge_dir,
             force_reindex=False,
             verbose=True,
         )
@@ -248,7 +165,7 @@ class KnowledgeServer:
             raise ValueError("Failed to create index")
 
         storage_context = StorageContext.from_defaults(
-            persist_dir=str(self.config.knowledge_dir)
+            persist_dir=str(self.knowledge_dir)
         )
         return load_index_from_storage(storage_context)
 
@@ -262,7 +179,7 @@ class KnowledgeServer:
         duration_ms = int((time.time() - start_time) * 1000)
 
         # Track metrics - record_query will calculate realistic costs
-        tracker = get_tracker(self.config.project_root)
+        tracker = get_tracker(self.project_root)
         tracker.record_query(
             query_type="search",
             query_text=query,
@@ -295,7 +212,7 @@ class KnowledgeServer:
             duration_ms = int((time.time() - start_time) * 1000)
 
             # Track metrics - record_query will calculate realistic costs
-            tracker = get_tracker(self.config.project_root)
+            tracker = get_tracker(self.project_root)
             tracker.record_query(
                 query_type="query",
                 query_text=question,
@@ -309,17 +226,17 @@ class KnowledgeServer:
     def index_documents(self, docs_dir: Optional[Path] = None) -> str:
         from mimir.indexing import index_with_progress
 
-        target_dir = docs_dir or self.config.docs_dir
+        target_dir = docs_dir or self.docs_dir
 
         if not target_dir.exists():
             return f"Documents directory not found: {target_dir}"
 
-        with _index_lock:
+        with self._index_lock:
             success = index_with_progress(
-                project_root=self.config.project_root,
-                docs_dir=self.config.docs_dir,
-                code_dirs=self.config.code_dirs,
-                knowledge_dir=self.config.knowledge_dir,
+                project_root=self.project_root,
+                docs_dir=self.docs_dir,
+                code_dirs=self.code_dirs,
+                knowledge_dir=self.knowledge_dir,
                 force_reindex=False,
                 verbose=True,
             )
@@ -335,10 +252,10 @@ class KnowledgeServer:
         if not source_dir.exists():
             return f"Source directory not found: {source_dir}"
 
-        with _index_lock:
+        with self._index_lock:
             success = add_directory_with_progress(
                 source_dir=source_dir,
-                knowledge_dir=self.config.knowledge_dir,
+                knowledge_dir=self.knowledge_dir,
                 verbose=True,
             )
 
@@ -355,10 +272,10 @@ class KnowledgeServer:
             # Still attempt removal — file may have been deleted from disk
             pass
 
-        with _index_lock:
+        with self._index_lock:
             success = remove_file_from_index(
                 source_file=resolved,
-                knowledge_dir=self.config.knowledge_dir,
+                knowledge_dir=self.knowledge_dir,
                 verbose=True,
             )
 
@@ -370,10 +287,10 @@ class KnowledgeServer:
     def get_stats(self) -> dict:
         index = self.get_index()
         stats = {
-            "project_root": str(self.config.project_root),
-            "knowledge_dir": str(self.config.knowledge_dir),
-            "docs_dir": str(self.config.docs_dir),
-            "code_dirs": [str(d) for d in self.config.code_dirs],
+            "project_root": str(self.project_root),
+            "knowledge_dir": str(self.knowledge_dir),
+            "docs_dir": str(self.docs_dir),
+            "code_dirs": [str(d) for d in self.code_dirs],
             "has_index": index is not None,
         }
 
@@ -381,11 +298,11 @@ class KnowledgeServer:
             stats["document_count"] = len(index.storage_context.docstore.docs)
 
         total_source_files = 0
-        if self.config.docs_dir.exists():
-            files = list(self.config.docs_dir.rglob("*"))
+        if self.docs_dir.exists():
+            files = list(self.docs_dir.rglob("*"))
             total_source_files += len([f for f in files if f.is_file()])
 
-        for code_dir in self.config.code_dirs:
+        for code_dir in self.code_dirs:
             if code_dir.exists():
                 files = list(code_dir.rglob("*"))
                 total_source_files += len([f for f in files if f.is_file()])
@@ -408,17 +325,17 @@ class KnowledgeServer:
                 "message": "no index found, cannot start watcher",
             }
 
-        watched_dirs = [self.config.docs_dir] + self.config.code_dirs
+        watched_dirs = [self.docs_dir] + self.code_dirs
         watched_dirs = [d for d in watched_dirs if d.exists()]
 
         if not watched_dirs:
             return {"status": "error", "message": "no directories to watch"}
 
         self._watcher = MimirFileWatcher(
-            project_root=self.config.project_root,
+            project_root=self.project_root,
             watched_dirs=watched_dirs,
-            knowledge_dir=self.config.knowledge_dir,
-            index_lock=_index_lock,
+            knowledge_dir=self.knowledge_dir,
+            index_lock=self._index_lock,
         )
         self._watcher.start()
         return {"status": "running"}
@@ -488,7 +405,7 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         """
         path = Path(file_path)
         if not path.is_absolute():
-            path = server.config.project_root / path
+            path = server.project_root / path
         return server.remove_file(path)
 
     @mcp.tool()
@@ -533,7 +450,7 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         """
         from src.mimir.openspace_bridge import enrich_task_for_openspace
 
-        result = enrich_task_for_openspace(task, server.config.project_root)
+        result = enrich_task_for_openspace(task, server.project_root)
 
         # Add status field to distinguish empty results from errors
         if not result.get("success", False):
@@ -557,7 +474,7 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         """
         from src.mimir.openspace_bridge import get_bridge
 
-        bridge = get_bridge(server.config.project_root)
+        bridge = get_bridge(server.project_root)
         return json.dumps(bridge.health_check(), indent=2)
 
     @mcp.tool()
@@ -573,7 +490,7 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         """
         from src.mimir.sdk_cache import SDKCache
 
-        cache = SDKCache(server.config.project_root)
+        cache = SDKCache(server.project_root)
         docs = cache.get(library, topic)
         if docs:
             return docs
@@ -592,9 +509,46 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         """
         from src.mimir.sdk_cache import SDKCache
 
-        cache = SDKCache(server.config.project_root)
+        cache = SDKCache(server.project_root)
         cached = cache.list_cached()
         return json.dumps(cached, indent=2)
+
+    @mcp.tool()
+    async def health_check() -> str:
+        """Check Mimir server health and configuration status.
+
+        Returns diagnostic information about the server state,
+        including index availability, configuration summary, and any warnings.
+        """
+        config = get_config()
+        warnings = config.validate()
+
+        knowledge_dir = config.knowledge_dir
+        has_index = (knowledge_dir / "index_store.json").exists()
+
+        # Check manifest freshness
+        index_timestamp = None
+        manifest_path = knowledge_dir / "manifest.json"
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text())
+                index_timestamp = manifest.get("last_updated")
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        result = {
+            "status": "healthy" if (has_index and config.api_key) else "degraded",
+            "has_index": has_index,
+            "has_api_key": bool(config.api_key),
+            "index_timestamp": index_timestamp,
+            "project_root": str(config.project_root),
+            "embedding_model": config.embedding_model,
+            "llm_model": config.llm_model,
+            "warnings": warnings,
+            "config_summary": config.to_dict(),
+        }
+
+        return json.dumps(result, indent=2)
 
     return mcp
 
@@ -698,6 +652,8 @@ def start_watcher_server(
 
 
 def main():
+    setup_logging()
+
     parser = argparse.ArgumentParser(description="Mimir Knowledge MCP Server")
     parser.add_argument(
         "--index", metavar="DIR", nargs="?", const=True, help="Index documents"
@@ -723,7 +679,7 @@ def main():
 
     args = parser.parse_args()
 
-    config = ServerConfig.from_env()
+    config = create_server_config()
     server = KnowledgeServer(config)
 
     if args.index:

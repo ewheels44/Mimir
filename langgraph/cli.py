@@ -5,9 +5,6 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
-sys.path.insert(0, str(Path.home() / "Documents" / "Mimir"))
-
 from langchain_core.messages import HumanMessage
 from workflows.rag import graph as rag_graph
 from workflows.knowledge_agent import graph as agent_graph
@@ -59,7 +56,6 @@ async def run_rag(query: str):
             docs_retrieved=len(context),
             duration_ms=duration_ms,
         )
-        print(f"\n[Metrics] Recorded with estimated tokens")
         print(f"\n[Metrics] Recorded with estimated tokens")
 
 

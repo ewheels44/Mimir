@@ -198,25 +198,12 @@ class MetricsTracker:
     """Track and report Mimir usage metrics."""
 
     def __init__(self, project_root: Optional[Path] = None):
-        self.project_root = project_root or self._detect_project_root()
+        from src.mimir.config import get_config
+
+        config = get_config(project_root=project_root)
+        self.project_root = config.project_root
         self.metrics_file = self.project_root / ".knowledge" / "cost_metrics.jsonl"
         self._ensure_metrics_dir()
-
-    def _detect_project_root(self) -> Path:
-        cwd = Path.cwd().resolve()
-        markers = [
-            ".opencode",
-            ".git",
-            "pyproject.toml",
-            "package.json",
-            "opencode.json",
-        ]
-        current = cwd
-        while current != current.parent:
-            if any((current / m).exists() for m in markers):
-                return current
-            current = current.parent
-        return cwd
 
     def _ensure_metrics_dir(self):
         self.metrics_file.parent.mkdir(parents=True, exist_ok=True)

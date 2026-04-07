@@ -14,6 +14,20 @@ import pytest
 MIMIR_DIR = Path("/Users/ethanwheeler/Documents/Mimir")
 sys.path.insert(0, str(MIMIR_DIR))
 
+
+# ─── Fixtures ─────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def reset_mimir_config():
+    """Reset MimirConfig singleton before each test to avoid stale cached values."""
+    from src.mimir.config import reset_config
+
+    reset_config()
+    yield
+    reset_config()
+
+
 from src.mimir.openspace_bridge import (
     BridgeConfig,
     EnrichmentResult,
@@ -557,7 +571,10 @@ class TestResolveApiKeyFromEnv:
         auth_file = auth_dir / "auth.json"
         auth_file.write_text('{"openrouter": {"key": "sk-file-key"}}')
 
-        with patch("src.mimir.openspace_bridge.Path.home", return_value=tmp_path):
+        # Patch _AUTH_FILE_PATHS in config module since it's computed at import time
+        with patch(
+            "src.mimir.config._AUTH_FILE_PATHS", [auth_file.parent / "auth.json"]
+        ):
             key, base = _resolve_api_key_from_env()
 
         assert key == "sk-file-key"
@@ -568,11 +585,13 @@ class TestResolveApiKeyFromEnv:
         monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-        with patch("src.mimir.openspace_bridge.Path.home", return_value=tmp_path):
+        # Patch _AUTH_FILE_PATHS to empty list so no auth file is found
+        with patch("src.mimir.config._AUTH_FILE_PATHS", []):
             key, base = _resolve_api_key_from_env()
 
         assert key == ""
-        assert base is None
+        # Config returns default base URL even when no key found
+        assert base == "https://openrouter.ai/api/v1"
 
 
 # ─── Bridge Integration Tests ───────────────────────────────────────────────

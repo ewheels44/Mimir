@@ -4,60 +4,28 @@ Shared utilities for LangGraph workflows.
 Handles OpenRouter API configuration and MCP client setup.
 """
 
-import json
-import os
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Dict, Any
 
 from langchain_openai import ChatOpenAI
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 
-def get_openrouter_config() -> Tuple[str, str]:
-    """Get OpenRouter API key and base URL.
-
-    Returns:
-        Tuple of (api_key, base_url)
-    """
-    # Try environment variables first
-    api_key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get(
-        "OPENAI_API_KEY", ""
-    )
-    base_url = os.environ.get("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
-
-    if api_key:
-        return api_key, base_url
-
-    # Try opencode auth file
-    auth_path = Path.home() / ".local" / "share" / "opencode" / "auth.json"
-    if auth_path.exists():
-        try:
-            with open(auth_path) as f:
-                auth_data = json.load(f)
-            if openrouter := auth_data.get("openrouter"):
-                return openrouter.get("key", ""), "https://openrouter.ai/api/v1"
-        except (json.JSONDecodeError, KeyError):
-            pass
-
-    return "", base_url
-
-
 def create_llm(
-    model: str = "google/gemini-3.1-flash-lite-preview",
+    model: Optional[str] = None,
     temperature: float = 0,
     callbacks=None,
 ) -> ChatOpenAI:
-    """Create a LangChain LLM configured for OpenRouter.
+    """Create a LangChain LLM configured for OpenRouter."""
+    from src.mimir.config import get_config
 
-    Args:
-        model: Model name (OpenRouter format like "google/gemini-3.1-flash-lite-preview")
-        temperature: Sampling temperature
-        callbacks: Optional list of callback handlers for token tracking
+    config = get_config()
 
-    Returns:
-        Configured ChatOpenAI instance
-    """
-    api_key, base_url = get_openrouter_config()
+    if model is None:
+        model = config.llm_model
+
+    api_key = config.api_key
+    base_url = config.api_base
 
     if not api_key:
         raise ValueError(
@@ -71,7 +39,6 @@ def create_llm(
         "api_key": api_key,
         "base_url": base_url,
     }
-
     if callbacks:
         kwargs["callbacks"] = callbacks
 
@@ -80,7 +47,9 @@ def create_llm(
 
 def get_mcp_server_path() -> Path:
     """Get the path to the MCP server script."""
-    return Path.home() / "Documents" / "Mimir" / "mcp_server_llamaindex.py"
+    from src.mimir.config import get_config
+
+    return get_config().mimir_root / "mcp_server_llamaindex.py"
 
 
 def get_mcp_env(project_root: Optional[Path] = None) -> dict:
@@ -92,36 +61,27 @@ def get_mcp_env(project_root: Optional[Path] = None) -> dict:
     Returns:
         Dictionary of environment variables
     """
+    from src.mimir.config import get_config
+
     if project_root is None:
         project_root = detect_project_root()
 
-    api_key, base_url = get_openrouter_config()
+    config = get_config()
 
     return {
         "PROJECT_ROOT": str(project_root),
         "KNOWLEDGE_DIR": str(project_root / ".knowledge" / "llamaindex"),
         "DOCS_DIR": str(project_root / "docs"),
-        "OPENROUTER_API_KEY": api_key,
-        "OPENAI_BASE_URL": base_url,
+        "OPENROUTER_API_KEY": config.api_key,
+        "OPENAI_BASE_URL": config.api_base,
     }
 
 
 def detect_project_root() -> Path:
-    """Detect project root from current directory."""
-    for env_var in ["PROJECT_ROOT", "WORKSPACE_FOLDER"]:
-        if path := os.environ.get(env_var):
-            return Path(path).resolve()
+    """Detect project root from unified config."""
+    from src.mimir.config import get_config
 
-    cwd = Path.cwd().resolve()
-    markers = ["opencode.json", ".opencode", ".git", "pyproject.toml", "package.json"]
-
-    current = cwd
-    while current != current.parent:
-        if any((current / marker).exists() for marker in markers):
-            return current
-        current = current.parent
-
-    return cwd
+    return get_config().project_root
 
 
 def get_mcp_config(project_root: Optional[Path] = None) -> Dict[str, Any]:

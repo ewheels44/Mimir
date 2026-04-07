@@ -12,6 +12,20 @@ import pytest
 MIMIR_DIR = Path("/Users/ethanwheeler/Documents/Mimir")
 sys.path.insert(0, str(MIMIR_DIR))
 
+
+# ─── Fixtures ─────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def reset_mimir_config():
+    """Reset MimirConfig singleton before each test to avoid stale cached values."""
+    from src.mimir.config import reset_config
+
+    reset_config()
+    yield
+    reset_config()
+
+
 from src.mimir.metrics import (
     MODEL_COSTS,
     QUERY_TOKEN_ESTIMATES,

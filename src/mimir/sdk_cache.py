@@ -38,10 +38,15 @@ CACHE_DIR_NAME = ".knowledge/sdk-cache"
 class SDKCache:
     """Local cache for SDK documentation."""
 
-    def __init__(self, project_root: Path, ttl_days: int = DEFAULT_TTL_DAYS):
-        self.project_root = Path(project_root)
+    def __init__(
+        self, project_root: Optional[Path] = None, ttl_days: Optional[int] = None
+    ):
+        from src.mimir.config import get_config
+
+        config = get_config(project_root=project_root)
+        self.project_root = config.project_root
         self.cache_dir = self.project_root / CACHE_DIR_NAME
-        self.ttl_days = ttl_days
+        self.ttl_days = ttl_days if ttl_days is not None else config.sdk_cache_ttl_days
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._write_lock = threading.Lock()
 
@@ -259,6 +264,7 @@ class SDKCache:
 # ── CLI interface ──────────────────────────────────────────────────
 def main():
     import argparse
+    from src.mimir.config import MimirConfig
 
     parser = argparse.ArgumentParser(description="SDK Documentation Cache")
     parser.add_argument(
@@ -269,22 +275,11 @@ def main():
     parser.add_argument("library", nargs="?", help="Library name")
     parser.add_argument("--topic", default="general", help="Documentation topic")
     parser.add_argument("--project-root", type=Path, default=None)
-    parser.add_argument("--ttl", type=int, default=DEFAULT_TTL_DAYS)
+    parser.add_argument("--ttl", type=int, default=None)
     args = parser.parse_args()
 
-    # Detect project root
-    if args.project_root:
-        project_root = args.project_root
-    else:
-        cwd = Path.cwd()
-        markers = [".mimir", ".git", "opencode.json"]
-        project_root = cwd
-        for parent in [cwd] + list(cwd.parents):
-            if any((parent / m).exists() for m in markers):
-                project_root = parent
-                break
-
-    cache = SDKCache(project_root, ttl_days=args.ttl)
+    config = MimirConfig.load(project_root=args.project_root)
+    cache = SDKCache(project_root=config.project_root, ttl_days=args.ttl)
 
     if args.action == "list":
         cached = cache.list_cached()

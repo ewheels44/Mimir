@@ -33,7 +33,10 @@ import time
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from src.mimir.config import MimirConfig
 
 logger = logging.getLogger(__name__)
 
@@ -62,34 +65,34 @@ def _timed(label: str):
 
 @dataclass(frozen=True)
 class BridgeConfig:
-    """Immutable bridge configuration. All tunables in one place."""
+    """Bridge configuration. Now delegates to MimirConfig for defaults."""
 
     enabled: bool = True
     cache_maxsize: int = 128
-    cache_ttl_seconds: int = 600  # 10 minutes
+    cache_ttl_seconds: int = 600
     circuit_breaker_threshold: int = 3
     circuit_breaker_reset_seconds: int = 60
     search_timeout_seconds: float = 30.0
-    max_context_tokens: int = 2500  # ~15% of 16k context window
+    max_context_tokens: int = 2500
     top_k: int = 5
-    freshness_decay_hours: float = 168.0  # 7 days
+    freshness_decay_hours: float = 168.0
 
     @classmethod
     def from_env(cls) -> BridgeConfig:
-        """Load config from environment variables with sensible defaults."""
+        """Load from MimirConfig (which handles env vars, config file, defaults)."""
+        from src.mimir.config import get_config
+
+        config = get_config()
         return cls(
-            enabled=os.environ.get("MIMIR_OPENSPACE_ENABLED", "true").lower() == "true",
-            cache_maxsize=int(os.environ.get("MIMIR_BRIDGE_CACHE_SIZE", "128")),
-            cache_ttl_seconds=int(os.environ.get("MIMIR_BRIDGE_CACHE_TTL", "600")),
-            circuit_breaker_threshold=int(
-                os.environ.get("MIMIR_BRIDGE_CB_THRESHOLD", "3")
-            ),
-            circuit_breaker_reset_seconds=int(
-                os.environ.get("MIMIR_BRIDGE_CB_RESET", "60")
-            ),
-            search_timeout_seconds=float(os.environ.get("MIMIR_BRIDGE_TIMEOUT", "30")),
-            max_context_tokens=int(os.environ.get("MIMIR_BRIDGE_MAX_TOKENS", "2500")),
-            top_k=int(os.environ.get("MIMIR_BRIDGE_TOP_K", "5")),
+            enabled=config.bridge_enabled,
+            cache_maxsize=config.bridge_cache_maxsize,
+            cache_ttl_seconds=config.bridge_cache_ttl_seconds,
+            circuit_breaker_threshold=config.bridge_circuit_breaker_threshold,
+            circuit_breaker_reset_seconds=config.bridge_circuit_breaker_reset_seconds,
+            search_timeout_seconds=config.bridge_search_timeout_seconds,
+            max_context_tokens=config.bridge_max_context_tokens,
+            top_k=config.bridge_top_k,
+            freshness_decay_hours=config.bridge_freshness_decay_hours,
         )
 
 
@@ -320,29 +323,13 @@ def _resolve_api_key_from_env() -> tuple[str, Optional[str]]:
     """Resolve API key and base URL from environment or auth file.
 
     Returns (api_key, api_base) tuple. Empty string if no key found.
+
+    NOTE: Now delegates to MimirConfig for consistency.
     """
-    # Check env vars first
-    api_key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get(
-        "OPENAI_API_KEY", ""
-    )
-    if api_key:
-        return api_key, os.environ.get(
-            "OPENAI_BASE_URL", "https://openrouter.ai/api/v1"
-        )
+    from src.mimir.config import get_config
 
-    # Fall back to opencode auth file
-    auth_path = Path.home() / ".local" / "share" / "opencode" / "auth.json"
-    if auth_path.exists():
-        try:
-            auth_data = json.loads(auth_path.read_text())
-            if openrouter := auth_data.get("openrouter"):
-                key = openrouter.get("key", "")
-                if key:
-                    return key, "https://openrouter.ai/api/v1"
-        except (json.JSONDecodeError, KeyError):
-            pass
-
-    return "", None
+    cfg = get_config()
+    return cfg.api_key, cfg.api_base
 
 
 # ─── Main Bridge ─────────────────────────────────────────────────────────────
@@ -359,9 +346,27 @@ class MimirOpenSpaceBridge:
         config: Bridge configuration. Defaults to env vars.
     """
 
-    def __init__(self, project_root: Path, config: Optional[BridgeConfig] = None):
+    def __init__(
+        self,
+        project_root: Path,
+        config: Optional[BridgeConfig] = None,
+        mimir_config: Optional[MimirConfig] = None,
+    ):
         self._project_root = project_root.resolve()
-        self._config = config or BridgeConfig.from_env()
+        if mimir_config is not None:
+            self._config = BridgeConfig(
+                enabled=mimir_config.bridge_enabled,
+                cache_maxsize=mimir_config.bridge_cache_maxsize,
+                cache_ttl_seconds=mimir_config.bridge_cache_ttl_seconds,
+                circuit_breaker_threshold=mimir_config.bridge_circuit_breaker_threshold,
+                circuit_breaker_reset_seconds=mimir_config.bridge_circuit_breaker_reset_seconds,
+                search_timeout_seconds=mimir_config.bridge_search_timeout_seconds,
+                max_context_tokens=mimir_config.bridge_max_context_tokens,
+                top_k=mimir_config.bridge_top_k,
+                freshness_decay_hours=mimir_config.bridge_freshness_decay_hours,
+            )
+        else:
+            self._config = config or BridgeConfig.from_env()
         self._cache = _TimedCache(
             maxsize=self._config.cache_maxsize,
             ttl_seconds=self._config.cache_ttl_seconds,
@@ -380,21 +385,12 @@ class MimirOpenSpaceBridge:
         return True
 
     def _resolve_api_key(self) -> tuple[str, Optional[str]]:
-        """Resolve API key and base URL from env or auth file."""
+        """Resolve API key — uses MimirConfig as single source of truth."""
         with _timed("_resolve_api_key"):
-            return _resolve_api_key_from_env()
+            from src.mimir.config import get_config
 
-    def _resolve_embedding_model(self) -> str:
-        """Resolve embedding model name from project config or env."""
-        config_path = self._project_root / ".mimir" / "config.json"
-        if config_path.exists():
-            try:
-                project_config = json.loads(config_path.read_text())
-                if model := project_config.get("embedding_model"):
-                    return model
-            except (json.JSONDecodeError, OSError):
-                pass
-        return os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
+            cfg = get_config()
+            return cfg.api_key, cfg.api_base
 
     def _get_index(self):
         """Lazy-load the LlamaIndex vector store."""
@@ -418,11 +414,13 @@ class MimirOpenSpaceBridge:
                     return None
 
                 # Configure embedding model (required even for loading existing index)
-                with _timed("_get_index.resolve_api_key"):
-                    api_key, api_base = self._resolve_api_key()
+                with _timed("_get_index.resolve_config"):
+                    from src.mimir.config import get_config
 
-                with _timed("_get_index.resolve_embedding_model"):
-                    model_name = self._resolve_embedding_model()
+                    cfg = get_config()
+                    api_key = cfg.api_key
+                    api_base = cfg.api_base
+                    model_name = cfg.embedding_model
 
                 with _timed("_get_index.configure_embedding"):
                     embed_kwargs = {

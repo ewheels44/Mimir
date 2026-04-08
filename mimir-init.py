@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """
-mimir-init.py - Initialize a new project for Mimir knowledge base.
+mimir-init.py - Initialize Mimir for any project or install globally.
 
-Run this in ANY project directory to set up Mimir integration.
-This creates the necessary directories and configuration files.
+Two modes:
+  1. Global install (run once): Sets up MCP server config and system rules
+  2. Per-project init (run in each project): Creates directories and indexes
 
 Usage:
+    # Global install (run once after cloning Mimir)
+    python ~/Documents/Mimir/mimir-init.py --install
+
+    # Per-project init (run in each project you want to index)
+    cd /path/to/your/project
     python ~/Documents/Mimir/mimir-init.py
     python ~/Documents/Mimir/mimir-init.py --code-dirs=src,tests
 
-The --code-dirs flag pre-configures source code directories for indexing.
-If not specified, you can later add code_dirs to .mimir/config.json
-or use --add with mimir-index.py for incremental indexing.
+    # Uninstall (restores backed up configs)
+    python ~/Documents/Mimir/mimir-init.py --uninstall
 """
 
 import argparse
@@ -24,19 +29,96 @@ import time
 from pathlib import Path
 
 
-def find_opencode_config_dir() -> Path | None:
-    """Detect the OpenCode global config directory.
+# ─── Constants ────────────────────────────────────────────────────────────────
 
-    Checks common locations:
-    - ~/.config/opencode-openagents/
-    - ~/.config/opencode/
-    - ~/.config/oh-my-opencode/
+MIMIR_RULES_START = "<!-- MIMIR_RULES_START -->"
+MIMIR_RULES_END = "<!-- MIMIR_RULES_END -->"
 
-    Returns the first existing directory, or None if not found.
+MIMIR_RULES_BLOCK = f"""
+{MIMIR_RULES_START}
+## MIMIR RULES (4 ONLY)
+
+### 1. MIMIR FIRST
+Before any task, call `mimir-knowledge_enrich_task()`. This is my memory — without it I'm guessing. No exceptions.
+
+### 2. CONTEXT BEFORE CODE
+Before writing/editing:
+- Code → read `~/.config/opencode/context/core/standards/code-quality.md`
+- Docs → read `~/.config/opencode/context/core/standards/documentation.md`
+- Tests → read `~/.config/opencode/context/core/standards/test-coverage.md`
+- Review → read `~/.config/opencode/context/core/workflows/code-review.md`
+- Delegation → read `~/.config/opencode/context/core/workflows/task-delegation-basics.md`
+
+If it's bash-only, skip this.
+
+### 3. ASK FIRST
+Never run bash/write/edit/task without showing a plan and getting approval. Read/list/glob/grep are fine without asking.
+
+### 4. CHECK SKILLS
+Before executing, check if the task matches an available skill. If yes, load it with `skill()`. If no match, proceed with tools directly.
+
+## Reference (read when needed)
+
+Full reference is in the project's `AGENTS.md` if it exists. Key tool priority:
+
+| Situation | Tool |
+|-----------|------|
+| SDK/library question | `sdk_cache_get` |
+| Project context | `enrich_task` |
+| Semantic search | `search` |
+| Complex analysis | `rag_workflow` |
+| Find skills | `openspace_search_skills` |
+{MIMIR_RULES_END}
+"""
+
+BASE_SYSTEM_CONTEXT = """# System Context
+
+This context is injected at the start of every session.
+
+## Session Info
+- **Date**: {{date}}
+- **Git Branch**: {{git_branch}}
+- **Working Directory**: {{cwd}}
+- **Platform**: {{platform}}
+
+## Instructions
+<!-- Edit below this line to customize what gets injected -->
+
+"""
+
+
+# ─── Path Detection ───────────────────────────────────────────────────────────
+
+
+def find_mimir_root() -> Path | None:
+    """Detect where Mimir is installed.
+
+    Checks:
+    1. MIMIR_ROOT env var
+    2. Location of this file (mimir-init.py → project root)
+    3. ~/Documents/Mimir (legacy fallback)
     """
+    if env := os.environ.get("MIMIR_ROOT"):
+        p = Path(env).resolve()
+        if p.exists():
+            return p
+
+    this_file = Path(__file__).resolve()
+    if (this_file.parent / "mcp_server_llamaindex.py").exists():
+        return this_file.parent
+
+    legacy = Path.home() / "Documents" / "Mimir"
+    if legacy.exists():
+        return legacy
+
+    return None
+
+
+def find_opencode_config_dir() -> Path | None:
+    """Detect the OpenCode global config directory."""
     candidates = [
-        Path.home() / ".config" / "opencode-openagents",
         Path.home() / ".config" / "opencode",
+        Path.home() / ".config" / "opencode-openagents",
         Path.home() / ".config" / "oh-my-opencode",
     ]
 
@@ -47,125 +129,21 @@ def find_opencode_config_dir() -> Path | None:
     return None
 
 
-def install_opencode_plugin(
-    mimir_root: Path, config_dir: Path, force: bool = False
-) -> list[Path]:
-    """Install the Mimir system-prompt plugin into OpenCode's config directory.
-
-    Copies:
-    - opencode-plugin/plugin/system-prompt.ts -> {config_dir}/plugin/
-    - opencode-plugin/prompts/system-context.md -> {config_dir}/prompts/
-
-    Returns list of installed file paths.
-    """
-    plugin_source = mimir_root / "opencode-plugin" / "plugin" / "system-prompt.ts"
-    prompt_source = mimir_root / "opencode-plugin" / "prompts" / "system-context.md"
-
-    if not plugin_source.exists():
-        print(f"   ⚠️  Plugin source not found: {plugin_source}")
-        return []
-
-    installed = []
-
-    plugin_dir = config_dir / "plugin"
-    plugin_dir.mkdir(parents=True, exist_ok=True)
-    plugin_dest = plugin_dir / "system-prompt.ts"
-
-    if not plugin_dest.exists() or force:
-        shutil.copy2(plugin_source, plugin_dest)
-        installed.append(plugin_dest)
-
-    prompt_dir = config_dir / "prompts"
-    prompt_dir.mkdir(parents=True, exist_ok=True)
-    prompt_dest = prompt_dir / "system-context.md"
-
-    if not prompt_dest.exists() or force:
-        shutil.copy2(prompt_source, prompt_dest)
-        installed.append(prompt_dest)
-
-    return installed
-
-
-def install_opencode_agents(
-    mimir_root: Path, config_dir: Path, force: bool = False
-) -> list[Path]:
-    """Install Mimir-enhanced agent definitions into OpenCode's config directory.
-
-    These agent definitions include Mimir MCP tool permissions, ensuring subagents
-    can use mimir-knowledge_* tools for project-specific queries.
-
-    Copies:
-    - opencode-config/agent/subagents/core/*.md -> {config_dir}/agent/subagents/core/
-    - opencode-config/agent/subagents/code/*.md -> {config_dir}/agent/subagents/code/
-
-    Backs up existing files before overwriting.
-
-    Returns list of installed file paths.
-    """
-    agent_source_dir = mimir_root / "opencode-config" / "agent"
-
-    if not agent_source_dir.exists():
-        print(f"   ⚠️  Agent source directory not found: {agent_source_dir}")
-        return []
-
-    installed = []
-    agent_dest_dir = config_dir / "agent"
-
-    # Define which agent files to install
-    agent_files = [
-        ("subagents/core/contextscout.md", "ContextScout"),
-        ("subagents/core/task-manager.md", "TaskManager"),
-        ("subagents/code/coder-agent.md", "CoderAgent"),
-    ]
-
-    for rel_path, agent_name in agent_files:
-        source_file = agent_source_dir / rel_path
-        dest_file = agent_dest_dir / rel_path
-
-        if not source_file.exists():
-            print(f"   ⚠️  Agent source not found: {source_file}")
-            continue
-
-        # Create parent directories
-        dest_file.parent.mkdir(parents=True, exist_ok=True)
-
-        # Backup existing file if it exists and we're forcing
-        if dest_file.exists() and force:
-            backup_file = dest_file.with_suffix(f".md.backup-{int(time.time())}")
-            shutil.copy2(dest_file, backup_file)
-            print(f"   📦 Backed up: {backup_file.name}")
-
-        if not dest_file.exists() or force:
-            shutil.copy2(source_file, dest_file)
-            installed.append(dest_file)
-            print(f"   ✓ Installed agent: {agent_name}")
-        else:
-            print(f"   ⏭️  Skipped: {agent_name} (exists, use --force to overwrite)")
-
-    return installed
-
-
-def find_server_script() -> Path:
-    candidates = [
-        Path.cwd() / "mcp_server_llamaindex.py",
-        Path(__file__).parent / "mcp_server_llamaindex.py",
-        Path.home() / "Documents" / "Mimir" / "mcp_server_llamaindex.py",
-    ]
-
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate.resolve()
-
-    return None
-
-
 def detect_project_root() -> Path:
+    """Detect project root by walking up from cwd."""
     cwd = Path.cwd().resolve()
-    markers = [".opencode", ".git", "pyproject.toml", "package.json", "Cargo.toml"]
+    markers = [
+        "opencode.json",
+        ".opencode",
+        ".git",
+        "pyproject.toml",
+        "package.json",
+        "Cargo.toml",
+    ]
 
     current = cwd
     while current != current.parent:
-        if any((current / marker).exists() for marker in markers):
+        if any((current / m).exists() for m in markers):
             return current
         current = current.parent
 
@@ -173,91 +151,264 @@ def detect_project_root() -> Path:
 
 
 def get_openrouter_api_key() -> str | None:
+    """Resolve API key from env or auth file."""
     if api_key := os.environ.get("OPENROUTER_API_KEY"):
         return api_key
 
-    auth_path = Path.home() / ".local" / "share" / "opencode" / "auth.json"
-    if auth_path.exists():
-        try:
-            with open(auth_path) as f:
-                auth_data = json.load(f)
-            if openrouter := auth_data.get("openrouter"):
-                return openrouter.get("key")
-        except (json.JSONDecodeError, KeyError):
-            pass
+    for auth_path in [
+        Path.home() / ".local" / "share" / "opencode" / "auth.json",
+        Path.home() / ".config" / "opencode" / "auth.json",
+    ]:
+        if auth_path.exists():
+            try:
+                data = json.loads(auth_path.read_text())
+                if key := data.get("openrouter", {}).get("key"):
+                    return key
+            except (json.JSONDecodeError, KeyError):
+                continue
 
     return None
 
 
-def create_project_setup_script(project_root: Path, server_script: Path) -> Path:
-    opencode_dir = project_root / ".opencode"
-    opencode_dir.mkdir(exist_ok=True)
-
-    setup_script = opencode_dir / "mimir-index.py"
-    template_script = server_script.parent / ".opencode" / "mimir-index.py"
-
-    if template_script.exists():
-        shutil.copy2(template_script, setup_script)
-        setup_script.chmod(0o755)
-    else:
-        script_content = f'''#!/usr/bin/env python3
-"""
-Project indexing script for Mimir knowledge base.
-
-This script delegates to the central Mimir installation.
-"""
-
-import subprocess
-import sys
-from pathlib import Path
+# ─── Backup Helpers ───────────────────────────────────────────────────────────
 
 
-if __name__ == "__main__":
-    central_script = Path("{server_script.parent / ".opencode" / "mimir-index.py"}").resolve()
-    if central_script.exists():
-        subprocess.run([sys.executable, str(central_script)] + sys.argv[1:])
-    else:
-        print("❌ Central mimir-index.py not found")
-        sys.exit(1)
-'''
-        with open(setup_script, "w") as f:
-            f.write(script_content)
-        setup_script.chmod(0o755)
+def backup_file(src: Path, backup_dir: Path) -> Path | None:
+    """Backup a file with timestamp. Returns backup path or None."""
+    if not src.exists():
+        return None
 
-    return setup_script
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    backup = backup_dir / f"{src.name}.{timestamp}.bak"
+    shutil.copy2(src, backup)
+    return backup
 
 
-def create_agents_md(project_root: Path, mimir_root: Path) -> Path:
-    """Copy AGENTS.md from Mimir installation to project's .mimir directory.
+def restore_latest_backup(name: str, target: Path, backup_dir: Path) -> bool:
+    """Restore the most recent backup of a file."""
+    if not backup_dir.exists():
+        return False
 
-    This provides a local copy of the Mimir documentation that can be
-    referenced in opencode.json for AGENTS.md chaining.
+    backups = sorted(backup_dir.glob(f"{name}.*.bak"), reverse=True)
+    if not backups:
+        return False
+
+    shutil.copy2(backups[0], target)
+    return True
+
+
+# ─── Global Install ───────────────────────────────────────────────────────────
+
+
+def inject_system_rules(opencode_config_dir: Path, force: bool = False) -> dict:
+    """Inject Mimir rules into system-context.md using markers.
+
+    Returns status dict with actions taken.
     """
-    mimir_dir = project_root / ".mimir"
-    mimir_dir.mkdir(exist_ok=True)
+    result = {"backed_up": False, "injected": False, "skipped": False}
 
-    source_agents = mimir_root / "AGENTS.md"
-    dest_agents = mimir_dir / "AGENTS.md"
+    prompts_dir = opencode_config_dir / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    system_context = prompts_dir / "system-context.md"
+    backup_dir = opencode_config_dir / "mimir-backups"
 
-    if source_agents.exists():
-        shutil.copy2(source_agents, dest_agents)
+    # Backup existing
+    if system_context.exists():
+        backup = backup_file(system_context, backup_dir)
+        if backup:
+            result["backed_up"] = str(backup)
+
+    # Create base if missing
+    if not system_context.exists():
+        system_context.write_text(BASE_SYSTEM_CONTEXT)
+
+    # Read current content
+    content = system_context.read_text()
+
+    # Remove existing Mimir block (for re-installs)
+    if MIMIR_RULES_START in content and MIMIR_RULES_END in content:
+        if not force:
+            result["skipped"] = True
+            return result
+        before = content.split(MIMIR_RULES_START)[0]
+        after = content.split(MIMIR_RULES_END)[1]
+        content = before.rstrip() + after
+
+    # Append rules
+    content = content.rstrip() + "\n" + MIMIR_RULES_BLOCK + "\n"
+    system_context.write_text(content)
+    result["injected"] = True
+
+    return result
+
+
+def install_mcp_config(opencode_config_dir: Path, mimir_root: Path) -> dict:
+    """Merge Mimir MCP server config into global opencode.json.
+
+    Preserves existing MCP entries. Returns status dict.
+    """
+    result = {"backed_up": False, "updated": False}
+
+    config_path = opencode_config_dir / "opencode.json"
+    backup_dir = opencode_config_dir / "mimir-backups"
+
+    # Backup existing
+    if config_path.exists():
+        backup = backup_file(config_path, backup_dir)
+        if backup:
+            result["backed_up"] = str(backup)
+
+    # Load existing or create new
+    if config_path.exists():
+        config = json.loads(config_path.read_text())
     else:
-        dest_agents.write_text("""# Project Knowledge Base (Mimir)
+        config = {"$schema": "https://opencode.ai/config.json"}
 
-## Learn More
+    if "mcp" not in config:
+        config["mcp"] = {}
 
-- Full documentation: https://github.com/ewheels44/Mimir
-- See AGENTS.md in the Mimir installation directory for complete guide
+    # Add Mimir knowledge server
+    mcp_server = mimir_root / "scripts" / "run_mcp_server.sh"
+    config["mcp"]["mimir-knowledge"] = {
+        "type": "local",
+        "command": [str(mcp_server)],
+        "enabled": True,
+        "environment": {
+            "EMBEDDING_MODEL": "text-embedding-3-small",
+            "OPENAI_BASE_URL": "https://openrouter.ai/api/v1",
+            "LOG_LEVEL": "INFO",
+        },
+    }
 
----
+    # Add OpenSpace server if available
+    openspace_server = mimir_root / "scripts" / "run_openspace_mcp.sh"
+    if openspace_server.exists():
+        config["mcp"]["openspace"] = {
+            "type": "local",
+            "command": [str(openspace_server)],
+            "environment": {
+                "OPENSPACE_HOST_SKILL_DIRS": str(mimir_root / "skills"),
+            },
+            "enabled": True,
+            "timeout": 600000,
+        }
 
-*Powered by Mimir - Knowledge that follows you*
-""")
+    config_path.write_text(json.dumps(config, indent=2) + "\n")
+    result["updated"] = True
 
-    return dest_agents
+    return result
+
+
+def global_install(mimir_root: Path, opencode_config_dir: Path, force: bool) -> bool:
+    """Run global installation: MCP config + system rules."""
+    print(f"\n🔧 Global Mimir Install")
+    print(f"   Mimir root: {mimir_root}")
+    print(f"   OpenCode config: {opencode_config_dir}")
+
+    # Check prerequisites
+    mcp_server = mimir_root / "scripts" / "run_mcp_server.sh"
+    if not mcp_server.exists():
+        print(f"\n❌ MCP server not found at {mcp_server}")
+        return False
+
+    # 1. MCP config
+    print("\n📦 MCP Server Config:")
+    mcp_result = install_mcp_config(opencode_config_dir, mimir_root)
+    if mcp_result["backed_up"]:
+        print(f"   ✓ Backed up opencode.json → {mcp_result['backed_up']}")
+    if mcp_result["updated"]:
+        print(f"   ✓ Updated opencode.json with Mimir MCP server")
+
+    # 2. System rules
+    print("\n📋 System Rules:")
+    rules_result = inject_system_rules(opencode_config_dir, force=force)
+    if rules_result["backed_up"]:
+        print(f"   ✓ Backed up system-context.md → {rules_result['backed_up']}")
+    if rules_result["injected"]:
+        print(f"   ✓ Injected Mimir rules into system-context.md")
+    if rules_result["skipped"]:
+        print(f"   ⏭️  Mimir rules already present (use --force to re-inject)")
+
+    # 3. API key check
+    api_key = get_openrouter_api_key()
+    if api_key:
+        print(f"\n🔑 OpenRouter API key found")
+    else:
+        print(f"\n⚠️  No OpenRouter API key found")
+        print(f"   Set OPENROUTER_API_KEY or run: opencode auth openrouter")
+
+    print(f"\n✅ Global install complete!")
+    print(f"\nNext steps:")
+    print(f"  1. Restart OpenCode to pick up the MCP server")
+    print(
+        f"  2. In any project, run: python {Path(__file__).resolve()} --code-dirs=src,tests"
+    )
+    print(f"  3. Then use: mimir-knowledge_enrich_task()")
+    print(f"\nTo uninstall: python {Path(__file__).resolve()} --uninstall")
+
+    return True
+
+
+# ─── Uninstall ────────────────────────────────────────────────────────────────
+
+
+def global_uninstall(opencode_config_dir: Path) -> bool:
+    """Remove Mimir from global config. Restores backups if available."""
+    print(f"\n🗑️  Mimir Uninstall")
+    backup_dir = opencode_config_dir / "mimir-backups"
+
+    restored = False
+
+    # Try to restore opencode.json from backup
+    config_path = opencode_config_dir / "opencode.json"
+    if restore_latest_backup("opencode.json", config_path, backup_dir):
+        print(f"   ✓ Restored opencode.json from backup")
+        restored = True
+    elif config_path.exists():
+        # Clean removal of Mimir entries
+        config = json.loads(config_path.read_text())
+        removed = []
+        for key in ["mimir-knowledge", "openspace"]:
+            if "mcp" in config and key in config.get("mcp", {}):
+                del config["mcp"][key]
+                removed.append(key)
+        if removed:
+            config_path.write_text(json.dumps(config, indent=2) + "\n")
+            print(f"   ✓ Removed MCP entries: {', '.join(removed)}")
+            restored = True
+
+    # Try to restore system-context.md from backup
+    system_context = opencode_config_dir / "prompts" / "system-context.md"
+    if restore_latest_backup("system-context.md", system_context, backup_dir):
+        print(f"   ✓ Restored system-context.md from backup")
+        restored = True
+    elif system_context.exists():
+        # Clean removal using markers
+        content = system_context.read_text()
+        if MIMIR_RULES_START in content and MIMIR_RULES_END in content:
+            before = content.split(MIMIR_RULES_START)[0]
+            after = content.split(MIMIR_RULES_END)[1]
+            system_context.write_text(before.rstrip() + after)
+            print(f"   ✓ Removed Mimir rules from system-context.md")
+            restored = True
+
+    if not restored:
+        print(f"   ℹ️  Nothing to uninstall")
+
+    if backup_dir.exists():
+        print(f"\n   Backups preserved at: {backup_dir}/")
+        print(f"   To delete: rm -rf {backup_dir}")
+
+    print(f"\n✅ Uninstall complete. Restart OpenCode to apply.")
+    return True
+
+
+# ─── Per-Project Init ─────────────────────────────────────────────────────────
 
 
 def create_mimir_config(project_root: Path, code_dirs: list[str] = None) -> Path:
+    """Create .mimir/config.json for a project."""
     mimir_dir = project_root / ".mimir"
     mimir_dir.mkdir(exist_ok=True)
 
@@ -271,247 +422,133 @@ def create_mimir_config(project_root: Path, code_dirs: list[str] = None) -> Path
         config["code_dirs"] = code_dirs
 
     config_path = mimir_dir / "config.json"
-    with open(config_path, "w") as f:
-        json.dump(config, f, indent=2)
-
+    config_path.write_text(json.dumps(config, indent=2) + "\n")
     return config_path
 
 
-def create_opencode_json(project_root: Path, mimir_root: Path) -> Path:
-    """Create opencode.json with instructions array for AGENTS.md chaining.
+def create_project_setup_script(project_root: Path, mimir_root: Path) -> Path:
+    """Create .opencode/mimir-index.py that delegates to central install."""
+    opencode_dir = project_root / ".opencode"
+    opencode_dir.mkdir(exist_ok=True)
 
-    This enables OpenCode to load multiple AGENTS.md files in order:
-    1. Mimir system documentation (base)
-    2. Project root AGENTS.md (project-specific)
-    3. Any subdirectory AGENTS.md files (subsystem-specific)
+    setup_script = opencode_dir / "mimir-index.py"
+    template_script = mimir_root / ".opencode" / "mimir-index.py"
 
-    Users should customize this based on their project structure.
-    """
-    opencode_json = project_root / "opencode.json"
+    if template_script.exists():
+        shutil.copy2(template_script, setup_script)
+        setup_script.chmod(0o755)
+    else:
+        script_content = f'''#!/usr/bin/env python3
+"""Project indexing script — delegates to central Mimir installation."""
+import subprocess, sys
+from pathlib import Path
 
-    config = {
-        "$schema": "https://opencode.ai/config.json",
-        "instructions": [f"{mimir_root}/AGENTS.md", "AGENTS.md"],
-    }
+central = Path("{mimir_root / ".opencode" / "mimir-index.py"}").resolve()
+if central.exists():
+    subprocess.run([sys.executable, str(central)] + sys.argv[1:])
+else:
+    print("❌ Central mimir-index.py not found")
+    sys.exit(1)
+'''
+        setup_script.write_text(script_content)
+        setup_script.chmod(0o755)
 
-    with open(opencode_json, "w") as f:
-        json.dump(config, f, indent=2)
-
-    return opencode_json
+    return setup_script
 
 
-def create_mimir_skill(project_root: Path, mimir_root: Path) -> Path:
-    """Create a Mimir skill file for subagent context inheritance.
+def create_agents_md(project_root: Path, mimir_root: Path) -> Path:
+    """Copy AGENTS.md from Mimir to project's .mimir directory."""
+    mimir_dir = project_root / ".mimir"
+    mimir_dir.mkdir(exist_ok=True)
 
-    NOTE: The load_skills parameter does NOT exist in the task tool.
-    Instead, subagents now have Mimir tool permissions built-in.
+    source = mimir_root / "AGENTS.md"
+    dest = mimir_dir / "AGENTS.md"
 
-    This skill file is kept for reference and can be used to embed
-    Mimir instructions directly in prompts for subagents that don't
-    have built-in Mimir permissions (explore, librarian).
-
-    Usage for subagents with built-in Mimir permissions (ContextScout, CoderAgent, TaskManager):
-        task(
-            subagent_type="ContextScout",
-            prompt="Find patterns. Use mimir-knowledge_search for project queries."
+    if source.exists():
+        shutil.copy2(source, dest)
+    else:
+        dest.write_text(
+            "# Project Knowledge Base (Mimir)\n\nSee Mimir installation for docs.\n"
         )
 
-    Usage for other subagents (explore, librarian):
-        task(
-            subagent_type="explore",
-            prompt="Find patterns. IMPORTANT: Use mimir-knowledge_search instead of grep."
-        )
-    """
-    skills_dir = project_root / ".opencode" / "skills"
-    skills_dir.mkdir(parents=True, exist_ok=True)
-
-    source_agents = mimir_root / "AGENTS.md"
-    agents_content = source_agents.read_text() if source_agents.exists() else ""
-
-    skill_content = f"""---
-name: mimir
-description: Mimir knowledge base directives for subagent context inheritance. Subagents now have Mimir tool permissions built-in - just include instructions in your prompt to use them.
----
-
-# Mimir Knowledge Base — Subagent Context
-
-This skill ensures that spawned subagents receive the full Mimir context
-that would otherwise be missing when they are created via task().
-
-## Why This Skill Is Needed
-
-When you spawn a subagent using:
-```
-task(subagent_type="explore", prompt="...")
-```
-
-The subagent starts with a clean context containing only:
-- Base agent configuration from ~/.config/opencode/oh-my-opencode.json
-- The task prompt you provide
-- NOT the project-specific opencode.json instructions
-- NOT the full AGENTS.md directives
-
-## How to Use
-
-**Note**: The `load_skills` parameter does NOT exist in the task tool. Instead, subagents now have Mimir tool permissions built-in.
-
-For subagents with built-in Mimir permissions (ContextScout, CoderAgent, TaskManager), just include instructions:
-
-```
-task(
-    subagent_type="ContextScout",
-    prompt="Find authentication patterns. Use mimir-knowledge_search for project-specific queries."
-)
-```
-
-For other subagents (explore, librarian), embed Mimir instructions in the prompt:
-
-```
-task(
-    subagent_type="explore",
-    run_in_background=true,
-    prompt="Find auth implementations. IMPORTANT: Use mimir-knowledge_search for project-specific queries instead of grep when available."
-)
-```
-
----
-
-{agents_content}
-"""
-
-    skill_path = skills_dir / "mimir.md"
-    with open(skill_path, "w") as f:
-        f.write(skill_content)
-
-    return skill_path
+    return dest
 
 
-def init_project(project_root: Path, server_script: Path, args) -> bool:
-    from tqdm import tqdm
-    import time
+def init_project(project_root: Path, mimir_root: Path, args) -> bool:
+    """Initialize a project for Mimir knowledge base."""
+    try:
+        from tqdm import tqdm
+    except ImportError:
+        # Fallback if tqdm not installed
+        def tqdm(iterable, **kwargs):
+            return iterable
 
-    print(f"🎯 Project root: {project_root}")
+        class tqdm:
+            @staticmethod
+            def write(msg):
+                print(msg)
+
+    print(f"\n🎯 Project init: {project_root}")
 
     knowledge_dir = project_root / ".knowledge" / "llamaindex"
     docs_dir = project_root / "docs"
     opencode_dir = project_root / ".opencode"
     mimir_dir = project_root / ".mimir"
 
-    directories = [
+    # Create directories
+    print("\n📁 Creating directories...")
+    for d, desc in [
         (knowledge_dir, "Knowledge base"),
         (docs_dir, "Documents"),
         (opencode_dir, "OpenCode config"),
         (mimir_dir, "Mimir config"),
-    ]
+    ]:
+        d.mkdir(parents=True, exist_ok=True)
+        print(f"   ✓ {desc}: {d}")
 
-    print("\n📁 Creating directories...")
-    for dir_path, desc in tqdm(directories, desc="   Creating", unit="dir", ncols=80):
-        dir_path.mkdir(parents=True, exist_ok=True)
-        tqdm.write(f"   ✓ {desc}: {dir_path}")
-
+    # Indexing script
     setup_script = opencode_dir / "mimir-index.py"
     if not setup_script.exists() or args.force:
-        create_project_setup_script(project_root, server_script)
-        tqdm.write(f"   ✓ Created: {setup_script}")
+        create_project_setup_script(project_root, mimir_root)
+        print(f"   ✓ Created: {setup_script}")
     else:
-        tqdm.write(f"   ⏭️  Skipped: {setup_script} (exists, use --force to overwrite)")
+        print(f"   ⏭️  Skipped: {setup_script} (exists)")
 
+    # Mimir config
     config_path = mimir_dir / "config.json"
     if not config_path.exists() or args.force:
         code_dirs = args.code_dirs.split(",") if args.code_dirs else None
-        config_path = create_mimir_config(project_root, code_dirs)
-        tqdm.write(f"   ✓ Created: {config_path}")
+        create_mimir_config(project_root, code_dirs)
+        print(f"   ✓ Created: {config_path}")
         if code_dirs:
-            tqdm.write(f"   Code directories: {code_dirs}")
+            print(f"   Code directories: {code_dirs}")
     else:
-        tqdm.write(f"   ⏭️  Skipped: {config_path} (exists, use --force to overwrite)")
+        print(f"   ⏭️  Skipped: {config_path} (exists)")
 
-    mimir_root = server_script.parent
-
+    # AGENTS.md reference
     agents_path = mimir_dir / "AGENTS.md"
     if not agents_path.exists() or args.force:
-        agents_path = create_agents_md(project_root, mimir_root)
-        tqdm.write(f"   ✓ Created: {agents_path}")
+        create_agents_md(project_root, mimir_root)
+        print(f"   ✓ Created: {agents_path}")
     else:
-        tqdm.write(f"   ⏭️  Skipped: {agents_path} (exists, use --force to overwrite)")
+        print(f"   ⏭️  Skipped: {agents_path} (exists)")
 
-    opencode_json_path = project_root / "opencode.json"
-    if not opencode_json_path.exists() or args.force:
-        opencode_json_path = create_opencode_json(project_root, mimir_root)
-        tqdm.write(f"   ✓ Created: {opencode_json_path}")
-        tqdm.write(
-            "   ⚠️  IMPORTANT: Customize 'instructions' array for your project structure"
-        )
-    else:
-        tqdm.write(
-            f"   ⏭️  Skipped: {opencode_json_path} (exists, use --force to overwrite)"
-        )
-
-    mimir_skill_path = project_root / ".opencode" / "skills" / "mimir.md"
-    if not mimir_skill_path.exists() or args.force:
-        mimir_skill_path = create_mimir_skill(project_root, mimir_root)
-        tqdm.write(f"   ✓ Created: {mimir_skill_path}")
-        tqdm.write(
-            "   ⚠️  IMPORTANT: Subagents now have Mimir tool permissions built-in."
-        )
-        tqdm.write(
-            "      Just include instructions: 'Use mimir-knowledge_search for project queries.'"
-        )
-    else:
-        tqdm.write(
-            f"   ⏭️  Skipped: {mimir_skill_path} (exists, use --force to overwrite)"
-        )
-
-    if args.opencode_config:
-        opencode_config_dir = Path(args.opencode_config).resolve()
-    else:
-        opencode_config_dir = find_opencode_config_dir()
-
-    if opencode_config_dir and opencode_config_dir.exists():
-        installed = install_opencode_plugin(mimir_root, opencode_config_dir, args.force)
-        if installed:
-            for f in installed:
-                tqdm.write(f"   ✓ Installed plugin: {f}")
-            tqdm.write("   ⚠️  Restart OpenCode for plugin changes to take effect")
-        else:
-            tqdm.write(
-                f"   ⏭️  Plugin already installed in {opencode_config_dir}/plugin/ (use --force to overwrite)"
-            )
-
-        # Install Mimir-enhanced agent definitions
-        tqdm.write("\n🤖 Installing Mimir-enhanced agent definitions...")
-        installed_agents = install_opencode_agents(
-            mimir_root, opencode_config_dir, args.force
-        )
-        if installed_agents:
-            tqdm.write(f"   ✓ Installed {len(installed_agents)} agent definitions")
-            tqdm.write("   ⚠️  Restart OpenCode for agent changes to take effect")
-    else:
-        tqdm.write("   ⚠️  OpenCode config dir not found — plugin not installed")
-        tqdm.write(
-            "      Use --opencode-config=/path/to/config or create ~/.config/opencode-openagents/"
-        )
-
-    local_server = project_root / "mcp_server_llamaindex.py"
-    if not local_server.exists() and not args.server_path:
-        tqdm.write(f"ℹ️  Server script at: {server_script}")
-        tqdm.write("   (referenced from central location)")
-
+    # API key check
     api_key = get_openrouter_api_key()
-    if not api_key:
-        print("\n⚠️  Warning: OpenRouter API key not found")
-        print("   Set OPENROUTER_API_KEY environment variable")
-        print("   Or configure it in OpenCode settings")
+    if api_key:
+        print(f"\n🔑 OpenRouter API key found")
     else:
-        print("\n🔑 OpenRouter API key found")
+        print(f"\n⚠️  No OpenRouter API key found")
+        print(f"   Set OPENROUTER_API_KEY or run: opencode auth openrouter")
 
+    # Index documents
     if not args.no_index and docs_dir.exists() and any(docs_dir.iterdir()):
-        print("\n📚 Starting document indexing...")
-        print("   (This may take a few minutes for large projects)")
-        print()
-        env = {**os.environ, "OPENROUTER_API_KEY": api_key or ""}
+        print(f"\n📚 Indexing documents...")
+        env = {**os.environ}
+        if api_key:
+            env["OPENROUTER_API_KEY"] = api_key
 
-        index_script = project_root / ".opencode" / "mimir-index.py"
+        index_script = opencode_dir / "mimir-index.py"
         result = subprocess.run(
             [sys.executable, str(index_script)],
             cwd=project_root,
@@ -519,83 +556,65 @@ def init_project(project_root: Path, server_script: Path, args) -> bool:
         )
 
         if result.returncode != 0:
-            print(f"\n❌ Indexing failed with exit code: {result.returncode}")
+            print(f"\n❌ Indexing failed (exit code {result.returncode})")
             return False
     elif not args.no_index:
-        print("\n⚠️  No documents to index yet")
-        print("   Add files to docs/ and run: python .opencode/mimir-index.py")
+        print(f"\n⚠️  No documents to index yet")
+        print(f"   Add files to docs/ then run: python .opencode/mimir-index.py")
 
-    print("\n✅ Project initialized successfully!")
-    print("\n📖 Next steps:")
-    print("   1. Add documentation files to docs/")
-    print("      Example: echo '# My Project' > docs/README.md")
-    print("\n   2. Index your documents:")
-    print("      python .opencode/mimir-index.py")
-    print("\n   3. Include source code in indexing (optional):")
-    print("      A. Edit .mimir/config.json and add:")
-    print('         "code_dirs": ["src", "tests", "lib"]')
-    print("      B. Then reindex:")
-    print("         python .opencode/mimir-index.py --reindex")
-    print("      C. Or use incremental adds:")
-    print("         python .opencode/mimir-index.py --add src")
-    print("\n   4. Query your knowledge base:")
-    print(
-        "      Via CLI: python ~/Documents/Mimir/mcp_server_llamaindex.py --query 'your question'"
-    )
-    print(
-        "      Via OpenCode: Just ask questions and Mimir tools will search automatically"
-    )
-    print("\n   5. OpenCode MCP Integration:")
-    print("      The MCP server is configured in ~/.config/opencode/opencode.json")
-    print("      and will automatically provide search/query tools to OpenCode agents.")
-    print(
-        "      Customize opencode.json to chain AGENTS.md files for multi-module projects."
-    )
-    print("\n   6. Using with Subagents:")
-    print("      Subagents (ContextScout, CoderAgent, TaskManager) now have Mimir")
-    print("      tool permissions built-in. Just include instructions in your prompt:")
-    print("         task(")
-    print("             subagent_type='ContextScout',")
-    print(
-        "             prompt='Find patterns. Use mimir-knowledge_search for project queries.'"
-    )
-    print("         )")
-    print("      For other subagents (explore, librarian), embed Mimir instructions:")
-    print("         task(")
-    print("             subagent_type='explore',")
-    print(
-        "             prompt='Find patterns. IMPORTANT: Use mimir-knowledge_search instead of grep.'"
-    )
-    print("         )")
-    print("\n🌐 Web UI:")
-    print("   ./ ~/Documents/Mimir/scripts/start_web_ui.sh")
-    print("   Then open http://localhost:8000")
-    print("\n📚 Documentation:")
-    print("   See README.md for complete user guide and usage examples")
+    print(f"\n✅ Project initialized!")
+    print(f"\nNext steps:")
+    print(f"  1. Add docs to docs/ and code to your source dirs")
+    print(f"  2. Index: python .opencode/mimir-index.py")
+    print(f"  3. Query: mimir-knowledge_enrich_task('your question')")
 
     return True
 
 
+# ─── Main ─────────────────────────────────────────────────────────────────────
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Initialize knowledge MCP for any project"
+        description="Mimir installer and project initializer"
+    )
+
+    # Mode selection
+    parser.add_argument(
+        "--install",
+        action="store_true",
+        help="Global install: set up MCP server and system rules (run once)",
     )
     parser.add_argument(
-        "--force", action="store_true", help="Overwrite existing setup files"
+        "--uninstall",
+        action="store_true",
+        help="Remove Mimir from global config (restores backups)",
     )
-    parser.add_argument(
-        "--no-index", action="store_true", help="Skip initial document indexing"
-    )
-    parser.add_argument(
-        "--server-path",
-        help="Path to mcp_server_llamaindex.py (auto-detected if not provided)",
-    )
-    parser.add_argument(
-        "--project-root", help="Project root directory (default: auto-detect)"
-    )
+
+    # Per-project options
     parser.add_argument(
         "--code-dirs",
-        help="Comma-separated list of code directories to index (e.g., 'src,tests,lib')",
+        help="Comma-separated code directories to index (e.g., 'src,tests')",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing files",
+    )
+    parser.add_argument(
+        "--no-index",
+        action="store_true",
+        help="Skip initial document indexing",
+    )
+
+    # Override paths
+    parser.add_argument(
+        "--mimir-root",
+        help="Path to Mimir installation (auto-detected if not provided)",
+    )
+    parser.add_argument(
+        "--project-root",
+        help="Project root directory (auto-detected if not provided)",
     )
     parser.add_argument(
         "--opencode-config",
@@ -604,27 +623,48 @@ def main():
 
     args = parser.parse_args()
 
-    if args.server_path:
-        server_script = Path(args.server_path).resolve()
-        if not server_script.exists():
-            print(f"❌ Server script not found: {server_script}")
-            return 1
+    # Resolve Mimir root
+    if args.mimir_root:
+        mimir_root = Path(args.mimir_root).resolve()
     else:
-        server_script = find_server_script()
-        if not server_script:
-            print("❌ Could not find mcp_server_llamaindex.py")
-            print("   Provide --server-path or run from the Mimir project")
-            return 1
+        mimir_root = find_mimir_root()
 
-    print(f"📜 Server script: {server_script}")
+    if not mimir_root or not mimir_root.exists():
+        print("❌ Could not find Mimir installation")
+        print("   Provide --mimir-root or run from the Mimir project")
+        return 1
+
+    # Resolve OpenCode config dir
+    if args.opencode_config:
+        opencode_config_dir = Path(args.opencode_config).resolve()
+    else:
+        opencode_config_dir = find_opencode_config_dir()
+
+    # ─── Uninstall mode ───────────────────────────────────────────────────
+
+    if args.uninstall:
+        if not opencode_config_dir:
+            print("❌ OpenCode config directory not found")
+            return 1
+        return 0 if global_uninstall(opencode_config_dir) else 1
+
+    # ─── Global install mode ──────────────────────────────────────────────
+
+    if args.install:
+        if not opencode_config_dir:
+            print("❌ OpenCode config directory not found")
+            print("   Create it: mkdir -p ~/.config/opencode")
+            return 1
+        return 0 if global_install(mimir_root, opencode_config_dir, args.force) else 1
+
+    # ─── Per-project init mode (default) ──────────────────────────────────
 
     if args.project_root:
         project_root = Path(args.project_root).resolve()
     else:
         project_root = detect_project_root()
 
-    success = init_project(project_root, server_script, args)
-    return 0 if success else 1
+    return 0 if init_project(project_root, mimir_root, args) else 1
 
 
 if __name__ == "__main__":

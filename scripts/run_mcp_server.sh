@@ -138,11 +138,9 @@ if [ -n "$OPENROUTER_API_KEY" ]; then
     log "OPENROUTER_API_KEY already set (length: ${#OPENROUTER_API_KEY})"
 else
     log "OPENROUTER_API_KEY not set, trying to read from auth file"
-    # Try multiple possible auth file locations
+    # Try auth file locations
     AUTH_LOCATIONS=(
         "$HOME/.local/share/opencode/auth.json"
-        "${HOME:-/Users/ethanwheeler}/.local/share/opencode/auth.json"
-        "/Users/ethanwheeler/.local/share/opencode/auth.json"
     )
     
     for AUTH_FILE in "${AUTH_LOCATIONS[@]}"; do

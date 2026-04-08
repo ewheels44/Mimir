@@ -8,21 +8,18 @@ A semantic knowledge base that gives your AI agents instant access to your codeb
 
 ## Quick Start
 
-Already have oh-my-opencode installed? Skip to [Project Setup](#project-setup).
-
 ```bash
-# Initialize any project
+# 1. Clone
+git clone https://github.com/ewheels44/Mimir.git ~/Documents/Mimir
+
+# 2. Global install (once — sets up MCP server + system rules)
+python ~/Documents/Mimir/mimir-init.py --install
+
+# 3. Per-project (in each project you want to index)
 cd ~/Projects/YourProject
-python ~/Documents/Mimir/mimir.py init
+python ~/Documents/Mimir/mimir-init.py --code-dirs=src,tests
 
-# Add docs and index
-echo "# My Project" > docs/README.md
-python ~/Documents/Mimir/mimir.py index
-
-# Check health
-python ~/Documents/Mimir/mimir.py health
-
-# Done. Your agents now have semantic search.
+# 4. Restart OpenCode — your agents now have semantic search.
 ```
 
 ---
@@ -70,51 +67,26 @@ opencode auth openrouter
 # Paste your key when prompted
 ```
 
-### Step 3: Configure Global MCP Server
-
-Add Mimir to your global `~/.config/opencode/opencode.json`:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "mimir-knowledge": {
-      "type": "local",
-      "command": ["/Users/YOUR_USERNAME/Documents/Mimir/scripts/run_mcp_server.sh"],
-      "enabled": true,
-      "environment": {
-        "EMBEDDING_MODEL": "text-embedding-3-small",
-        "OPENAI_BASE_URL": "https://openrouter.ai/api/v1"
-      }
-    }
-  }
-}
-```
-
-**Important**: Replace `YOUR_USERNAME` with your actual username.
-
-### Step 4: (Optional) Install System Context Plugin
-
-For automatic context injection into every session:
+### Step 3: Global Install
 
 ```bash
-# The plugin injects system context on session start
-cp -r ~/Documents/Mimir/opencode-plugin/plugin ~/.config/opencode/
-cp -r ~/Documents/Mimir/opencode-plugin/prompts ~/.config/opencode/
+python ~/Documents/Mimir/mimir-init.py --install
 ```
 
-Then customize `~/.config/opencode/prompts/system-context.md` for your needs.
+This does three things automatically:
+1. Backs up your existing `~/.config/opencode/opencode.json` and `system-context.md`
+2. Adds the Mimir MCP server to your global config (preserves existing entries)
+3. Injects Mimir rules into your system context (marker-based, clean uninstall)
 
-### Step 5: Verify Installation
+To uninstall later: `python ~/Documents/Mimir/mimir-init.py --uninstall`
+
+### Step 4: Verify Installation
 
 ```bash
-# Check MCP server starts
-~/Documents/Mimir/scripts/run_mcp_server.sh --help
-
-# Should see MCP tools available when you start opencode
+# Restart OpenCode, then check tools are available
 cd ~/Documents/Mimir
 opencode
-# Then ask: "What tools are available?"
+# Ask: "What tools are available?"
 ```
 
 ---
@@ -125,7 +97,7 @@ opencode
 
 ```bash
 cd ~/Projects/YourProject
-python ~/Documents/Mimir/mimir.py init
+python ~/Documents/Mimir/mimir-init.py --code-dirs=src,tests
 ```
 
 This creates:
@@ -136,10 +108,8 @@ YourProject/
 ├── .mimir/
 │   ├── config.json          # Project configuration
 │   └── AGENTS.md            # Local Mimir docs
-├── .opencode/
-│   ├── mimir-index.py       # Indexing script
-│   └── skills/mimir.md      # Subagent skill
-└── opencode.json            # AGENTS.md chaining config
+└── .opencode/
+    └── mimir-index.py       # Indexing script
 ```
 
 ### Index Your Content
@@ -670,14 +640,15 @@ Here's a complete working setup from a real installation:
 
 ### Global Config: `~/.config/opencode/opencode.json`
 
+After running `mimir-init.py --install`, your config will include:
+
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "openrouter/minimax/minimax-m2.7",
   "mcp": {
     "mimir-knowledge": {
       "type": "local",
-      "command": ["/Users/ethanwheeler/Documents/Mimir/scripts/run_mcp_server.sh"],
+      "command": ["~/Documents/Mimir/scripts/run_mcp_server.sh"],
       "enabled": true,
       "environment": {
         "EMBEDDING_MODEL": "text-embedding-3-small",
@@ -688,6 +659,8 @@ Here's a complete working setup from a real installation:
   }
 }
 ```
+
+The installer auto-detects your Mimir path — no manual editing needed.
 
 ### Auth Config: `~/.local/share/opencode/auth.json`
 
@@ -718,21 +691,26 @@ const MIMIR_REMINDER_TEXT = `[System Reminder]: **Mimir Context**: Remember to l
 
 ### System Context: `~/.config/opencode/prompts/system-context.md`
 
+The installer injects Mimir rules using markers for clean uninstall:
+
 ```markdown
 # System Context
+...
 
-This context is injected at the start of every session.
+## MIMIR RULES (4 ONLY)
 
-## Session Info
-- **Date**: {{date}}
-- **Git Branch**: {{git_branch}}
-- **Working Directory**: {{cwd}}
-- **Platform**: {{platform}}
+### 1. MIMIR FIRST
+Before any task, call `mimir-knowledge_enrich_task()`.
 
-## Instructions
-MUST SAY **Mimir Loaded**
+### 2. CONTEXT BEFORE CODE
+Before writing/editing, read the relevant standards file.
 
-Read ~/Documents/Mimir/docs/mimir-sys-prompt.txt
+### 3. ASK FIRST
+Never run bash/write/edit/task without approval.
+
+### 4. CHECK SKILLS
+Load matching skills before executing.
+<!-- MIMIR_RULES_END -->
 ```
 
 ### Project Config: `.mimir/config.json`

@@ -1,7 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "instructions": [
-    "/Users/ethanwheeler/Documents/Mimir/AGENTS.md",
     "AGENTS.md"
   ]
 }

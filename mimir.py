@@ -43,7 +43,7 @@ sys.path.insert(0, str(MIMIR_ROOT))
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 
-def _run_script(script: str, args: list[str]) -> int:
+def _run_script(script: str, args: list[str], cwd: str | None = None) -> int:
     """Run a Mimir script as a subprocess, forwarding stdout/stderr."""
     script_path = MIMIR_ROOT / script
     if not script_path.exists():
@@ -51,7 +51,7 @@ def _run_script(script: str, args: list[str]) -> int:
         return 1
     result = subprocess.run(
         [sys.executable, str(script_path)] + args,
-        cwd=str(MIMIR_ROOT),
+        cwd=cwd or str(Path.cwd()),
     )
     return result.returncode
 
@@ -68,7 +68,25 @@ def _run_langgraph(args: list[str]) -> int:
 
     result = subprocess.run(
         [sys.executable, str(script_path)] + args,
-        cwd=str(MIMIR_ROOT),
+        cwd=str(Path.cwd()),
+        env=env,
+    )
+    return result.returncode
+
+
+def _run_langgraph(args: list[str]) -> int:
+    """Run a langgraph CLI command."""
+    script_path = MIMIR_ROOT / "langgraph/cli.py"
+    if not script_path.exists():
+        print(f"Error: langgraph/cli.py not found at {script_path}")
+        return 1
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(MIMIR_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+
+    result = subprocess.run(
+        [sys.executable, str(script_path)] + args,
+        cwd=str(Path.cwd()),
         env=env,
     )
     return result.returncode
@@ -91,7 +109,7 @@ def _run_cache(args: list[str]) -> int:
 
     result = subprocess.run(
         [sys.executable, str(script_path)] + args,
-        cwd=str(MIMIR_ROOT),
+        cwd=str(Path.cwd()),
         env=env,
     )
     return result.returncode
@@ -115,7 +133,7 @@ def _run_indexing(args: list[str]) -> int:
 
     result = subprocess.run(
         [sys.executable, str(script_path)] + args,
-        cwd=str(MIMIR_ROOT),
+        cwd=str(Path.cwd()),
         env=env,
     )
     return result.returncode
@@ -129,9 +147,8 @@ def cmd_init(args: argparse.Namespace) -> int:
     extra = []
     if args.code_dirs:
         extra.extend(["--code-dirs", args.code_dirs])
-    # Always pass project root — use explicit arg or cwd
-    project_root = args.project_root or str(Path.cwd())
-    extra.extend(["--project-root", project_root])
+    if args.project_root:
+        extra.extend(["--project-root", args.project_root])
     return _run_init(extra)
 
 

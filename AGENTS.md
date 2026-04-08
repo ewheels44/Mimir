@@ -87,14 +87,14 @@ All fields optional. Defaults work for most projects.
 
 ```bash
 # Global (once)
-python ~/Documents/Mimir/mimir-init.py --install
+python ~/Documents/Mimir/mimir.py install
 
 # Per-project (in each project)
 cd /your/project
-python ~/Documents/Mimir/mimir-init.py --code-dirs=src,tests
+python ~/Documents/Mimir/mimir.py init --code-dirs=src,tests
 
 # Uninstall
-python ~/Documents/Mimir/mimir-init.py --uninstall
+python ~/Documents/Mimir/mimir.py uninstall
 ```
 
 ## When to Skip Mimir

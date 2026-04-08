@@ -13,11 +13,11 @@ A semantic knowledge base that gives your AI agents instant access to your codeb
 git clone https://github.com/ewheels44/Mimir.git ~/Documents/Mimir
 
 # 2. Global install (once — sets up MCP server + system rules)
-python ~/Documents/Mimir/mimir-init.py --install
+python ~/Documents/Mimir/mimir.py install
 
 # 3. Per-project (in each project you want to index)
 cd ~/Projects/YourProject
-python ~/Documents/Mimir/mimir-init.py --code-dirs=src,tests
+python ~/Documents/Mimir/mimir.py init --code-dirs=src,tests
 
 # 4. Restart OpenCode — your agents now have semantic search.
 ```
@@ -70,7 +70,7 @@ opencode auth openrouter
 ### Step 3: Global Install
 
 ```bash
-python ~/Documents/Mimir/mimir-init.py --install
+python ~/Documents/Mimir/mimir.py install
 ```
 
 This does three things automatically:
@@ -78,7 +78,7 @@ This does three things automatically:
 2. Adds the Mimir MCP server to your global config (preserves existing entries)
 3. Injects Mimir rules into your system context (marker-based, clean uninstall)
 
-To uninstall later: `python ~/Documents/Mimir/mimir-init.py --uninstall`
+To uninstall later: `python ~/Documents/Mimir/mimir.py uninstall`
 
 ### Step 4: Verify Installation
 
@@ -97,7 +97,7 @@ opencode
 
 ```bash
 cd ~/Projects/YourProject
-python ~/Documents/Mimir/mimir-init.py --code-dirs=src,tests
+python ~/Documents/Mimir/mimir.py init --code-dirs=src,tests
 ```
 
 This creates:

@@ -5,25 +5,27 @@ mimir — Unified CLI for the Mimir knowledge base.
 All commands in one place. No more remembering which script does what.
 
 Usage:
-    mimir init                          Initialize a project
-    mimir server                        Run the MCP server
-    mimir index                         Index documents
-    mimir index --reindex               Rebuild index
-    mimir index --add src               Add directory to index
-    mimir search "how does auth work?"  One-shot semantic search
-    mimir stats                         Show index statistics
-    mimir health                        Check server health
-    mimir rag "question"                RAG workflow
-    mimir agent "question"              Knowledge agent
-    mimir prep "topic"                  Customer call briefing
-    mimir diff                          Session diff
-    mimir metrics                       Cost report
-    mimir projects list                 List projects
-    mimir projects add /path            Register a project
-    mimir projects switch NAME          Switch to a project
-    mimir handoff                       Generate handoff doc
-    mimir cache list                    List cached SDKs
-    mimir cache get stripe              Get SDK docs
+    mimir install                        Global install (run once after clone)
+    mimir uninstall                      Remove Mimir from global config
+    mimir init                           Initialize a project
+    mimir server                         Run the MCP server
+    mimir index                          Index documents
+    mimir index --reindex                Rebuild index
+    mimir index --add src                Add directory to index
+    mimir search "how does auth work?"   One-shot semantic search
+    mimir stats                          Show index statistics
+    mimir health                         Check server health
+    mimir rag "question"                 RAG workflow
+    mimir agent "question"               Knowledge agent
+    mimir prep "topic"                   Customer call briefing
+    mimir diff                           Session diff
+    mimir metrics                        Cost report
+    mimir projects list                  List projects
+    mimir projects add /path             Register a project
+    mimir projects switch NAME           Switch to a project
+    mimir handoff                        Generate handoff doc
+    mimir cache list                     List cached SDKs
+    mimir cache get stripe               Get SDK docs
 """
 
 import argparse
@@ -130,6 +132,19 @@ def cmd_init(args: argparse.Namespace) -> int:
     if args.project_root:
         extra.extend(["--project-root", args.project_root])
     return _run_init(extra)
+
+
+def cmd_install(args: argparse.Namespace) -> int:
+    """Global install — set up MCP server and system rules."""
+    extra = ["--install"]
+    if args.force:
+        extra.append("--force")
+    return _run_init(extra)
+
+
+def cmd_uninstall(args: argparse.Namespace) -> int:
+    """Uninstall — restore backed up configs."""
+    return _run_init(["--uninstall"])
 
 
 def cmd_server(args: argparse.Namespace) -> int:
@@ -307,23 +322,26 @@ def build_parser() -> argparse.ArgumentParser:
         description="Mimir — Persistent knowledge base for AI agents",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
-  mimir init                            Initialize a project
-  mimir server                          Start the MCP server
-  mimir index                           Index documents
-  mimir index --reindex                 Rebuild index from scratch
-  mimir index --add src                 Add a directory to the index
-  mimir search "how does auth work?"    Semantic search
-  mimir stats                           Show index statistics
-  mimir health                          Check configuration and status
-  mimir rag "explain the database"      RAG workflow
-  mimir prep "video latency"            Customer call briefing
-  mimir diff                            Session diff (last day)
-  mimir metrics --days 7                Cost report
-  mimir projects list                   List registered projects
-  mimir projects add ~/Projects/acme    Register a project
-  mimir handoff --customer "Acme Corp"  Generate handoff doc
-  mimir cache list                      List cached SDK docs
-  mimir cache get stripe                Fetch Stripe docs""",
+  mimir install                          Global install (run once after clone)
+  mimir uninstall                        Remove Mimir from global config
+  mimir init                             Initialize a project
+  mimir init --code-dirs=src,tests       Init with source directories
+  mimir server                           Start the MCP server
+  mimir index                            Index documents
+  mimir index --reindex                  Rebuild index from scratch
+  mimir index --add src                  Add a directory to the index
+  mimir search "how does auth work?"     Semantic search
+  mimir stats                            Show index statistics
+  mimir health                           Check configuration and status
+  mimir rag "explain the database"       RAG workflow
+  mimir prep "video latency"             Customer call briefing
+  mimir diff                             Session diff (last day)
+  mimir metrics --days 7                 Cost report
+  mimir projects list                    List registered projects
+  mimir projects add ~/Projects/acme     Register a project
+  mimir handoff --customer "Acme Corp"   Generate handoff doc
+  mimir cache list                       List cached SDK docs
+  mimir cache get stripe                 Fetch Stripe docs""",
     )
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
@@ -335,6 +353,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "project_root", nargs="?", help="Project directory (default: current)"
     )
+
+    # ── install ──
+    p = subparsers.add_parser(
+        "install", help="Global install — set up MCP server and system rules (run once)"
+    )
+    p.add_argument("--force", action="store_true", help="Force re-injection of rules")
+
+    # ── uninstall ──
+    subparsers.add_parser("uninstall", help="Uninstall — restore backed up configs")
 
     # ── server ──
     p = subparsers.add_parser("server", help="Run the MCP server")
@@ -435,6 +462,8 @@ def main() -> int:
 
     commands = {
         "init": cmd_init,
+        "install": cmd_install,
+        "uninstall": cmd_uninstall,
         "server": cmd_server,
         "index": cmd_index,
         "search": cmd_search,

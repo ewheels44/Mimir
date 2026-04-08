@@ -3,20 +3,20 @@
 mimir-init.py - Initialize Mimir for any project or install globally.
 
 Two modes:
-  1. Global install (run once): Sets up MCP server config and system rules
+  1. Global install (run once): Sets up MCP server and system rules
   2. Per-project init (run in each project): Creates directories and indexes
 
 Usage:
     # Global install (run once after cloning Mimir)
-    python ~/Documents/Mimir/mimir-init.py --install
+    python ~/Documents/Mimir/mimir.py install
 
     # Per-project init (run in each project you want to index)
     cd /path/to/your/project
-    python ~/Documents/Mimir/mimir-init.py
-    python ~/Documents/Mimir/mimir-init.py --code-dirs=src,tests
+    python ~/Documents/Mimir/mimir.py init
+    python ~/Documents/Mimir/mimir.py init --code-dirs=src,tests
 
     # Uninstall (restores backed up configs)
-    python ~/Documents/Mimir/mimir-init.py --uninstall
+    python ~/Documents/Mimir/mimir.py uninstall
 """
 
 import argparse
@@ -341,11 +341,10 @@ def global_install(mimir_root: Path, opencode_config_dir: Path, force: bool) -> 
     print(f"\n✅ Global install complete!")
     print(f"\nNext steps:")
     print(f"  1. Restart OpenCode to pick up the MCP server")
-    print(
-        f"  2. In any project, run: python {Path(__file__).resolve()} --code-dirs=src,tests"
-    )
+    mimir_cli = Path(__file__).resolve().parent / "mimir.py"
+    print(f"  2. In any project, run: python {mimir_cli} init --code-dirs=src,tests")
     print(f"  3. Then use: mimir-knowledge_enrich_task()")
-    print(f"\nTo uninstall: python {Path(__file__).resolve()} --uninstall")
+    print(f"\nTo uninstall: python {mimir_cli} uninstall")
 
     return True
 

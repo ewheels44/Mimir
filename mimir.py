@@ -129,8 +129,9 @@ def cmd_init(args: argparse.Namespace) -> int:
     extra = []
     if args.code_dirs:
         extra.extend(["--code-dirs", args.code_dirs])
-    if args.project_root:
-        extra.extend(["--project-root", args.project_root])
+    # Always pass project root — use explicit arg or cwd
+    project_root = args.project_root or str(Path.cwd())
+    extra.extend(["--project-root", project_root])
     return _run_init(extra)
 
 

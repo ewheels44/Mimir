@@ -13,11 +13,14 @@ Already have oh-my-opencode installed? Skip to [Project Setup](#project-setup).
 ```bash
 # Initialize any project
 cd ~/Projects/YourProject
-python ~/Documents/Mimir/mimir-init.py
+python ~/Documents/Mimir/mimir.py init
 
 # Add docs and index
 echo "# My Project" > docs/README.md
-python .opencode/mimir-index.py
+python ~/Documents/Mimir/mimir.py index
+
+# Check health
+python ~/Documents/Mimir/mimir.py health
 
 # Done. Your agents now have semantic search.
 ```
@@ -122,7 +125,7 @@ opencode
 
 ```bash
 cd ~/Projects/YourProject
-python ~/Documents/Mimir/mimir-init.py
+python ~/Documents/Mimir/mimir.py init
 ```
 
 This creates:
@@ -146,30 +149,32 @@ YourProject/
 echo "# My Project Architecture" > docs/README.md
 
 # Index docs only
-python .opencode/mimir-index.py
+python ~/Documents/Mimir/mimir.py index
 
 # Add source code (optional)
 # Edit .mimir/config.json:
 #   {"code_dirs": ["src", "tests"]}
-python .opencode/mimir-index.py --reindex
+python ~/Documents/Mimir/mimir.py index --reindex
 
 # Or add incrementally
-python .opencode/mimir-index.py --add src
+python ~/Documents/Mimir/mimir.py index --add src
 ```
 
 ### Query Your Knowledge Base
 
 ```bash
-# Via CLI
-python ~/Documents/Mimir/mcp_server_llamaindex.py --query "How does auth work?"
+# One-shot search
+python ~/Documents/Mimir/mimir.py search "How does auth work?"
 
-# Via LangGraph workflows
-python ~/Documents/Mimir/langgraph/cli.py rag "Explain the database layer"
-python ~/Documents/Mimir/langgraph/cli.py agent "Find all API endpoints"
+# RAG workflow
+python ~/Documents/Mimir/mimir.py rag "Explain the database layer"
+
+# Knowledge agent
+python ~/Documents/Mimir/mimir.py agent "Find all API endpoints"
 
 # FDE workflows
-python ~/Documents/Mimir/langgraph/cli.py prep "video latency issues"
-python ~/Documents/Mimir/langgraph/cli.py session-diff --days 1
+python ~/Documents/Mimir/mimir.py prep "video latency issues"
+python ~/Documents/Mimir/mimir.py diff --days 1
 
 # Via opencode (automatic)
 # Just ask questions — agents use Mimir tools automatically
@@ -231,7 +236,7 @@ Knowledge base updated — agents see fresh context
 cat .mimir/reindex.log
 
 # Check tracked files
-python .opencode/mimir-index.py --list
+python ~/Documents/Mimir/mimir.py stats
 ```
 
 ---
@@ -286,13 +291,13 @@ Check .knowledge/sdk-cache/stripe/
 
 ```bash
 # List cached libraries
-python src/mimir/sdk_cache.py list
+python ~/Documents/Mimir/mimir.py cache list
 
 # Get docs for a library
-python src/mimir/sdk_cache.py get stripe --topic "checkout sessions"
+python ~/Documents/Mimir/mimir.py cache get stripe --topic "checkout sessions"
 
 # Force refresh
-python src/mimir/sdk_cache.py refresh stripe --topic "webhooks"
+python ~/Documents/Mimir/mimir.py cache refresh stripe --topic "webhooks"
 ```
 
 ---
@@ -379,10 +384,10 @@ Reference large SDKs (indexed once globally) alongside customer code in a single
 
 ```bash
 # 1. Index a shared SDK (once, globally)
-python ~/Documents/Mimir/mcp_server_llamaindex.py --shared-index ~/path/to/sdk/ --name acme-sdk
+python ~/Documents/Mimir/mimir.py index --shared-index ~/path/to/sdk/ --name acme-sdk
 
 # 2. List available shared indices
-python ~/Documents/Mimir/mcp_server_llamaindex.py --shared-list
+python ~/Documents/Mimir/mimir.py index --shared-list
 
 # 3. Add to your project's .mimir/config.json:
 #    "shared_indexes": { "acme-sdk": "~/.mimir/shared-indexes/acme-sdk/llamaindex" }
@@ -417,24 +422,24 @@ Manage multiple customer engagements with isolated knowledge bases:
 
 ```bash
 # Register projects
-python ~/Documents/Mimir/mimir-projects.py add ~/Projects/customer-a --name customer-a
-python ~/Documents/Mimir/mimir-projects.py add ~/Projects/customer-b --name customer-b
+python ~/Documents/Mimir/mimir.py projects add ~/Projects/customer-a --name customer-a
+python ~/Documents/Mimir/mimir.py projects add ~/Projects/customer-b --name customer-b
 
 # List all projects
-python ~/Documents/Mimir/mimir-projects.py list
+python ~/Documents/Mimir/mimir.py projects list
 
 # Switch context
-python ~/Documents/Mimir/mimir-projects.py switch customer-a
+python ~/Documents/Mimir/mimir.py projects switch customer-a
 
 # Check status of all projects
-python ~/Documents/Mimir/mimir-projects.py status
+python ~/Documents/Mimir/mimir.py projects status
 
 # Auto-discover projects in common locations
-python ~/Documents/Mimir/mimir-projects.py discover
+python ~/Documents/Mimir/mimir.py projects discover
 ```
 
 ```
-$ mimir-projects.py list
+$ mimir projects list
 Name                 Status     Index    Last Accessed
 ------------------------------------------------------------
 customer-a           ✓          ✓        2026-04-07
@@ -446,9 +451,9 @@ customer-b           ✓          ✗        never
 Generate a structured briefing before a customer call:
 
 ```bash
-# Via LangGraph workflow
-python ~/Documents/Mimir/langgraph/cli.py prep "video latency issues"
-python ~/Documents/Mimir/langgraph/cli.py prep "payment integration" --customer acme-corp
+# Generate a structured briefing before a customer call
+python ~/Documents/Mimir/mimir.py prep "video latency issues"
+python ~/Documents/Mimir/mimir.py prep "payment integration" --customer acme-corp
 ```
 
 The briefing includes:
@@ -465,10 +470,10 @@ See what you learned in recent sessions:
 
 ```bash
 # What happened in the last day?
-python ~/Documents/Mimir/langgraph/cli.py session-diff
+python ~/Documents/Mimir/mimir.py diff
 
 # Last 3 days
-python ~/Documents/Mimir/langgraph/cli.py session-diff --days 3
+python ~/Documents/Mimir/mimir.py diff --days 3
 ```
 
 The report includes:
@@ -483,18 +488,18 @@ Generate a handoff document when transferring to the permanent team:
 
 ```bash
 # Generate for current directory
-python ~/Documents/Mimir/mimir-projects.py handoff
+python ~/Documents/Mimir/mimir.py handoff
 
 # Generate for a registered project
-python ~/Documents/Mimir/mimir-projects.py handoff customer-a
+python ~/Documents/Mimir/mimir.py handoff --project customer-a
 
 # With engagement summary
-python ~/Documents/Mimir/mimir-projects.py handoff customer-a \
+python ~/Documents/Mimir/mimir.py handoff --project customer-a \
   --summary "Built video calling integration using WebRTC" \
   --customer "Acme Corp"
 
 # Custom output path
-python ~/Documents/Mimir/mimir-projects.py handoff customer-a -o docs/handoff.md
+python ~/Documents/Mimir/mimir.py handoff --project customer-a -o docs/handoff.md
 ```
 
 The handoff document includes 9 sections:
@@ -575,7 +580,7 @@ task(
 
 ### How It Works
 
-The install script (`mimir-init.py`) copies Mimir-enhanced agent definitions to `~/.config/opencode/agent/`. These definitions include:
+The install script (`mimir.py init`) copies Mimir-enhanced agent definitions to `~/.config/opencode/agent/`. These definitions include:
 
 - `mimir-knowledge_search` — Semantic search across indexed docs/code
 - `mimir-knowledge_query` — Synthesized answers from knowledge base
@@ -594,9 +599,10 @@ Here's a complete working setup from a real installation:
 
 ```
 ~/Documents/Mimir/           # Central installation
-├── mcp_server_llamaindex.py       # MCP server + CLI
-├── mimir-init.py                  # Project initializer
-├── mimir-projects.py              # Multi-project CLI
+├── mimir.py                       # Unified CLI (all commands)
+├── mcp_server_llamaindex.py       # MCP server (used by mimir server)
+├── mimir-init.py                  # Project initializer (used by mimir init)
+├── mimir-projects.py              # Multi-project CLI (used by mimir projects)
 ├── scripts/
 │   ├── run_mcp_server.sh         # MCP wrapper script
 │   ├── git-hooks/
@@ -800,8 +806,8 @@ Shared indices are configured in `.mimir/config.json` (not env vars):
 
 | CLI Command | Purpose |
 |-------------|---------|
-| `mcp_server_llamaindex.py --shared-index DIR --name NAME` | Index a directory as a shared reference |
-| `mcp_server_llamaindex.py --shared-list` | List available shared indices |
+| `mimir index --shared-index DIR --name NAME` | Index a directory as a shared reference |
+| `mimir index --shared-list` | List available shared indices |
 | `search(query="...", scope="all")` | Search local + all shared indices |
 | `search(query="...", scope="local")` | Search only local project code |
 | `search(query="...", scope="shared:NAME")` | Search only a specific shared index |
@@ -877,10 +883,10 @@ Mimir tracks usage and calculates savings:
 
 ```bash
 # View 30-day report
-python ~/Documents/Mimir/langgraph/cli.py metrics
+python ~/Documents/Mimir/mimir.py metrics
 
 # View last 7 days
-python ~/Documents/Mimir/langgraph/cli.py metrics --days 7
+python ~/Documents/Mimir/mimir.py metrics --days 7
 ```
 
 **Typical Savings**: 60-80% reduction in token costs vs. traditional exploration.
@@ -889,44 +895,79 @@ python ~/Documents/Mimir/langgraph/cli.py metrics --days 7
 
 ## CLI Reference
 
-### MCP Server (`mcp_server_llamaindex.py`)
+All commands go through a single entry point: `mimir.py`
 
 ```bash
-python mcp_server_llamaindex.py                    # Run MCP server
-python mcp_server_llamaindex.py --index [DIR]      # Index documents
-python mcp_server_llamaindex.py --reindex          # Rebuild index
-python mcp_server_llamaindex.py --query "question" # One-shot query
-python mcp_server_llamaindex.py --stats            # Show statistics
-python mcp_server_llamaindex.py --shared-index DIR --name NAME  # Index shared SDK
-python mcp_server_llamaindex.py --shared-list      # List shared indices
+python ~/Documents/Mimir/mimir.py <command>
 ```
 
-### LangGraph Workflows (`langgraph/cli.py`)
+### Core
 
-```bash
-python langgraph/cli.py rag "question"             # RAG workflow
-python langgraph/cli.py agent "question"           # Knowledge agent
-python langgraph/cli.py prep "topic"               # Customer call briefing
-python langgraph/cli.py prep "topic" --customer NAME
-python langgraph/cli.py session-diff               # Session diff (last day)
-python langgraph/cli.py session-diff --days 3      # Session diff (last 3 days)
-python langgraph/cli.py metrics                    # Cost report (30 days)
-python langgraph/cli.py metrics --days 7           # Cost report (7 days)
-```
+| Command | Purpose |
+|---------|---------|
+| `mimir init` | Initialize a project for Mimir |
+| `mimir server` | Run the MCP server |
+| `mimir health` | Check configuration and status |
+| `mimir stats` | Show index statistics |
 
-### Multi-Project (`mimir-projects.py`)
+### Indexing
 
-```bash
-python mimir-projects.py list                      # List registered projects
-python mimir-projects.py add /path/to/project      # Register a project
-python mimir-projects.py add /path --name NAME --description "..."
-python mimir-projects.py remove NAME               # Unregister a project
-python mimir-projects.py switch NAME               # Switch to a project
-python mimir-projects.py status                    # Show all project status
-python mimir-projects.py discover                  # Find projects in common locations
-python mimir-projects.py handoff [NAME]            # Generate handoff doc
-python mimir-projects.py handoff NAME --summary "..." --customer "..." -o output.md
-```
+| Command | Purpose |
+|---------|---------|
+| `mimir index` | Index documents |
+| `mimir index --reindex` | Rebuild index from scratch |
+| `mimir index --add DIR` | Add directory to existing index |
+| `mimir index --remove FILE` | Remove file from index |
+| `mimir index --shared-index DIR --name NAME` | Index as shared reference |
+| `mimir index --shared-list` | List shared indices |
+
+### Search & Analysis
+
+| Command | Purpose |
+|---------|---------|
+| `mimir search "query"` | One-shot semantic search |
+| `mimir rag "question"` | RAG workflow |
+| `mimir agent "question"` | Knowledge agent workflow |
+
+### FDE Workflows
+
+| Command | Purpose |
+|---------|---------|
+| `mimir prep "topic"` | Customer call briefing |
+| `mimir prep "topic" --customer NAME` | Call briefing with customer name |
+| `mimir diff` | Session diff (last day) |
+| `mimir diff --days 3` | Session diff (last 3 days) |
+| `mimir handoff` | Generate handoff doc |
+| `mimir handoff --project NAME --customer "..."` | Handoff for specific project |
+
+### Multi-Project
+
+| Command | Purpose |
+|---------|---------|
+| `mimir projects list` | List registered projects |
+| `mimir projects add PATH` | Register a project |
+| `mimir projects add PATH --name NAME` | Register with custom name |
+| `mimir projects remove NAME` | Unregister a project |
+| `mimir projects switch NAME` | Switch to a project |
+| `mimir projects status` | Show all project status |
+| `mimir projects discover` | Find projects in common locations |
+
+### SDK Cache
+
+| Command | Purpose |
+|---------|---------|
+| `mimir cache list` | List cached libraries |
+| `mimir cache get LIBRARY` | Get SDK docs (fetches if stale) |
+| `mimir cache get LIBRARY --topic TOPIC` | Get specific topic |
+| `mimir cache refresh LIBRARY` | Force refresh |
+| `mimir cache invalidate LIBRARY` | Remove cached docs |
+
+### Metrics
+
+| Command | Purpose |
+|---------|---------|
+| `mimir metrics` | Cost report (30 days) |
+| `mimir metrics --days 7` | Cost report (7 days) |
 
 ---
 
@@ -934,11 +975,8 @@ python mimir-projects.py handoff NAME --summary "..." --customer "..." -o output
 
 ### Quick Diagnosis
 
-Use the `health_check` MCP tool to diagnose issues:
-
-```
-# In opencode — ask the agent:
-"Run the health_check tool"
+```bash
+python ~/Documents/Mimir/mimir.py health
 ```
 
 This returns:
@@ -976,10 +1014,10 @@ python -c "from src.mimir.config import get_config, reset_config; reset_config()
 ```bash
 # Check what MimirConfig resolves to:
 cd /path/to/your/project
-python -c "from src.mimir.config import get_config, reset_config; reset_config(); c = get_config(); print('knowledge_dir:', c.knowledge_dir); print('warnings:', c.validate())"
+python ~/Documents/Mimir/mimir.py health
 
-# Make sure you've indexed the project
-python .opencode/mimir-index.py
+# Index the project
+python ~/Documents/Mimir/mimir.py index
 ```
 
 ### MCP server not starting

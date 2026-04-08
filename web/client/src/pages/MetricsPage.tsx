@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Chart as ChartJS,
@@ -21,7 +21,6 @@ import {
   DailyMetrics,
   QueryBreakdown,
   ComponentCosts,
-  TRADITIONAL_TOKENS,
 } from '../types/metrics';
 
 import styles from './MetricsPage.module.css';
@@ -66,14 +65,24 @@ const COLORS = {
 // Formatters
 const fmt$ = (v: number) => '$' + Math.abs(v).toFixed(v >= 0.01 ? 3 : 5);
 const fmtN = (v: number) => v.toLocaleString();
+const fmtTime = (secs: number): string => {
+  if (secs < 60) return `${secs.toFixed(0)}s`;
+  if (secs < 3600) return `${(secs / 60).toFixed(0)}m`;
+  if (secs < 86400) return `${(secs / 3600).toFixed(1)}h`;
+  return `${(secs / 86400).toFixed(1)}d`;
+};
 
 // Default empty data
 const DEFAULT_SUMMARY: MetricsSummary = {
   total_queries: 0,
   total_cost: 0,
+  avg_cost_per_query: 0,
+  total_tokens_in: 0,
+  total_tokens_out: 0,
   traditional_cost: 0,
   savings: 0,
   savings_percent: 0,
+  time_saved_secs: 0,
   by_type: {},
 };
 
@@ -82,6 +91,7 @@ const DEFAULT_COMPONENTS: ComponentCosts = {
   llm_input_cost: 0,
   llm_output_cost: 0,
   total_cost: 0,
+  count: 0,
 };
 
 // ── Custom Hooks ─────────────────────────────────────────────────────────────
@@ -116,13 +126,18 @@ function useMetricsData(days: number) {
 
 interface SummaryCardsProps {
   summary: MetricsSummary;
+  days: number;
 }
 
-function SummaryCards({ summary }: SummaryCardsProps) {
+function SummaryCards({ summary, days }: SummaryCardsProps) {
   const BUDGET = 10.0;
   const spent = summary.total_cost || 0;
   const pct = Math.min(100, (spent / BUDGET) * 100);
   const barColor = pct > 80 ? 'var(--red)' : pct > 50 ? 'var(--amber)' : 'var(--accent-light)';
+
+  // Project annual savings from current period
+  const annualMultiplier = 365 / Math.max(days, 1);
+  const projectedAnnualSavings = (summary.savings || 0) * annualMultiplier;
 
   return (
     <div className={styles.cards}>
@@ -144,7 +159,9 @@ function SummaryCards({ summary }: SummaryCardsProps) {
       <div className={styles.mcard}>
         <div className={styles.mcardLabel}>Total queries</div>
         <div className={styles.mcardVal}>{fmtN(summary.total_queries || 0)}</div>
-        <div className={styles.mcardSub}>in period</div>
+        <div className={styles.mcardSub}>
+          {fmt$(summary.avg_cost_per_query || 0)} avg per query
+        </div>
       </div>
 
       <div className={styles.mcard}>
@@ -160,6 +177,26 @@ function SummaryCards({ summary }: SummaryCardsProps) {
         </div>
         <div className={`${styles.mcardSub} ${summary.savings >= 0 ? styles.pos : styles.neg}`}>
           {(summary.savings_percent || 0).toFixed(1)}% reduction
+        </div>
+      </div>
+
+      <div className={styles.mcard}>
+        <div className={styles.mcardLabel}>Time Saved</div>
+        <div className={`${styles.mcardVal} ${styles.pos}`}>
+          {fmtTime(summary.time_saved_secs || 0)}
+        </div>
+        <div className={styles.mcardSub}>
+          vs manual research ({fmtN(summary.total_queries || 0)} queries × 28s saved)
+        </div>
+      </div>
+
+      <div className={styles.mcard}>
+        <div className={styles.mcardLabel}>Projected Annual Savings</div>
+        <div className={`${styles.mcardVal} ${styles.pos}`}>
+          {fmt$(projectedAnnualSavings)}
+        </div>
+        <div className={styles.mcardSub}>
+          extrapolated from {days}d period
         </div>
       </div>
     </div>
@@ -433,9 +470,10 @@ function ROIChart({ breakdown }: ROIChartProps) {
 
   const labels = breakdown.map(b => b.query_type);
   const rois = breakdown.map(b => {
-    const trad = (TRADITIONAL_TOKENS[b.query_type] || 5000) / 1000 * 0.001;
+    const trad = b.traditional_cost || 0;
     const avg = b.count ? b.cost / b.count : 0.001;
-    return avg > 0 ? parseFloat((trad / avg).toFixed(1)) : 0;
+    const tradAvg = b.count ? trad / b.count : 0.001;
+    return avg > 0 ? parseFloat((tradAvg / avg).toFixed(1)) : 0;
   });
 
   const chartData = {
@@ -509,7 +547,7 @@ function WaterfallChart({ summary, breakdown }: WaterfallChartProps) {
 
   let running = base;
   (breakdown || []).forEach(b => {
-    const saving = (TRADITIONAL_TOKENS[b.query_type] || 5000) / 1000 * 0.001 * b.count - b.cost;
+    const saving = b.savings || 0;
     if (saving <= 0) return;
     cats.push(b.query_type + ' savings');
     floats.push(running - saving);
@@ -562,6 +600,105 @@ function WaterfallChart({ summary, breakdown }: WaterfallChartProps) {
   );
 }
 
+// ── Per-Type Savings Table ────────────────────────────────────────────────────
+
+interface SavingsTableProps {
+  breakdown: QueryBreakdown[];
+}
+
+function SavingsTable({ breakdown }: SavingsTableProps) {
+  if (!breakdown || breakdown.length === 0) {
+    return (
+      <div className={styles.ccard}>
+        <div className={styles.ccardTitle}>Savings by query type</div>
+        <div className={styles.ccardSub}>Where you save — and where you might be losing</div>
+        <div className={styles.empty}>No data available</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={styles.ccard}>
+      <div className={styles.ccardTitle}>Savings by query type</div>
+      <div className={styles.ccardSub}>Where you save — and where you might be losing</div>
+      <table className={styles.table}>
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>Queries</th>
+            <th>Mimir Cost</th>
+            <th>Traditional</th>
+            <th>Savings</th>
+            <th>ROI</th>
+          </tr>
+        </thead>
+        <tbody>
+          {breakdown.map(b => {
+            const roi = b.traditional_cost > 0
+              ? ((b.savings / b.traditional_cost) * 100).toFixed(0)
+              : '0';
+            const isLosing = b.savings < 0;
+            return (
+              <tr key={b.query_type}>
+                <td>{b.query_type}</td>
+                <td>{fmtN(b.count)}</td>
+                <td>{fmt$(b.cost)}</td>
+                <td>{fmt$(b.traditional_cost)}</td>
+                <td className={isLosing ? styles.neg : styles.pos}>
+                  {isLosing ? '⚠ ' : ''}{fmt$(b.savings)}
+                </td>
+                <td className={isLosing ? styles.neg : styles.pos}>{roi}%</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ── Export Button ─────────────────────────────────────────────────────────────
+
+interface ExportButtonProps {
+  summary: MetricsSummary;
+  breakdown: QueryBreakdown[];
+  days: number;
+}
+
+function ExportButton({ summary, breakdown, days }: ExportButtonProps) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(() => {
+    const data = {
+      period_days: days,
+      total_queries: summary.total_queries,
+      total_cost: summary.total_cost,
+      traditional_cost: summary.traditional_cost,
+      savings: summary.savings,
+      savings_percent: summary.savings_percent,
+      time_saved_secs: summary.time_saved_secs,
+      avg_cost_per_query: summary.avg_cost_per_query,
+      by_type: breakdown.map(b => ({
+        type: b.query_type,
+        queries: b.count,
+        mimir_cost: b.cost,
+        traditional_cost: b.traditional_cost,
+        savings: b.savings,
+      })),
+    };
+    navigator.clipboard.writeText(JSON.stringify(data, null, 2)).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [summary, breakdown, days]);
+
+  return (
+    <button className={styles.exportBtn} onClick={handleCopy}>
+      {copied ? '✓ Copied' : '📋 Export Summary'}
+    </button>
+  );
+}
+
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function MetricsPage() {
@@ -575,16 +712,19 @@ export default function MetricsPage() {
           <Link to="/" className={styles.navLink}>← Back to graph</Link>
           <h1 className={styles.heading}>Metrics &amp; usage</h1>
         </div>
-        <div className={styles.controls}>
-          {[7, 30, 90].map(d => (
-            <button
-              key={d}
-              className={`${styles.tBtn} ${days === d ? styles.active : ''}`}
-              onClick={() => setDays(d)}
-            >
-              {d}d
-            </button>
-          ))}
+        <div className={styles.headerRight}>
+          <ExportButton summary={summary} breakdown={breakdown} days={days} />
+          <div className={styles.controls}>
+            {[7, 30, 90].map(d => (
+              <button
+                key={d}
+                className={`${styles.tBtn} ${days === d ? styles.active : ''}`}
+                onClick={() => setDays(d)}
+              >
+                {d}d
+              </button>
+            ))}
+          </div>
         </div>
       </header>
 
@@ -594,7 +734,7 @@ export default function MetricsPage() {
         </div>
       ) : (
         <div className={styles.dash}>
-          <SummaryCards summary={summary} />
+          <SummaryCards summary={summary} days={days} />
 
           <div className={styles.sectionTitle}>Where the money goes</div>
           <div className={styles.grid3}>
@@ -612,6 +752,9 @@ export default function MetricsPage() {
 
           <div className={styles.sectionTitle}>Savings source breakdown</div>
           <WaterfallChart summary={summary} breakdown={breakdown} />
+
+          <div className={styles.sectionTitle}>Detailed breakdown</div>
+          <SavingsTable breakdown={breakdown} />
         </div>
       )}
     </div>

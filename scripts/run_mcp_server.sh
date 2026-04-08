@@ -211,4 +211,4 @@ log "Created PID file: $PID_FILE (wrapper PID: $$)"
 
 # Start the MCP server - exec replaces this shell with the Python process
 # The trap handlers will still work because exec preserves signal handlers
-exec "$UV_PATH" run --python '>=3.11' "$SCRIPT_DIR/mcp_server_llamaindex.py" "$@"
+exec env PYTHONPATH="$SCRIPT_DIR/src:$PYTHONPATH" "$UV_PATH" run --python '>=3.11' "$SCRIPT_DIR/mcp_server_llamaindex.py" "$@"

@@ -56,7 +56,20 @@ def _run_script(script: str, args: list[str]) -> int:
 
 def _run_langgraph(args: list[str]) -> int:
     """Run a langgraph CLI command."""
-    return _run_script("langgraph/cli.py", args)
+    script_path = MIMIR_ROOT / "langgraph/cli.py"
+    if not script_path.exists():
+        print(f"Error: langgraph/cli.py not found at {script_path}")
+        return 1
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(MIMIR_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+
+    result = subprocess.run(
+        [sys.executable, str(script_path)] + args,
+        cwd=str(MIMIR_ROOT),
+        env=env,
+    )
+    return result.returncode
 
 
 def _run_projects(args: list[str]) -> int:
@@ -66,7 +79,20 @@ def _run_projects(args: list[str]) -> int:
 
 def _run_cache(args: list[str]) -> int:
     """Run an SDK cache command."""
-    return _run_script("src/mimir/sdk_cache.py", args)
+    script_path = MIMIR_ROOT / "src/mimir/sdk_cache.py"
+    if not script_path.exists():
+        print(f"Error: src/mimir/sdk_cache.py not found at {script_path}")
+        return 1
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(MIMIR_ROOT / "src") + os.pathsep + env.get("PYTHONPATH", "")
+
+    result = subprocess.run(
+        [sys.executable, str(script_path)] + args,
+        cwd=str(MIMIR_ROOT),
+        env=env,
+    )
+    return result.returncode
 
 
 def _run_init(args: list[str]) -> int:
@@ -76,7 +102,21 @@ def _run_init(args: list[str]) -> int:
 
 def _run_indexing(args: list[str]) -> int:
     """Run the MCP server in indexing mode (not as a server)."""
-    return _run_script("mcp_server_llamaindex.py", args)
+    script_path = MIMIR_ROOT / "mcp_server_llamaindex.py"
+    if not script_path.exists():
+        print(f"Error: mcp_server_llamaindex.py not found at {script_path}")
+        return 1
+
+    env = os.environ.copy()
+    # Put src first to avoid shadowing by mimir.py in root
+    env["PYTHONPATH"] = str(MIMIR_ROOT / "src") + os.pathsep + env.get("PYTHONPATH", "")
+
+    result = subprocess.run(
+        [sys.executable, str(script_path)] + args,
+        cwd=str(MIMIR_ROOT),
+        env=env,
+    )
+    return result.returncode
 
 
 # ─── Commands ────────────────────────────────────────────────────────────────
@@ -88,7 +128,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     if args.code_dirs:
         extra.extend(["--code-dirs", args.code_dirs])
     if args.project_root:
-        extra.extend([args.project_root])
+        extra.extend(["--project-root", args.project_root])
     return _run_init(extra)
 
 

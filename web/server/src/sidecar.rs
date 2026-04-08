@@ -8,7 +8,7 @@ pub struct Sidecar {
 
 /// Spawn the Python sidecar and wait until it is accepting connections.
 /// Respects the `PYTHON_EXECUTABLE` env var (defaults to `python3`).
-/// Also checks for virtualenv at .venv/ or venv/ in project_root or Mimir dir.
+/// Prefers Mimir's own .venv (has all Mimir deps), falls back to project .venv.
 pub async fn spawn(project_root: &Path, port: u16) -> Result<Sidecar> {
     // Determine Mimir directory for PYTHONPATH
     let sidecar_script = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -25,18 +25,19 @@ pub async fn spawn(project_root: &Path, port: u16) -> Result<Sidecar> {
         .unwrap_or_else(|| project_root.to_path_buf());
 
     // Find the right Python executable
-    // Priority: PYTHON_EXECUTABLE env var > .venv in project > .venv in Mimir > system python3
+    // Priority: PYTHON_EXECUTABLE env var > .venv in Mimir > .venv in project > system python3
+    // The sidecar runs Mimir code, so it needs Mimir's dependencies.
     let python = if let Ok(py) = std::env::var("PYTHON_EXECUTABLE") {
         py
-    } else if project_root.join(".venv").exists() {
-        project_root
+    } else if mimir_dir.join(".venv").exists() {
+        mimir_dir
             .join(".venv")
             .join("bin")
             .join("python")
             .to_string_lossy()
             .to_string()
-    } else if mimir_dir.join(".venv").exists() {
-        mimir_dir
+    } else if project_root.join(".venv").exists() {
+        project_root
             .join(".venv")
             .join("bin")
             .join("python")

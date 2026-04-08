@@ -68,3 +68,27 @@ node_modules/
 # Blog post (local only)
 BLOG_POST.md
 
+# Temporary/working files
+.opencode/package-lock.json
+.sisyphus/drafts/
+.sisyphus/evidence/
+.sisyphus/notepads/
+.sisyphus/plans/
+.tmp/
+HANDOFF.md
+docs/AI_DOing_hw.md
+docs/done/
+docs/elevator_pitch.md
+docs/future_improvments/
+docs/is_the_internet_working.md
+docs/medium_formatted_file.md
+docs/metrics.html
+docs/mimir-sys-prompt.txt
+docs/openspace_usage.md
+fix_edge_label.py
+package-lock.json
+package.json
+patch_server.py
+skills/mimir-dev/
+test_ui.js
+

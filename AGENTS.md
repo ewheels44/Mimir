@@ -131,6 +131,49 @@ task(
 - Single-file changes
 - Known file paths
 
+## Recursive Development (Dogfooding)
+
+**When developing Mimir itself:**
+- You are both the builder AND the first user
+- Every task must start with Mimir queries
+- This validates the knowledge graph in real-time
+- Failed queries reveal documentation gaps → fix them
+
+**Load the mimir-dev skill:**
+```
+skill(name="mimir-dev")
+```
+This provides the mandatory pre-flight checklist and detailed workflow.
+
+**The Loop:**
+1. Task arrives → Query Mimir first
+2. Mimir returns context → Validate against code
+3. Implement → Index new patterns
+4. Next task benefits from richer knowledge
+
+**Why This Matters:**
+- Mimir is the validation layer for AI actions
+- If we don't use it to build itself, we're not testing the core loop
+- Recursive usage catches bugs early
+- Every failed query is a documentation opportunity
+
+**Example:**
+```
+User: "Add a new search endpoint to Mimir"
+
+WRONG:
+→ Read existing code
+→ Implement endpoint
+→ Test
+
+RIGHT:
+→ mimir-knowledge_search("API endpoint patterns")
+→ mimir-knowledge_enrich_task("Add search endpoint")
+→ Validate returned patterns against code
+→ Implement following discovered patterns
+→ Index new endpoint pattern
+```
+
 ## Full Documentation
 
 See [README.md](README.md) for comprehensive guide.

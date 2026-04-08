@@ -56,7 +56,7 @@ async def search_codebase(state: PrepState) -> PrepState:
     query_tool = next((t for t in tools if t.name == "query"), None)
     if query_tool:
         integration_query = f"How to integrate {topic} in this codebase? What are the key files and patterns?"
-        result = await query_tool.ainvoke({"query": integration_query})
+        result = await query_tool.ainvoke({"question": integration_query})
         if result:
             context_items.append(f"Integration analysis:\n{result}")
 

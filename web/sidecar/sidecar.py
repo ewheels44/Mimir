@@ -4,6 +4,8 @@ The Rust backend spawns this process and proxies /api/search and /api/query to i
 Everything else (graph building, metrics, static serving) lives in Rust.
 """
 
+from __future__ import annotations
+
 import argparse
 import os
 import sys
@@ -24,6 +26,7 @@ sys.path.insert(0, str(MIMIR_DIR))
 
 try:
     from mcp_server_llamaindex import ServerConfig, KnowledgeServer
+
     _import_ok = True
     _import_err = None
 except Exception as exc:
@@ -81,7 +84,10 @@ async def search(req: SearchRequest):
         server = KnowledgeServer(get_config())
         results_text = server.search(req.query, req.top_k)
 
-        if "No relevant documents found" in results_text or "No knowledge base" in results_text:
+        if (
+            "No relevant documents found" in results_text
+            or "No knowledge base" in results_text
+        ):
             return [{"title": "No Results", "snippet": results_text, "source": ""}]
 
         results = []

@@ -34,6 +34,19 @@ from pathlib import Path
 from typing import Optional
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
+# Ensure src directory is in sys.path for imports
+SCRIPT_DIR = Path(__file__).resolve().parent
+SRC_DIR = SCRIPT_DIR / "src"
+
+# Remove current directory from sys.path to avoid shadowing mimir package
+current_dir = str(SCRIPT_DIR)
+if current_dir in sys.path:
+    sys.path.remove(current_dir)
+
+# Add src directory to sys.path if not already there
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
 
 def setup_logging(level: str = "INFO") -> None:
     """Configure structured logging for Mimir."""
@@ -65,7 +78,7 @@ def setup_logging(level: str = "INFO") -> None:
 
 # Try to import file watcher (graceful degradation)
 try:
-    from src.mimir.watcher import MimirFileWatcher
+    from mimir.watcher import MimirFileWatcher
 
     WATCHER_AVAILABLE = True
 except ImportError:
@@ -75,9 +88,9 @@ except ImportError:
         "watchdog not installed - file watcher disabled"
     )
 
-from src.mimir.config import MimirConfig, get_config
-from src.mimir.metrics import get_tracker
-from src.mimir.shared_index import (
+from mimir.config import MimirConfig, get_config
+from mimir.metrics import get_tracker
+from mimir.shared_index import (
     SharedIndexRegistry,
     merge_results,
     format_tagged_results,

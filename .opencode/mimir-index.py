@@ -323,6 +323,22 @@ def main():
             print("\n❌ No existing index found. Run without --add first.")
             return 1
 
+        # Persist directory to code_dirs in config (mirrors --add-file behavior)
+        dir_entry = get_relative_or_absolute_path(source_dir, project_root)
+        try:
+            with open(config_path) as f:
+                config = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            config = {}
+
+        if "code_dirs" not in config:
+            config["code_dirs"] = []
+        if dir_entry not in config["code_dirs"]:
+            config["code_dirs"].append(dir_entry)
+            with open(config_path, "w") as f:
+                json.dump(config, f, indent=2)
+            print(f"📝 Added to code_dirs: {dir_entry}")
+
         from mimir.indexing import add_directory_with_progress
 
         success = add_directory_with_progress(source_dir, knowledge_dir, verbose=True)

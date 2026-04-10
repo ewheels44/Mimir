@@ -272,6 +272,82 @@ python ~/Documents/Mimir/mimir.py cache refresh stripe --topic "webhooks"
 
 ---
 
+## Knowledge Graph Query
+
+Mimir extracts code relationships (imports, calls, inheritance) into a queryable knowledge graph with **weighted Dijkstra path-finding**. This gives agents structural understanding of your codebase — not just semantic similarity.
+
+### How It Works
+
+```
+Code extraction (AST + tree-sitter)
+    │
+    ▼
+code_relationships.json (entities + relationships)
+    │
+    ▼
+Rust graph server (weighted Dijkstra, BFS neighbors)
+    │
+    ▼
+MCP tools (graph_query, graph_neighbors, graph_stats)
+```
+
+### Semantic Search vs Graph Query
+
+| Question Type | Tool | Example |
+|---------------|------|---------|
+| "What does auth do?" | `search` (semantic) | Finds docs/code about auth |
+| "How does auth reach the database?" | `graph_query` (structural) | Traces import/call chain |
+| "What depends on this module?" | `graph_neighbors` (topology) | Lists direct connections |
+| "What are the most connected files?" | `graph_stats` | Shows hub modules |
+
+### Edge Weights
+
+Relationships are weighted by coupling strength — Dijkstra finds the **strongest coupling path**, not just the shortest:
+
+| Relationship | Weight | Meaning |
+|-------------|--------|---------|
+| `calls` | 1.0 | Direct function/method call |
+| `has_method` | 1.0 | Structural (class → method) |
+| `inherits_from` | 1.5 | Class inheritance |
+| `imports_from` | 2.0 | Specific symbol import |
+| `imports_module` | 3.0 | Whole-module import |
+
+External nodes (stdlib, third-party) are excluded from path-finding — only internal project connections are traced.
+
+### MCP Tools
+
+| Tool | Purpose | Example |
+|------|---------|---------|
+| `graph_query` | Find shortest weighted path between two modules | "How does watcher.py reach indexing.py?" |
+| `graph_neighbors` | Explore connections around a node | "What does config.py import?" |
+| `graph_stats` | Graph overview (counts, top connected) | "What are the hub files?" |
+
+### Usage
+
+```
+# In opencode sessions — agents use these automatically for structural questions
+"How does the MCP server reach the SDK cache?"
+# → Agent calls graph_query(source="mcp_server_llamaindex.py", target="src/mimir/sdk_cache.py")
+# → Returns: direct calls edge, cost 1.0
+
+"What depends on config.py?"
+# → Agent calls graph_neighbors(node_id="src/mimir/config.py", depth=1)
+# → Returns: list of modules that import or call config.py
+```
+
+### Requirements
+
+The graph query tools require the **Rust web server** to be running:
+
+```bash
+cd ~/Documents/Mimir/web
+./dev.sh --project /path/to/your/project
+```
+
+The MCP server proxies graph queries to the Rust server via HTTP (`localhost:8000`). If the web server isn't running, graph tools return a clear error with instructions.
+
+---
+
 ## Skills
 
 Mimir includes seed skills that give agents immediate knowledge for common tasks.
@@ -509,6 +585,9 @@ Agent: [Calls mimir-knowledge/rag_workflow] → Structured analysis with sources
 | `query` | Natural language Q&A | Understanding architecture |
 | `rag_workflow` | Structured reasoning | Complex analysis |
 | `knowledge_agent` | Agentic exploration | Deep research tasks |
+| `graph_query` | Weighted Dijkstra path between modules | "How does X connect to Y?" |
+| `graph_neighbors` | BFS neighbors with depth/type filter | "What depends on this?" |
+| `graph_stats` | Graph overview (nodes, edges, top connected) | "What are the hub files?" |
 | `stats` | Index statistics | Checking coverage |
 | `reindex` | Rebuild index | After major changes |
 | `sdk_cache_get` | Get SDK docs | Fetching library documentation |
@@ -697,7 +776,7 @@ The installer injects Mimir rules using markers for clean uninstall:
 # System Context
 ...
 
-## MIMIR RULES (4 ONLY)
+## MIMIR RULES (5 ONLY)
 
 ### 1. MIMIR FIRST
 Before any task, call `mimir-knowledge_enrich_task()`.
@@ -710,6 +789,9 @@ Never run bash/write/edit/task without approval.
 
 ### 4. CHECK SKILLS
 Load matching skills before executing.
+
+### 5. GRAPH FIRST
+For structural questions ("how does X connect to Y?"), use `graph_query` or `graph_neighbors` before reading files.
 <!-- MIMIR_RULES_END -->
 ```
 
@@ -768,6 +850,7 @@ Any config value can be overridden via environment variables:
 | `MIMIR_BRIDGE_TIMEOUT` | `bridge.search_timeout_seconds` | `30` |
 | `MIMIR_BRIDGE_MAX_TOKENS` | `bridge.max_context_tokens` | `2500` |
 | `MIMIR_BRIDGE_TOP_K` | `bridge.top_k` | `5` |
+| `MIMIR_WEB_PORT` | Rust web server port | `8000` |
 
 ### Shared Index Configuration
 
@@ -813,7 +896,7 @@ Shared indices are configured in `.mimir/config.json` (not env vars):
     │ MCP Server │ │ Bridge │ │ LangGraph│
     │ (search,   │ │(OpenSp)│ │(RAG,     │
     │  query,    │ │        │ │ agent)   │
-    │  health)   │ │        │ │          │
+    │  graph_*)  │ │        │ │          │
     └─────┬──────┘ └───┬────┘ └────┬─────┘
           │            │           │
           └────────────┼───────────┘
@@ -822,11 +905,19 @@ Shared indices are configured in `.mimir/config.json` (not env vars):
               │   LlamaIndex    │
               │  (Vector Store) │
               └─────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
+│  Rust Web Server (web/server/)                          │
+│  Graph query engine (Dijkstra, BFS neighbors, stats)    │
+│  Proxied by MCP server for graph_* tools                │
+│  Serves React UI for visualization                      │
+└─────────────────────────────────────────────────────────┘
 ```
 
 **Key Components**:
 - **MimirConfig**: Unified configuration — one class, all settings, all entry points
-- **MCP Server**: Tool discovery and transport (search, query, health_check, etc.)
+- **MCP Server**: Tool discovery and transport (search, query, graph_query, health_check, etc.)
+- **Rust Web Server**: Graph query engine with weighted Dijkstra path-finding, serves the React UI
 - **OpenSpace Bridge**: Integration with self-evolving skill engine (circuit breaker, caching, content filtering)
 - **LlamaIndex**: Document ingestion, chunking, embeddings, vector storage
 - **LangGraph**: Advanced RAG workflows and agentic exploration
@@ -852,6 +943,7 @@ Features:
 - Semantic search interface
 - Cost metrics dashboard
 - Document relationship exploration
+- Graph query API (`/api/graph/path`, `/api/graph/neighbors`, `/api/graph/stats`)
 
 ---
 

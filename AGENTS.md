@@ -1,6 +1,6 @@
 # Mimir — Agent Reference
 
-> Rules are in RULES.md (4 rules). This file is reference material — read when needed.
+> Rules are in RULES.md (5 rules). This file is reference material — read when needed.
 
 ## What Mimir Is
 
@@ -26,6 +26,9 @@ Each project gets its own index at `.knowledge/llamaindex/`. The MCP server auto
 | `mimir-knowledge_reindex` | Rebuild the full index | After major changes |
 | `mimir-knowledge_health_check` | Check server status | Debugging |
 | `mimir-knowledge_stats` | Index statistics | Check what's indexed |
+| `mimir-knowledge_graph_query` | Weighted Dijkstra path between two nodes | "How does X connect to Y?" |
+| `mimir-knowledge_graph_neighbors` | BFS neighbors with depth/type filter | "What depends on this?" |
+| `mimir-knowledge_graph_stats` | Graph overview (nodes, edges, top connected) | "What's the most connected module?" |
 | `openspace_search_skills` | Find evolved skills | Before executing |
 | `openspace_execute_task` | Run a task with skill guidance | Skill-guided execution |
 
@@ -34,10 +37,12 @@ Each project gets its own index at `.knowledge/llamaindex/`. The MCP server auto
 ```
 1. enrich_task     → project memory (always first)
 2. sdk_cache_get   → library docs (before guessing)
-3. search          → find by meaning
-4. query           → synthesized understanding
-5. rag_workflow    → structured analysis
-6. knowledge_agent → deep research
+3. graph_query     → structural paths ("how does X reach Y?")
+4. graph_neighbors → dependency exploration ("what calls this?")
+5. search          → semantic similarity
+6. query           → synthesized understanding
+7. rag_workflow    → structured analysis
+8. knowledge_agent → deep research
 ```
 
 ## Project Structure

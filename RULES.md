@@ -1,4 +1,4 @@
-# MIMIR RULES (4 ONLY)
+# MIMIR RULES (5 ONLY)
 
 > **Canonical source**: `~/.config/opencode/prompts/system-context.md` (installed globally)
 > This file is a reference copy. Run `scripts/install.sh` to install the rules globally.
@@ -21,3 +21,12 @@ Never run bash/write/edit/task without showing a plan and getting approval. Read
 
 ## 4. CHECK SKILLS
 Before executing, check if the task matches an available skill. If yes, load it with `skill()`. If no match, proceed with tools directly.
+
+## 5. GRAPH FIRST
+For structural questions ("how does X connect to Y?", "what calls this?", "what does this import?"), use `graph_query` or `graph_neighbors` before reading files. The graph has weighted Dijkstra path-finding — it finds the strongest coupling path, not just the shortest.
+
+- "How does auth reach the database?" → `graph_query(source="auth", target="database")`
+- "What depends on this module?" → `graph_neighbors(node_id="module", depth=2)`
+- "What are the most connected files?" → `graph_stats()`
+
+Use semantic search (`enrich_task`, `search`) for meaning-based questions. Use graph tools for topology-based questions.

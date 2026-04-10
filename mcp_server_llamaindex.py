@@ -43,9 +43,14 @@ current_dir = str(SCRIPT_DIR)
 if current_dir in sys.path:
     sys.path.remove(current_dir)
 
-# Add src directory to sys.path if not already there
+# Add both MIMIR_ROOT and MIMIR_ROOT/src to support both import styles:
+# - from mimir... (needs MIMIR_ROOT/src in path)
+# - from src.mimir... (needs MIMIR_ROOT in path)
+# IMPORTANT: Add SRC_DIR first (index 0) so it has priority over SCRIPT_DIR
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(1, str(SCRIPT_DIR))
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -175,6 +180,11 @@ class KnowledgeServer:
     def _create_index(self) -> VectorStoreIndex:
         from mimir.indexing import index_with_progress
 
+        # Get custom exclude patterns from config
+        custom_patterns = (
+            list(self.config.exclude_patterns) if self.config.exclude_patterns else None
+        )
+
         success = index_with_progress(
             project_root=self.project_root,
             docs_dir=self.docs_dir,
@@ -182,6 +192,7 @@ class KnowledgeServer:
             knowledge_dir=self.knowledge_dir,
             force_reindex=False,
             verbose=True,
+            custom_exclude_patterns=custom_patterns,
         )
 
         if not success:
@@ -254,6 +265,11 @@ class KnowledgeServer:
         if not target_dir.exists():
             return f"Documents directory not found: {target_dir}"
 
+        # Get custom exclude patterns from config
+        custom_patterns = (
+            list(self.config.exclude_patterns) if self.config.exclude_patterns else None
+        )
+
         with self._index_lock:
             success = index_with_progress(
                 project_root=self.project_root,
@@ -262,6 +278,7 @@ class KnowledgeServer:
                 knowledge_dir=self.knowledge_dir,
                 force_reindex=False,
                 verbose=True,
+                custom_exclude_patterns=custom_patterns,
             )
 
             if success:
@@ -275,11 +292,17 @@ class KnowledgeServer:
         if not source_dir.exists():
             return f"Source directory not found: {source_dir}"
 
+        # Get custom exclude patterns from config
+        custom_patterns = (
+            list(self.config.exclude_patterns) if self.config.exclude_patterns else None
+        )
+
         with self._index_lock:
             success = add_directory_with_progress(
                 source_dir=source_dir,
                 knowledge_dir=self.knowledge_dir,
                 verbose=True,
+                custom_exclude_patterns=custom_patterns,
             )
 
             if success:
@@ -306,6 +329,25 @@ class KnowledgeServer:
                 self._index = None
                 return f"Successfully removed {resolved} from index"
             return f"File not found in index: {resolved}"
+
+    def remove_directory(self, source_dir: Path) -> str:
+        from mimir.indexing import remove_directory_from_index
+
+        resolved = source_dir.resolve()
+        if not resolved.exists():
+            return f"Directory not found: {resolved}"
+
+        with self._index_lock:
+            success = remove_directory_from_index(
+                source_dir=resolved,
+                knowledge_dir=self.knowledge_dir,
+                verbose=True,
+            )
+
+            if success:
+                self._index = None
+                return f"Successfully removed directory {resolved} from index"
+            return f"Failed to remove directory from index: {resolved}"
 
     def get_stats(self) -> dict:
         index = self.get_index()
@@ -573,6 +615,86 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
 
         return json.dumps(result, indent=2)
 
+    # ── Graph query tools (proxy to Rust web server) ────────────────────────
+
+    def _web_url(path: str) -> str:
+        """Build URL for the Rust web server graph API."""
+        import os
+
+        port = os.environ.get("MIMIR_WEB_PORT", "8000")
+        return f"http://localhost:{port}{path}"
+
+    def _web_get(path: str, params: dict | None = None) -> str:
+        """GET request to the Rust web server. Returns JSON string."""
+        import os
+        from urllib.error import URLError
+        from urllib.parse import urlencode
+        from urllib.request import Request, urlopen
+
+        url = _web_url(path)
+        if params:
+            qs = urlencode({k: v for k, v in params.items() if v is not None})
+            if qs:
+                url = f"{url}?{qs}"
+        try:
+            req = Request(url)
+            with urlopen(req, timeout=10) as resp:
+                return resp.read().decode()
+        except URLError as exc:
+            return json.dumps(
+                {
+                    "error": "Graph server unavailable",
+                    "detail": str(exc.reason),
+                    "suggestion": "Start the web UI: cd web && ./dev.sh",
+                }
+            )
+
+    @mcp.tool()
+    async def graph_query(source: str, target: str) -> str:
+        """Find the shortest weighted path between two modules or entities.
+
+        Uses Dijkstra with relationship-type weights:
+          calls/has_method = 1.0, inherits_from = 1.5,
+          imports_from = 2.0, imports_module = 3.0
+
+        Use this for structural questions like "how does X reach Y?"
+        or "what connects module A to module B?"
+
+        Args:
+            source: Source module path or entity name (e.g., "src/auth/middleware").
+            target: Target module path or entity name (e.g., "src/rate_limiter/service").
+        """
+        return _web_get("/api/graph/path", {"source": source, "target": target})
+
+    @mcp.tool()
+    async def graph_neighbors(
+        node_id: str, depth: int = 1, relation_type: str | None = None
+    ) -> str:
+        """Find what modules or entities are connected to a node.
+
+        Returns neighbors up to `depth` hops away, optionally filtered
+        by relationship type (imports_module, imports_from, calls,
+        inherits_from, has_method).
+
+        Args:
+            node_id: Module path or entity name to explore.
+            depth: How many hops out to search (1-5, default 1).
+            relation_type: Optional filter — only show this relationship type.
+        """
+        return _web_get(
+            "/api/graph/neighbors",
+            {"node_id": node_id, "depth": str(depth), "relation_type": relation_type},
+        )
+
+    @mcp.tool()
+    async def graph_stats() -> str:
+        """Get statistics about the code knowledge graph.
+
+        Returns node/edge/entity counts, relationship type breakdown,
+        language distribution, and the most connected nodes.
+        """
+        return _web_get("/api/graph/stats")
+
     return mcp
 
 
@@ -688,6 +810,11 @@ def main():
         "--add", metavar="DIR", help="Add documents from DIR to existing index"
     )
     parser.add_argument("--remove", metavar="FILE", help="Remove a file from the index")
+    parser.add_argument(
+        "--remove-dir",
+        metavar="DIR",
+        help="Remove all files from a directory from the index",
+    )
     parser.add_argument("--query", metavar="QUESTION", help="Query the knowledge base")
     parser.add_argument(
         "--stats", action="store_true", help="Show knowledge base statistics"
@@ -725,6 +852,11 @@ def main():
     if args.remove:
         source_file = Path(args.remove)
         print(server.remove_file(source_file))
+        return
+
+    if args.remove_dir:
+        source_dir = Path(args.remove_dir)
+        print(server.remove_directory(source_dir))
         return
 
     if args.query:

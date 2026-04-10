@@ -107,6 +107,9 @@ async fn main() -> Result<()> {
         .route("/api/graph/cache-key", get(api_cache_key))
         .route("/api/graph/invalidate", post(api_invalidate))
         .route("/api/graph/module/{module_id}/children", get(api_module_children))
+        .route("/api/graph/path", get(api_graph_path))
+        .route("/api/graph/neighbors", get(api_graph_neighbors))
+        .route("/api/graph/stats", get(api_graph_stats))
         // ── Metrics ────────────────────────────────────────────────────────
         .route("/api/metrics/summary", get(api_metrics_summary))
         .route("/api/metrics/daily", get(api_metrics_daily))
@@ -219,6 +222,100 @@ async fn api_module_children(
     let cache = state.graph_cache.read().await;
     let (nodes, edges) = graph::get_module_children(&module_id, &cache);
     Json(GraphResponse { nodes, edges }).into_response()
+}
+
+async fn api_graph_path(
+    State(state): State<AppState>,
+    Query(params): Query<PathQueryParams>,
+) -> impl IntoResponse {
+    if let Err((code, msg)) = ensure_cache(&state).await {
+        return (code, msg).into_response();
+    }
+    let cache = state.graph_cache.read().await;
+    let result = graph::find_path(&params.source, &params.target, &cache);
+
+    let steps: Vec<PathStepResponse> = result
+        .steps
+        .iter()
+        .map(|s| PathStepResponse {
+            node: s.node.clone(),
+            label: s.label.clone(),
+            file_path: s.file_path.clone(),
+            edge_type: s.edge_type.clone(),
+            edge_cost: s.edge_cost,
+        })
+        .collect();
+
+    Json(PathResponse {
+        found: result.found,
+        source: params.source.clone(),
+        target: params.target.clone(),
+        total_cost: result.total_cost,
+        hops: result.hops,
+        steps,
+    })
+    .into_response()
+}
+
+async fn api_graph_neighbors(
+    State(state): State<AppState>,
+    Query(params): Query<NeighborQueryParams>,
+) -> impl IntoResponse {
+    if let Err((code, msg)) = ensure_cache(&state).await {
+        return (code, msg).into_response();
+    }
+    let cache = state.graph_cache.read().await;
+    let depth = params.depth.unwrap_or(1);
+    let node_id = match &params.node_id {
+        Some(id) => id.clone(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "Missing required query param: node_id",
+            )
+                .into_response()
+        }
+    };
+    let result =
+        graph::find_neighbors(&node_id, depth, params.relation_type.as_deref(), &cache);
+
+    let neighbors: Vec<NeighborEntryResponse> = result
+        .neighbors
+        .iter()
+        .map(|n| NeighborEntryResponse {
+            node: n.node.clone(),
+            label: n.label.clone(),
+            file_path: n.file_path.clone(),
+            edge_type: n.edge_type.clone(),
+            direction: n.direction.clone(),
+        })
+        .collect();
+
+    Json(NeighborResponse {
+        center: result.center,
+        depth,
+        relation_filter: params.relation_type,
+        neighbors,
+    })
+    .into_response()
+}
+
+async fn api_graph_stats(State(state): State<AppState>) -> impl IntoResponse {
+    if let Err((code, msg)) = ensure_cache(&state).await {
+        return (code, msg).into_response();
+    }
+    let cache = state.graph_cache.read().await;
+    let stats = graph::compute_stats(&cache);
+
+    Json(StatsResponse {
+        total_nodes: stats.total_nodes,
+        total_edges: stats.total_edges,
+        total_entities: stats.total_entities,
+        by_relation_type: stats.by_relation_type,
+        by_language: stats.by_language,
+        top_connected: stats.top_connected,
+    })
+    .into_response()
 }
 
 fn filtered_nodes(

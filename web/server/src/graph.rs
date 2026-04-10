@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::collections::{HashMap, HashSet};
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -402,6 +403,432 @@ pub fn get_module_children(
     }
 
     (child_nodes, edges)
+}
+
+// ── Edge weights ────────────────────────────────────────────────────────────────
+
+/// Weight for each relationship type. Lower = tighter coupling.
+fn edge_weight(edge_type: &str) -> f64 {
+    match edge_type {
+        "calls" => 1.0,
+        "has_method" => 1.0,
+        "inherits_from" => 1.5,
+        "imports_from" => 2.0,
+        "imports_module" => 3.0,
+        _ => 2.0,
+    }
+}
+
+// ── Dijkstra path-finding ───────────────────────────────────────────────────────
+
+#[derive(Clone)]
+struct State {
+    cost: f64,
+    node: String,
+}
+
+impl PartialEq for State {
+    fn eq(&self, other: &Self) -> bool {
+        self.cost == other.cost
+    }
+}
+impl Eq for State {}
+
+impl PartialOrd for State {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for State {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Min-heap: reverse ordering so smallest cost pops first
+        other
+            .cost
+            .partial_cmp(&self.cost)
+            .unwrap_or(Ordering::Equal)
+    }
+}
+
+/// Result of a path query.
+pub struct PathResult {
+    pub found: bool,
+    pub total_cost: f64,
+    pub hops: usize,
+    pub steps: Vec<PathStep>,
+}
+
+pub struct PathStep {
+    pub node: String,
+    pub label: String,
+    pub file_path: Option<String>,
+    pub edge_type: Option<String>,
+    pub edge_cost: Option<f64>,
+}
+
+/// Look up human-readable info for a node ID from the graph cache.
+fn node_info<'a>(id: &'a str, cache: &'a GraphCache) -> (&'a str, Option<&'a str>) {
+    // Check nodes (docstore entries)
+    for node in &cache.nodes {
+        if node.id == id {
+            return (node.label.as_str(), node.metadata.file_path.as_deref());
+        }
+    }
+    // Check entities
+    if let Some(ent) = cache.entities.get(id) {
+        return (ent.name.as_str(), Some(ent.file_path.as_str()));
+    }
+    // External nodes: strip "external:" prefix for label
+    if let Some(rest) = id.strip_prefix("external:") {
+        let label = rest.split('.').last().unwrap_or(rest);
+        return (label, None);
+    }
+    (id, None)
+}
+
+/// Find the shortest weighted path between two nodes using Dijkstra.
+/// The graph is treated as undirected (edges traversable both ways).
+pub fn find_path(source: &str, target: &str, cache: &GraphCache) -> PathResult {
+    // Build adjacency list from edges (undirected), excluding external nodes
+    let mut adj: HashMap<&str, Vec<(&str, &str, f64)>> = HashMap::new(); // node → [(neighbor, edge_type, weight)]
+    for edge in &cache.edges {
+        // Skip edges involving external (stdlib/third-party) nodes
+        if edge.source.starts_with("external:") || edge.target.starts_with("external:") {
+            continue;
+        }
+        let w = edge_weight(&edge.edge_type);
+        adj.entry(edge.source.as_str()).or_default().push((
+            edge.target.as_str(),
+            edge.edge_type.as_str(),
+            w,
+        ));
+        adj.entry(edge.target.as_str()).or_default().push((
+            edge.source.as_str(),
+            edge.edge_type.as_str(),
+            w,
+        ));
+    }
+
+    // Resolve source/target: try exact match, then suffix match
+    let resolve = |query: &str| -> Option<String> {
+        // Exact match on node id
+        if adj.contains_key(query) {
+            return Some(query.to_string());
+        }
+        // Try file_path_to_id lookup (exact key)
+        if let Some(id) = cache.file_path_to_id.get(query) {
+            if adj.contains_key(id.as_str()) {
+                return Some(id.clone());
+            }
+        }
+        // Suffix match against file_path_to_id keys (handles relative vs absolute paths)
+        for (fp, id) in &cache.file_path_to_id {
+            if fp.ends_with(query) || query.ends_with(fp.as_str()) {
+                if adj.contains_key(id.as_str()) {
+                    return Some(id.clone());
+                }
+            }
+        }
+        // Suffix match against known node ids
+        for key in adj.keys() {
+            if key.ends_with(query) || query.ends_with(*key) {
+                return Some(key.to_string());
+            }
+        }
+        None
+    };
+
+    let src = match resolve(source) {
+        Some(s) => s,
+        None => {
+            return PathResult {
+                found: false,
+                total_cost: 0.0,
+                hops: 0,
+                steps: vec![],
+            }
+        }
+    };
+    let tgt = match resolve(target) {
+        Some(t) => t,
+        None => {
+            return PathResult {
+                found: false,
+                total_cost: 0.0,
+                hops: 0,
+                steps: vec![],
+            }
+        }
+    };
+
+    if src == tgt {
+        let (label, fp) = node_info(&src, cache);
+        return PathResult {
+            found: true,
+            total_cost: 0.0,
+            hops: 0,
+            steps: vec![PathStep {
+                node: src.clone(),
+                label: label.to_string(),
+                file_path: fp.map(|s| s.to_string()),
+                edge_type: None,
+                edge_cost: None,
+            }],
+        };
+    }
+
+    // Dijkstra
+    let mut dist: HashMap<String, f64> = HashMap::new();
+    let mut prev: HashMap<String, (String, String, f64)> = HashMap::new(); // node → (prev_node, edge_type, cost)
+    let mut heap = BinaryHeap::new();
+
+    dist.insert(src.clone(), 0.0);
+    heap.push(State {
+        cost: 0.0,
+        node: src.clone(),
+    });
+
+    while let Some(State { cost, node }) = heap.pop() {
+        if node == tgt {
+            break;
+        }
+        // Skip stale entries
+        if cost > *dist.get(&node).unwrap_or(&f64::INFINITY) {
+            continue;
+        }
+        if let Some(neighbors) = adj.get(node.as_str()) {
+            for &(neighbor, etype, w) in neighbors {
+                let new_cost = cost + w;
+                if new_cost < *dist.get(neighbor).unwrap_or(&f64::INFINITY) {
+                    dist.insert(neighbor.to_string(), new_cost);
+                    prev.insert(neighbor.to_string(), (node.clone(), etype.to_string(), w));
+                    heap.push(State {
+                        cost: new_cost,
+                        node: neighbor.to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    // Reconstruct path
+    if !prev.contains_key(&tgt) && src != tgt {
+        return PathResult {
+            found: false,
+            total_cost: 0.0,
+            hops: 0,
+            steps: vec![],
+        };
+    }
+
+    let mut steps = Vec::new();
+    let mut current = tgt.clone();
+    let (label, fp) = node_info(&current, cache);
+    steps.push(PathStep {
+        node: current.clone(),
+        label: label.to_string(),
+        file_path: fp.map(|s| s.to_string()),
+        edge_type: None,
+        edge_cost: None,
+    });
+
+    while let Some((prev_node, etype, cost)) = prev.get(&current) {
+        let (label, fp) = node_info(prev_node, cache);
+        steps.push(PathStep {
+            node: prev_node.clone(),
+            label: label.to_string(),
+            file_path: fp.map(|s| s.to_string()),
+            edge_type: Some(etype.clone()),
+            edge_cost: Some(*cost),
+        });
+        current = prev_node.clone();
+    }
+    steps.reverse();
+
+    let total_cost = *dist.get(&tgt).unwrap_or(&0.0);
+
+    PathResult {
+        found: true,
+        total_cost,
+        hops: steps.len() - 1,
+        steps,
+    }
+}
+
+// ── Neighbor search ─────────────────────────────────────────────────────────────
+
+pub struct NeighborResult {
+    pub center: String,
+    pub neighbors: Vec<NeighborEntry>,
+}
+
+pub struct NeighborEntry {
+    pub node: String,
+    pub label: String,
+    pub file_path: Option<String>,
+    pub edge_type: String,
+    pub direction: String, // "outgoing" or "incoming"
+}
+
+/// Find neighbors of a node up to `depth` hops away.
+/// Optionally filter by relationship type.
+pub fn find_neighbors(
+    node_id: &str,
+    depth: usize,
+    relation_type: Option<&str>,
+    cache: &GraphCache,
+) -> NeighborResult {
+    let depth = depth.clamp(1, 5);
+
+    // Resolve node
+    let resolve = |query: &str| -> Option<String> {
+        // Check if it's a known node id (from edges or entities)
+        for edge in &cache.edges {
+            if edge.source == query || edge.target == query {
+                return Some(query.to_string());
+            }
+        }
+        if cache.entities.contains_key(query) {
+            return Some(query.to_string());
+        }
+        // File path lookup (exact)
+        if let Some(id) = cache.file_path_to_id.get(query) {
+            return Some(id.clone());
+        }
+        // Suffix match against file_path_to_id keys (relative vs absolute)
+        for (fp, id) in &cache.file_path_to_id {
+            if fp.ends_with(query) || query.ends_with(fp.as_str()) {
+                return Some(id.clone());
+            }
+        }
+        // Suffix match against edges
+        for edge in &cache.edges {
+            if edge.source.ends_with(query) {
+                return Some(edge.source.clone());
+            }
+            if edge.target.ends_with(query) {
+                return Some(edge.target.clone());
+            }
+        }
+        None
+    };
+
+    let center = match resolve(node_id) {
+        Some(n) => n,
+        None => {
+            return NeighborResult {
+                center: node_id.to_string(),
+                neighbors: vec![],
+            }
+        }
+    };
+
+    let matches_type = |etype: &str| -> bool {
+        match relation_type {
+            Some(filter) => etype == filter,
+            None => true,
+        }
+    };
+
+    let mut visited: HashSet<String> = HashSet::new();
+    visited.insert(center.clone());
+    let mut frontier = vec![center.clone()];
+    let mut all_neighbors: Vec<NeighborEntry> = Vec::new();
+
+    for _ in 0..depth {
+        let mut next_frontier = Vec::new();
+        for current in &frontier {
+            for edge in &cache.edges {
+                // Outgoing: current → target
+                if edge.source == *current && !visited.contains(&edge.target) {
+                    if matches_type(&edge.edge_type) {
+                        let (label, fp) = node_info(&edge.target, cache);
+                        all_neighbors.push(NeighborEntry {
+                            node: edge.target.clone(),
+                            label: label.to_string(),
+                            file_path: fp.map(|s| s.to_string()),
+                            edge_type: edge.edge_type.clone(),
+                            direction: "outgoing".to_string(),
+                        });
+                    }
+                    visited.insert(edge.target.clone());
+                    next_frontier.push(edge.target.clone());
+                }
+                // Incoming: source → current
+                if edge.target == *current && !visited.contains(&edge.source) {
+                    if matches_type(&edge.edge_type) {
+                        let (label, fp) = node_info(&edge.source, cache);
+                        all_neighbors.push(NeighborEntry {
+                            node: edge.source.clone(),
+                            label: label.to_string(),
+                            file_path: fp.map(|s| s.to_string()),
+                            edge_type: edge.edge_type.clone(),
+                            direction: "incoming".to_string(),
+                        });
+                    }
+                    visited.insert(edge.source.clone());
+                    next_frontier.push(edge.source.clone());
+                }
+            }
+        }
+        frontier = next_frontier;
+        if frontier.is_empty() {
+            break;
+        }
+    }
+
+    NeighborResult {
+        center,
+        neighbors: all_neighbors,
+    }
+}
+
+// ── Graph statistics ─────────────────────────────────────────────────────────────
+
+pub struct GraphStats {
+    pub total_nodes: usize,
+    pub total_edges: usize,
+    pub total_entities: usize,
+    pub by_relation_type: HashMap<String, usize>,
+    pub by_language: HashMap<String, usize>,
+    pub top_connected: Vec<(String, u32)>,
+}
+
+/// Compute summary statistics about the knowledge graph.
+pub fn compute_stats(cache: &GraphCache) -> GraphStats {
+    let mut by_type: HashMap<String, usize> = HashMap::new();
+    let mut by_lang: HashMap<String, usize> = HashMap::new();
+
+    for edge in &cache.edges {
+        *by_type.entry(edge.edge_type.clone()).or_insert(0) += 1;
+    }
+
+    for ent in cache.entities.values() {
+        let lang = match ent.file_path.rsplit('.').next() {
+            Some("py") => "python",
+            Some("ts") | Some("tsx") => "typescript",
+            Some("js") | Some("jsx") => "javascript",
+            Some("rs") => "rust",
+            Some("go") => "go",
+            _ => "other",
+        };
+        *by_lang.entry(lang.to_string()).or_insert(0) += 1;
+    }
+
+    // Top 10 most connected nodes
+    let mut degree_vec: Vec<(String, u32)> =
+        cache.degree.iter().map(|(k, v)| (k.clone(), *v)).collect();
+    degree_vec.sort_by(|a, b| b.1.cmp(&a.1));
+    degree_vec.truncate(10);
+
+    GraphStats {
+        total_nodes: cache.nodes.len(),
+        total_edges: cache.edges.len(),
+        total_entities: cache.entities.len(),
+        by_relation_type: by_type,
+        by_language: by_lang,
+        top_connected: degree_vec,
+    }
 }
 
 // ── Force-directed layout ──────────────────────────────────────────────────────

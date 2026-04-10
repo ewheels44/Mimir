@@ -95,3 +95,70 @@ pub struct SearchRequest {
 pub struct QueryRequest {
     pub question: String,
 }
+
+// ── Graph query response types ──────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct PathStepResponse {
+    pub node: String,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edge_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edge_cost: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PathResponse {
+    pub found: bool,
+    pub source: String,
+    pub target: String,
+    pub total_cost: f64,
+    pub hops: usize,
+    pub steps: Vec<PathStepResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NeighborEntryResponse {
+    pub node: String,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+    pub edge_type: String,
+    pub direction: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NeighborResponse {
+    pub center: String,
+    pub depth: usize,
+    pub relation_filter: Option<String>,
+    pub neighbors: Vec<NeighborEntryResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StatsResponse {
+    pub total_nodes: usize,
+    pub total_edges: usize,
+    pub total_entities: usize,
+    pub by_relation_type: std::collections::HashMap<String, usize>,
+    pub by_language: std::collections::HashMap<String, usize>,
+    pub top_connected: Vec<(String, u32)>,
+}
+
+// ── Graph query params ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct PathQueryParams {
+    pub source: String,
+    pub target: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NeighborQueryParams {
+    pub node_id: Option<String>,
+    pub depth: Option<usize>,
+    pub relation_type: Option<String>,
+}

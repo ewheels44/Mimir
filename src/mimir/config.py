@@ -107,6 +107,9 @@ class MimirConfig:
     code_dirs: tuple[Path, ...] = ()
     shared_indexes: dict[str, Path] = field(default_factory=dict)
 
+    # Custom exclude patterns (in addition to defaults)
+    exclude_patterns: tuple[str, ...] = ()
+
     # SDK cache
     sdk_cache_ttl_days: int = 7
 
@@ -167,6 +170,12 @@ class MimirConfig:
         # Code dirs
         code_dirs = _resolve_code_dirs(actual_project_root, file_config)
 
+        # Custom exclude patterns (merged with defaults)
+        custom_patterns = file_config.get("exclude_patterns", [])
+        exclude_patterns = (
+            tuple(custom_patterns) if isinstance(custom_patterns, list) else ()
+        )
+
         # Shared indexes
         raw_shared = file_config.get("shared_indexes", {})
         shared_indexes = {}
@@ -205,6 +214,7 @@ class MimirConfig:
             docs_dir=docs_dir,
             knowledge_dir=knowledge_dir,
             code_dirs=tuple(code_dirs),
+            exclude_patterns=exclude_patterns,
             shared_indexes=shared_indexes,
             sdk_cache_ttl_days=sdk_cache_ttl,
             bridge_enabled=_env_bool(
@@ -269,6 +279,7 @@ class MimirConfig:
             "docs_dir": str(self.docs_dir),
             "knowledge_dir": str(self.knowledge_dir),
             "code_dirs": [str(d) for d in self.code_dirs],
+            "exclude_patterns": list(self.exclude_patterns),
             "shared_indexes": {k: str(v) for k, v in self.shared_indexes.items()},
             "sdk_cache_ttl_days": self.sdk_cache_ttl_days,
             "bridge_enabled": self.bridge_enabled,

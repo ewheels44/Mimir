@@ -266,6 +266,7 @@ def detect_changed_files(
     project_root: Path,
     watched_dirs: List[Path],
     update_state: bool = True,
+    custom_exclude_patterns: Optional[List[str]] = None,
 ) -> dict:
     previous_state = load_hash_state(project_root)
     previous_hashes = previous_state.get("file_hashes", {})
@@ -273,11 +274,18 @@ def detect_changed_files(
     current_hashes = {}
     all_files = []
 
+    # Merge default and custom patterns
+    all_patterns = EXCLUDE_PATTERNS[:]
+    if custom_exclude_patterns:
+        all_patterns.extend(custom_exclude_patterns)
+
     for watched_dir in watched_dirs:
         if not watched_dir.exists():
             continue
         for file_path in watched_dir.rglob("*"):
-            if file_path.is_file() and not _should_exclude(file_path):
+            if file_path.is_file() and not _should_exclude(
+                file_path, custom_exclude_patterns
+            ):
                 rel_path = str(file_path.resolve())
                 all_files.append(rel_path)
                 file_hash = compute_file_hash(file_path)
@@ -312,6 +320,7 @@ def index_with_progress(
     knowledge_dir: Path,
     force_reindex: bool = False,
     verbose: bool = True,
+    custom_exclude_patterns: Optional[List[str]] = None,
 ) -> bool:
     """
     Index documents with progress bars.
@@ -323,6 +332,7 @@ def index_with_progress(
         knowledge_dir: Where to store the index
         force_reindex: Whether to clear existing index
         verbose: Whether to print progress output
+        custom_exclude_patterns: Additional patterns to exclude (merged with defaults)
 
     Returns:
         True if successful, False otherwise
@@ -338,6 +348,11 @@ def index_with_progress(
         print("   Run: pip install llama-index tqdm")
         return False
 
+    # Merge default and custom exclude patterns
+    all_exclude_patterns = EXCLUDE_PATTERNS[:]
+    if custom_exclude_patterns:
+        all_exclude_patterns.extend(custom_exclude_patterns)
+
     if force_reindex and knowledge_dir.exists():
         if verbose:
             print(f"Clearing existing index at {knowledge_dir}...")
@@ -346,7 +361,11 @@ def index_with_progress(
         clear_manifest(knowledge_dir)
 
     if verbose:
-        print(f"\nIndexing with exclusions: {len(EXCLUDE_PATTERNS)} patterns")
+        pattern_count = len(all_exclude_patterns)
+        custom_count = len(custom_exclude_patterns) if custom_exclude_patterns else 0
+        print(
+            f"\nIndexing with exclusions: {pattern_count} patterns ({custom_count} custom)"
+        )
 
     all_documents = []
     directory_files = {}  # Track files per directory for manifest
@@ -355,7 +374,7 @@ def index_with_progress(
         if verbose:
             print(f"\n1. Scanning {docs_dir}/...")
         reader = SimpleDirectoryReader(
-            str(docs_dir), recursive=True, exclude=EXCLUDE_PATTERNS
+            str(docs_dir), recursive=True, exclude=all_exclude_patterns
         )
         resources = list(reader.list_resources())
         if verbose:
@@ -393,7 +412,7 @@ def index_with_progress(
                     str(code_dir),
                     recursive=True,
                     filename_as_id=True,
-                    exclude=EXCLUDE_PATTERNS,
+                    exclude=all_exclude_patterns,
                 )
                 resources = list(reader.list_resources())
                 if verbose:
@@ -559,6 +578,7 @@ def add_directory_with_progress(
     source_dir: Path,
     knowledge_dir: Path,
     verbose: bool = True,
+    custom_exclude_patterns: Optional[List[str]] = None,
 ) -> bool:
     """
     Add documents from a directory to existing index with progress bars.
@@ -568,6 +588,7 @@ def add_directory_with_progress(
         source_dir: Directory to add
         knowledge_dir: Where the existing index is stored
         verbose: Whether to print progress output
+        custom_exclude_patterns: Additional patterns to exclude (merged with defaults)
 
     Returns:
         True if successful, False otherwise
@@ -587,6 +608,11 @@ def add_directory_with_progress(
             print("❌ No existing index found. Run full index first.")
         return False
 
+    # Merge default and custom exclude patterns
+    all_exclude_patterns = EXCLUDE_PATTERNS[:]
+    if custom_exclude_patterns:
+        all_exclude_patterns.extend(custom_exclude_patterns)
+
     if verbose:
         print(f"\n➕ Adding documents from {source_dir}...")
 
@@ -597,7 +623,7 @@ def add_directory_with_progress(
         str(source_dir),
         recursive=True,
         filename_as_id=True,
-        exclude=EXCLUDE_PATTERNS,
+        exclude=all_exclude_patterns,
     )
 
     resources = list(reader.list_resources())
@@ -892,6 +918,148 @@ def remove_file_from_index(
         if verbose:
             print(f"   ❌ Failed to remove file: {e}")
         return False
+
+
+def remove_directory_from_index(
+    source_dir: Path,
+    knowledge_dir: Path,
+    verbose: bool = True,
+) -> bool:
+    """Remove all files from a directory from the existing index.
+
+    Optimized to load the index once, remove all files, then persist once.
+
+    Args:
+        source_dir: Directory to remove (all files recursively)
+        knowledge_dir: Where the existing index is stored
+        verbose: Whether to print progress output
+
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        from llama_index.core import (
+            load_index_from_storage,
+            StorageContext,
+        )
+    except ImportError as e:
+        print(f"❌ Missing dependency: {e}")
+        return False
+
+    if not (knowledge_dir / "index_store.json").exists():
+        if verbose:
+            print("❌ No existing index found.")
+        return False
+
+    resolved_dir = source_dir.resolve()
+    if not resolved_dir.exists():
+        if verbose:
+            print(f"❌ Directory not found: {resolved_dir}")
+        return False
+
+    if verbose:
+        print(f"\n🗑️  Removing directory from index: {resolved_dir}")
+
+    # Load manifest to find all files in this directory
+    manifest = load_manifest(knowledge_dir)
+    files_to_remove = []
+
+    # Find all files that belong to this directory
+    for dir_key, info in manifest.get("indexed_directories", {}).items():
+        for file_path in info.get("files", []):
+            file_path_obj = Path(file_path)
+            try:
+                # Check if file is under the directory being removed
+                if (
+                    resolved_dir in file_path_obj.parents
+                    or file_path_obj.parent == resolved_dir
+                ):
+                    files_to_remove.append(file_path_obj)
+            except (OSError, ValueError):
+                # Skip files that can't be resolved
+                continue
+
+    if not files_to_remove:
+        if verbose:
+            print("   ⚠️  No files from this directory found in index")
+        return True
+
+    if verbose:
+        print(f"   Found {len(files_to_remove)} files to remove")
+
+    # Load index once
+    try:
+        storage_context = StorageContext.from_defaults(persist_dir=str(knowledge_dir))
+        index = load_index_from_storage(storage_context)
+        docstore = index.storage_context.docstore
+    except Exception as e:
+        if verbose:
+            print(f"❌ Failed to load index: {e}")
+            print("   The index may be corrupted. Try running: mimir index --reindex")
+        return False
+
+    # Remove all files from the index
+    removed_count = 0
+    for file_path in files_to_remove:
+        resolved_file = file_path.resolve()
+        resolved_str = str(resolved_file)
+
+        # Try stable doc_id first
+        doc_id = _get_stable_doc_id(resolved_file)
+        if doc_id in docstore.docs:
+            index.delete_ref_doc(doc_id, delete_from_docstore=True)
+            removed_count += 1
+        else:
+            # Try matching by file_path metadata
+            matched_ids = [
+                did
+                for did, doc in docstore.docs.items()
+                if getattr(doc, "metadata", {}).get("file_path") == resolved_str
+            ]
+            for did in matched_ids:
+                index.delete_ref_doc(did, delete_from_docstore=True)
+                removed_count += 1
+
+    # Update manifest once for all files
+    for file_path in files_to_remove:
+        resolved_file = file_path.resolve()
+        # Remove from manifest
+        for dir_key, info in list(manifest["indexed_directories"].items()):
+            files = info.get("files", [])
+            resolved_str = str(resolved_file.resolve())
+            if resolved_str in files:
+                files.remove(resolved_str)
+                info["files"] = files
+                info["file_count"] = len(files)
+                info["document_count"] = max(0, info.get("document_count", 1) - 1)
+                info["last_indexed"] = datetime.now().isoformat()
+
+                # Remove directory entry if no files left
+                if not files:
+                    del manifest["indexed_directories"][dir_key]
+
+    # Update total documents count
+    manifest["total_documents"] = sum(
+        entry.get("document_count", 0)
+        for entry in manifest["indexed_directories"].values()
+    )
+
+    # Save manifest
+    save_manifest(knowledge_dir, manifest)
+
+    # Persist index once
+    try:
+        index.storage_context.persist(persist_dir=str(knowledge_dir))
+    except Exception as e:
+        if verbose:
+            print(f"   ⚠️  Warning: Failed to persist index: {e}")
+            print("   Manifest updated, but index may need reindexing")
+
+    if verbose:
+        print(f"   ✓ Removed {removed_count} documents from index")
+        print("\n✅ Directory removed successfully!")
+
+    return removed_count > 0
 
 
 def incremental_reindex(

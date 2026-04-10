@@ -122,17 +122,32 @@ EXCLUDE_PATTERNS = [
 ]
 
 
-def should_exclude(file_path: Path) -> bool:
+def should_exclude(
+    file_path: Path, custom_patterns: Optional[list[str]] = None
+) -> bool:
     """Check if a file path should be excluded from indexing.
 
     Checks both directory components and filename patterns.
+    Merges default EXCLUDE_PATTERNS with custom patterns.
+
+    Args:
+        file_path: Path to check
+        custom_patterns: Additional patterns to exclude (optional)
+
+    Returns:
+        True if file should be excluded, False otherwise
     """
     import fnmatch
+
+    # Merge default and custom patterns
+    all_patterns = EXCLUDE_PATTERNS[:]
+    if custom_patterns:
+        all_patterns.extend(custom_patterns)
 
     path_str = str(file_path)
     name = file_path.name
 
-    for pattern in EXCLUDE_PATTERNS:
+    for pattern in all_patterns:
         # Check if pattern appears in path (for directory patterns)
         if "*" not in pattern and pattern in path_str:
             return True

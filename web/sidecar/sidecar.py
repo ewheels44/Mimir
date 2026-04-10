@@ -25,7 +25,8 @@ MIMIR_DIR = Path.home() / "Documents" / "Mimir"
 sys.path.insert(0, str(MIMIR_DIR))
 
 try:
-    from mcp_server_llamaindex import ServerConfig, KnowledgeServer
+    from mcp_server_llamaindex import KnowledgeServer
+    from mimir.config import MimirConfig, get_config
 
     _import_ok = True
     _import_err = None
@@ -39,13 +40,13 @@ except Exception as exc:
 
 app = FastAPI(title="Mimir Python Sidecar", version="1.0.0")
 
-_config: ServerConfig | None = None
+_config: MimirConfig | None = None
 
 
-def get_config() -> ServerConfig:
+def get_sidecar_config() -> MimirConfig:
     global _config
     if _config is None:
-        _config = ServerConfig.from_env()
+        _config = get_config()
     return _config
 
 
@@ -81,7 +82,7 @@ async def search(req: SearchRequest):
             content=[{"title": "Import Error", "snippet": _import_err, "source": ""}],
         )
     try:
-        server = KnowledgeServer(get_config())
+        server = KnowledgeServer(get_sidecar_config())
         results_text = server.search(req.query, req.top_k)
 
         if (
@@ -112,7 +113,7 @@ async def query(req: QueryRequest):
     if not _import_ok:
         return JSONResponse(status_code=503, content={"detail": _import_err})
     try:
-        server = KnowledgeServer(get_config())
+        server = KnowledgeServer(get_sidecar_config())
         answer = server.query(req.question)
         return {"answer": answer}
     except Exception as exc:
@@ -124,7 +125,7 @@ async def stats():
     if not _import_ok:
         return JSONResponse(status_code=503, content={"detail": _import_err})
     try:
-        return KnowledgeServer(get_config()).get_stats()
+        return KnowledgeServer(get_sidecar_config()).get_stats()
     except Exception as exc:
         return JSONResponse(status_code=500, content={"detail": str(exc)})
 

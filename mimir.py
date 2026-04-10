@@ -12,6 +12,8 @@ Usage:
     mimir index                          Index documents
     mimir index --reindex                Rebuild index
     mimir index --add src                Add directory to index
+    mimir list                           List indexed files
+    mimir list --git-tracked             Compare indexed vs git-tracked files
     mimir search "how does auth work?"   One-shot semantic search
     mimir stats                          Show index statistics
     mimir health                         Check server health
@@ -184,6 +186,8 @@ def cmd_index(args: argparse.Namespace) -> int:
         extra.extend(["--add", args.add])
     if args.remove:
         extra.extend(["--remove", args.remove])
+    if args.remove_dir:
+        extra.extend(["--remove-dir", args.remove_dir])
     if args.shared_index:
         extra.extend(["--shared-index", args.shared_index])
         if args.name:
@@ -205,6 +209,144 @@ def cmd_search(args: argparse.Namespace) -> int:
 def cmd_stats(args: argparse.Namespace) -> int:
     """Show index statistics."""
     return _run_indexing(["--stats"])
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    """List indexed files and optionally compare with git-tracked files."""
+    try:
+        from src.mimir.config import get_config, reset_config
+
+        reset_config()
+        config = get_config()
+        knowledge_dir = config.knowledge_dir
+        project_root = config.project_root
+
+        # Check if index exists
+        if not (knowledge_dir / "index_store.json").exists():
+            print("\n❌ No knowledge base found")
+            print(f"   Expected: {knowledge_dir}")
+            print("\n   Run: mimir index")
+            return 1
+
+        # If --git-tracked flag, show comparison
+        if args.git_tracked:
+            return _list_with_git_comparison(knowledge_dir, project_root)
+
+        # Otherwise, show standard list
+        return _run_script(".opencode/mimir-index.py", ["--list"])
+
+    except Exception as e:
+        print(f"Error listing files: {e}")
+        return 1
+
+
+def _list_with_git_comparison(knowledge_dir: Path, project_root: Path) -> int:
+    """Show comparison between indexed files and git-tracked files."""
+    import subprocess
+    from pathlib import Path
+
+    # Check if we're in a git repository
+    git_dir = project_root / ".git"
+    if not git_dir.exists():
+        print("\n⚠️  Not a git repository")
+        print("   Showing indexed files only:\n")
+        # Fall back to showing just indexed files
+        return _run_script(".opencode/mimir-index.py", ["--list"])
+
+    # Load manifest
+    manifest_path = knowledge_dir / "manifest.json"
+    if not manifest_path.exists():
+        print("\n❌ No manifest found")
+        print(f"   Expected: {manifest_path}")
+        return 1
+
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"\n❌ Error reading manifest: {e}")
+        return 1
+
+    # Get indexed files (relative paths)
+    indexed_files = set()
+    for dir_info in manifest.get("indexed_directories", {}).values():
+        for file_path in dir_info.get("files", []):
+            try:
+                rel_path = Path(file_path).relative_to(project_root)
+                indexed_files.add(str(rel_path))
+            except ValueError:
+                # File is outside project root, use absolute path
+                indexed_files.add(file_path)
+
+    # Get git-tracked files
+    git_files = set()
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "--cached"],
+            cwd=str(project_root),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            git_files = (
+                set(result.stdout.strip().split("\n"))
+                if result.stdout.strip()
+                else set()
+            )
+    except (
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+        subprocess.CalledProcessError,
+    ):
+        print("\n⚠️  Git command failed")
+        print("   Showing indexed files only:\n")
+        # Fall back to showing just indexed files
+        return _run_script(".opencode/mimir-index.py", ["--list"])
+
+    # Calculate differences
+    indexed_and_tracked = indexed_files & git_files
+    indexed_not_tracked = indexed_files - git_files
+    tracked_not_indexed = git_files - indexed_files
+
+    # Print results
+    print("\n" + "=" * 60)
+    print("📚 INDEXED vs GIT-TRACKED FILES")
+    print("=" * 60)
+
+    # Indexed and tracked
+    if indexed_and_tracked:
+        print(f"\n✓ Indexed ({len(indexed_and_tracked)} files):")
+        for f in sorted(indexed_and_tracked)[:20]:
+            print(f"   {f}")
+        if len(indexed_and_tracked) > 20:
+            print(f"   ... and {len(indexed_and_tracked) - 20} more files")
+
+    # Indexed but not tracked (e.g., files outside git)
+    if indexed_not_tracked:
+        print(f"\n✓ Indexed (not in git) ({len(indexed_not_tracked)} files):")
+        for f in sorted(indexed_not_tracked)[:10]:
+            print(f"   {f}")
+        if len(indexed_not_tracked) > 10:
+            print(f"   ... and {len(indexed_not_tracked) - 10} more files")
+
+    # Tracked but not indexed
+    if tracked_not_indexed:
+        print(f"\n✗ Not indexed ({len(tracked_not_indexed)} files):")
+        for f in sorted(tracked_not_indexed)[:30]:
+            print(f"   {f}")
+        if len(tracked_not_indexed) > 30:
+            print(f"   ... and {len(tracked_not_indexed) - 30} more files")
+
+    # Summary
+    print("\n" + "=" * 60)
+    print(f"📊 Summary:")
+    print(f"   Indexed: {len(indexed_files)} files")
+    print(f"   Git-tracked: {len(git_files)} files")
+    print(f"   Indexed & tracked: {len(indexed_and_tracked)} files")
+    print(f"   Not indexed: {len(tracked_not_indexed)} files")
+    print("=" * 60 + "\n")
+
+    return 0
 
 
 def cmd_health(args: argparse.Namespace) -> int:
@@ -337,132 +479,315 @@ def cmd_cache(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mimir",
-        description="Mimir — Persistent knowledge base for AI agents",
+        description="Mimir — Persistent knowledge base for AI agents. Gives your AI assistants memory across sessions by indexing your project's documentation and code.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
+  # Setup
   mimir install                          Global install (run once after clone)
   mimir uninstall                        Remove Mimir from global config
-  mimir init                             Initialize a project
+  mimir init                             Initialize current project
   mimir init --code-dirs=src,tests       Init with source directories
-  mimir server                           Start the MCP server
-  mimir index                            Index documents
+
+  # Indexing
+  mimir index                            Index project documents
   mimir index --reindex                  Rebuild index from scratch
-  mimir index --add src                  Add a directory to the index
-  mimir search "how does auth work?"     Semantic search
+  mimir index --add src                  Add directory to existing index
+  mimir index --remove-dir old/          Remove directory from index
+  mimir list                             List all indexed files
+  mimir list --git-tracked               Compare indexed vs git-tracked files
+
+  # Search & Analysis
+  mimir search "how does auth work?"     Semantic search across indexed content
+  mimir rag "explain the database"       RAG workflow with structured reasoning
+  mimir agent "research auth patterns"   Multi-step knowledge agent exploration
   mimir stats                            Show index statistics
   mimir health                           Check configuration and status
-  mimir rag "explain the database"       RAG workflow
-  mimir prep "video latency"             Customer call briefing
+
+  # FDE Workflows
+  mimir prep "video latency"             Generate customer call briefing
+  mimir prep "video latency" --customer "Acme"
   mimir diff                             Session diff (last day)
-  mimir metrics --days 7                 Cost report
+  mimir diff --days 7                    Session diff (last 7 days)
+  mimir metrics --days 7                 Cost and usage report
+  mimir handoff --customer "Acme Corp"  Generate handoff documentation
+
+  # Multi-Project
   mimir projects list                    List registered projects
-  mimir projects add ~/Projects/acme     Register a project
-  mimir handoff --customer "Acme Corp"   Generate handoff doc
+  mimir projects add ~/Projects/acme    Register a project
+  mimir projects switch acme             Switch active project
+
+  # SDK Cache
   mimir cache list                       List cached SDK docs
-  mimir cache get stripe                 Fetch Stripe docs""",
+  mimir cache get stripe                 Fetch Stripe API docs""",
     )
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
     # ── init ──
-    p = subparsers.add_parser("init", help="Initialize a project for Mimir")
-    p.add_argument(
-        "--code-dirs", help="Comma-separated code directories (e.g., src,tests)"
+    p = subparsers.add_parser(
+        "init",
+        help="Initialize a project for Mimir indexing",
+        description="Set up Mimir for the current project. Creates .mimir/config.json and .opencode/mimir-index.py, then indexes your documentation and code.",
     )
     p.add_argument(
-        "project_root", nargs="?", help="Project directory (default: current)"
+        "--code-dirs",
+        help="Comma-separated list of code directories to index (e.g., 'src,tests'). Default: no code directories",
+    )
+    p.add_argument(
+        "project_root",
+        nargs="?",
+        help="Project directory to initialize (default: current directory)",
     )
 
     # ── install ──
     p = subparsers.add_parser(
-        "install", help="Global install — set up MCP server and system rules (run once)"
+        "install",
+        help="Global install — configure MCP server and system rules",
+        description="One-time setup after cloning Mimir. Configures the MCP server in opencode.json and injects Mimir rules into system-context.md. Run this once per machine.",
     )
-    p.add_argument("--force", action="store_true", help="Force re-injection of rules")
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="Force re-injection of rules even if already installed",
+    )
 
     # ── uninstall ──
-    subparsers.add_parser("uninstall", help="Uninstall — restore backed up configs")
+    subparsers.add_parser(
+        "uninstall",
+        help="Uninstall — restore original OpenCode configuration",
+        description="Remove Mimir from global OpenCode configuration. Restores backed up config files if available.",
+    )
 
     # ── server ──
-    p = subparsers.add_parser("server", help="Run the MCP server")
-    p.add_argument("--transport", choices=["stdio", "http"], default="stdio")
-    p.add_argument("--port", type=int, default=8000)
+    p = subparsers.add_parser(
+        "server",
+        help="Run the MCP server for AI assistant integration",
+        description="Start the Model Context Protocol (MCP) server that provides Mimir tools to AI assistants like Claude. Usually run automatically by your AI client.",
+    )
+    p.add_argument(
+        "--transport",
+        choices=["stdio", "http"],
+        default="stdio",
+        help="Transport protocol (default: stdio)",
+    )
+    p.add_argument(
+        "--port", type=int, default=8000, help="Port for HTTP transport (default: 8000)"
+    )
 
     # ── index ──
-    p = subparsers.add_parser("index", help="Index documents")
-    p.add_argument(
-        "directory", nargs="?", help="Directory to index (default: project docs)"
+    p = subparsers.add_parser(
+        "index",
+        help="Index documents and code for semantic search",
+        description="Build or update the knowledge base index. Indexes documentation and code files so they can be searched semantically by AI assistants.",
     )
-    p.add_argument("--reindex", action="store_true", help="Rebuild index from scratch")
-    p.add_argument("--add", metavar="DIR", help="Add directory to existing index")
-    p.add_argument("--remove", metavar="FILE", help="Remove file from index")
-    p.add_argument("--shared-index", metavar="DIR", help="Index as a shared reference")
-    p.add_argument("--name", metavar="NAME", help="Name for shared index")
-    p.add_argument("--shared-list", action="store_true", help="List shared indices")
+    p.add_argument(
+        "directory",
+        nargs="?",
+        help="Directory to index (default: project docs directory)",
+    )
+    p.add_argument(
+        "--reindex",
+        action="store_true",
+        help="Rebuild the entire index from scratch (slower but thorough)",
+    )
+    p.add_argument(
+        "--add",
+        metavar="DIR",
+        help="Add a directory to the existing index (incremental update)",
+    )
+    p.add_argument(
+        "--remove", metavar="FILE", help="Remove a single file from the index"
+    )
+    p.add_argument(
+        "--remove-dir",
+        metavar="DIR",
+        help="Remove all files from a directory (recursively) from the index",
+    )
+    p.add_argument(
+        "--shared-index",
+        metavar="DIR",
+        help="Index as a shared reference for cross-project search",
+    )
+    p.add_argument(
+        "--name",
+        metavar="NAME",
+        help="Name for shared index (required with --shared-index)",
+    )
+    p.add_argument(
+        "--shared-list", action="store_true", help="List all available shared indices"
+    )
 
     # ── search ──
-    p = subparsers.add_parser("search", help="One-shot semantic search")
-    p.add_argument("query", help="Search query")
+    p = subparsers.add_parser(
+        "search",
+        help="Semantic search across indexed content",
+        description="Search the knowledge base using natural language. Returns semantically similar documents and code snippets.",
+    )
+    p.add_argument("query", help="Natural language search query")
 
     # ── stats ──
-    subparsers.add_parser("stats", help="Show index statistics")
+    subparsers.add_parser(
+        "stats",
+        help="Show index statistics",
+        description="Display statistics about the knowledge base: document count, index size, indexed directories.",
+    )
+
+    # ── list ──
+    p = subparsers.add_parser(
+        "list",
+        help="List all indexed files",
+        description="Show all files currently in the knowledge base index. Useful for verifying what's been indexed.",
+    )
+    p.add_argument(
+        "--git-tracked",
+        action="store_true",
+        help="Compare indexed files with git-tracked files to find gaps",
+    )
 
     # ── health ──
-    subparsers.add_parser("health", help="Check Mimir health and configuration")
+    subparsers.add_parser(
+        "health",
+        help="Check Mimir health and configuration",
+        description="Verify Mimir is properly configured: API keys, index status, directory paths, and any warnings.",
+    )
 
     # ── rag ──
-    p = subparsers.add_parser("rag", help="RAG workflow")
+    p = subparsers.add_parser(
+        "rag",
+        help="RAG workflow with structured reasoning",
+        description="Retrieve relevant documents and generate a synthesized answer using Retrieval-Augmented Generation. Best for specific questions.",
+    )
     p.add_argument("query", help="Question to answer")
 
     # ── agent ──
-    p = subparsers.add_parser("agent", help="Knowledge agent workflow")
-    p.add_argument("query", help="Question to research")
+    p = subparsers.add_parser(
+        "agent",
+        help="Knowledge agent for multi-step research",
+        description="Launch an autonomous agent that performs multi-step research: searches, reads documents, and synthesizes findings. Best for complex questions.",
+    )
+    p.add_argument("query", help="Research question to investigate")
 
     # ── prep ──
-    p = subparsers.add_parser("prep", help="Generate customer call briefing")
+    p = subparsers.add_parser(
+        "prep",
+        help="Generate customer call briefing",
+        description="Prepare for a customer call by generating a briefing document with relevant context from the knowledge base.",
+    )
     p.add_argument("topic", help="Call topic (e.g., 'video latency issues')")
-    p.add_argument("--customer", help="Customer name")
+    p.add_argument("--customer", help="Customer name for personalized briefing")
 
     # ── diff ──
-    p = subparsers.add_parser("diff", help="Session diff — what you learned recently")
-    p.add_argument("--days", type=int, default=1, help="Days to look back (default: 1)")
+    p = subparsers.add_parser(
+        "diff",
+        help="Session diff — what you learned recently",
+        description="Show what was learned or changed in recent sessions. Useful for catching up after time away.",
+    )
+    p.add_argument(
+        "--days", type=int, default=1, help="Number of days to look back (default: 1)"
+    )
 
     # ── metrics ──
-    p = subparsers.add_parser("metrics", help="Cost metrics report")
-    p.add_argument("--days", type=int, default=30, help="Days to include (default: 30)")
+    p = subparsers.add_parser(
+        "metrics",
+        help="Cost and usage metrics report",
+        description="Show API costs, token usage, and query statistics. Helps track spending and optimize usage.",
+    )
+    p.add_argument(
+        "--days",
+        type=int,
+        default=30,
+        help="Number of days to include in report (default: 30)",
+    )
 
     # ── projects ──
-    p = subparsers.add_parser("projects", help="Multi-project management")
+    p = subparsers.add_parser(
+        "projects",
+        help="Multi-project management",
+        description="Manage multiple Mimir projects. Register, switch between, and track status of different projects.",
+    )
     psp = p.add_subparsers(dest="projects_action", help="Project command")
-    psp.add_parser("list", help="List registered projects")
-    pa = psp.add_parser("add", help="Register a project")
+    psp.add_parser(
+        "list",
+        help="List all registered projects",
+        description="Show all projects registered with Mimir and their status.",
+    )
+    pa = psp.add_parser(
+        "add",
+        help="Register a new project",
+        description="Add a project directory to Mimir's registry for easy switching.",
+    )
     pa.add_argument("path", help="Path to project directory")
     pa.add_argument("--name", help="Project name (default: directory name)")
-    pa.add_argument("--description", help="Project description")
-    pr = psp.add_parser("remove", help="Unregister a project")
-    pr.add_argument("name", help="Project name")
-    ps = psp.add_parser("switch", help="Switch to a project")
-    ps.add_argument("name", help="Project name")
-    psp.add_parser("status", help="Show status of all projects")
-    psp.add_parser("discover", help="Find projects in common locations")
+    pa.add_argument("--description", help="Brief project description")
+    pr = psp.add_parser(
+        "remove",
+        help="Unregister a project",
+        description="Remove a project from Mimir's registry (does not delete the project).",
+    )
+    pr.add_argument("name", help="Project name to remove")
+    ps = psp.add_parser(
+        "switch",
+        help="Switch to a different project",
+        description="Change the active project context for Mimir commands.",
+    )
+    ps.add_argument("name", help="Project name to switch to")
+    psp.add_parser(
+        "status",
+        help="Show status of all projects",
+        description="Display index status, last indexed time, and health for all projects.",
+    )
+    psp.add_parser(
+        "discover",
+        help="Find projects in common locations",
+        description="Scan common directories for Mimir-enabled projects and offer to register them.",
+    )
 
     # ── handoff ──
-    p = subparsers.add_parser("handoff", help="Generate handoff documentation")
+    p = subparsers.add_parser(
+        "handoff",
+        help="Generate handoff documentation",
+        description="Create a comprehensive handoff document for transitioning work to another developer or team.",
+    )
     p.add_argument("--project", "-p", help="Project name (default: current directory)")
-    p.add_argument("--summary", "-s", help="Engagement summary")
-    p.add_argument("--customer", "-c", help="Customer name")
+    p.add_argument("--summary", "-s", help="Brief engagement summary or context")
+    p.add_argument("--customer", "-c", help="Customer name for personalized handoff")
     p.add_argument("--output", "-o", help="Output file path (default: HANDOFF.md)")
 
     # ── cache ──
-    p = subparsers.add_parser("cache", help="SDK documentation cache")
+    p = subparsers.add_parser(
+        "cache",
+        help="SDK documentation cache management",
+        description="Manage cached SDK/library documentation. Fetches current docs from Context7 and caches locally for fast access.",
+    )
     csp = p.add_subparsers(dest="cache_action", help="Cache command")
-    csp.add_parser("list", help="List cached libraries")
-    cg = csp.add_parser("get", help="Get SDK docs (fetches + caches if stale)")
-    cg.add_argument("library", help="Library name (e.g., stripe, react)")
-    cg.add_argument("--topic", default="general", help="Documentation topic")
-    cr = csp.add_parser("refresh", help="Force refresh cached docs")
-    cr.add_argument("library", help="Library name")
+    csp.add_parser(
+        "list",
+        help="List all cached libraries",
+        description="Show all SDK documentation currently in the cache with freshness status.",
+    )
+    cg = csp.add_parser(
+        "get",
+        help="Get SDK docs (fetches if not cached or stale)",
+        description="Retrieve documentation for a library. Automatically fetches from Context7 if not cached or cache is stale (7-day TTL).",
+    )
+    cg.add_argument("library", help="Library name (e.g., stripe, react, nextjs)")
+    cg.add_argument(
+        "--topic",
+        default="general",
+        help="Specific topic within docs (default: general)",
+    )
+    cr = csp.add_parser(
+        "refresh",
+        help="Force refresh cached docs",
+        description="Force fetch fresh documentation even if cache is still valid.",
+    )
+    cr.add_argument("library", help="Library name to refresh")
     cr.add_argument("--topic", default="general", help="Documentation topic")
-    ci = csp.add_parser("invalidate", help="Remove cached docs")
-    ci.add_argument("library", help="Library name")
+    ci = csp.add_parser(
+        "invalidate",
+        help="Remove cached docs",
+        description="Delete cached documentation for a library to free space or force fresh fetch.",
+    )
+    ci.add_argument("library", help="Library name to remove from cache")
 
     return parser
 
@@ -486,6 +811,7 @@ def main() -> int:
         "index": cmd_index,
         "search": cmd_search,
         "stats": cmd_stats,
+        "list": cmd_list,
         "health": cmd_health,
         "rag": cmd_rag,
         "agent": cmd_agent,

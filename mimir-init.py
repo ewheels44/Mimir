@@ -566,6 +566,8 @@ def init_project(project_root: Path, mimir_root: Path, args) -> bool:
     print(f"  1. Add docs to docs/ and code to your source dirs")
     print(f"  2. Index: python .opencode/mimir-index.py")
     print(f"  3. Query: mimir-knowledge_enrich_task('your question')")
+    print(f"\n💡 For graph queries (how does X connect to Y?), start the Web UI:")
+    print(f"   cd ~/Documents/Mimir/web && ./dev.sh --project $(pwd)")
 
     return True
 

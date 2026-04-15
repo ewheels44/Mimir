@@ -500,7 +500,7 @@ def main():
 
     print("\n📖 Next steps:")
     print("   - Query via OpenCode: Just start asking questions!")
-    print("   - Web UI: ./ ~/Documents/Mimir/scripts/start_web_ui.sh")
+    print("   - Web UI: cd ~/Documents/Mimir/web && ./dev.sh --project $(pwd)")
     print(
         "   - CLI: python ~/Documents/Mimir/mcp_server_llamaindex.py --query 'your question'"
     )
@@ -508,7 +508,8 @@ def main():
     if not args.no_knowledge_graph:
         print("\n🔍 Knowledge Graph:")
         print("   - Relationships extracted to .knowledge/code_relationships.json")
-        print("   - View in Web UI to see file connections")
+        print("   - Start the Web UI to use graph_query/graph_neighbors MCP tools")
+        print("   - Ask: 'How does X connect to Y?' — agents use Dijkstra path-finding")
 
     print("\n📚 Documentation:")
     print("   - See README.md for complete usage guide")

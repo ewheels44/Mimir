@@ -24,18 +24,25 @@ interface FlowEdge {
   label?: string;
 }
 
+const NODE_WIDTH = 160;
+const NODE_HEIGHT = 90;
+
 // Calculate dynamic node positions for a flowchart layout
 function calculateLayout(stepCount: number, containerWidth: number = 900): { positions: NodePosition[]; edges: FlowEdge[] } {
   const positions: NodePosition[] = [];
   const edges: FlowEdge[] = [];
 
-  // Responsive column count based on step count
-  const cols = Math.min(stepCount, 5);
+  // Fewer steps = wider spread; more steps = more columns
+  const cols = stepCount <= 3 ? stepCount : Math.min(stepCount, 5);
 
-  const nodeSpacingX = containerWidth / (cols + 1);
-  const nodeSpacingY = 100;
-  const startY = 30;
-  const startX = containerWidth / (cols + 1);
+  const paddingX = 100;
+  const paddingY = 80;
+  const totalWidth = Math.max(containerWidth, cols * (NODE_WIDTH + paddingX));
+
+  const nodeSpacingX = cols > 1 ? (totalWidth - 2 * paddingX) / (cols - 1) : totalWidth / 2;
+  const nodeSpacingY = NODE_HEIGHT + paddingY;
+  const startX = paddingX + NODE_WIDTH / 2;
+  const startY = paddingY + NODE_HEIGHT / 2;
 
   for (let i = 0; i < stepCount; i++) {
     const col = i % cols;
@@ -87,17 +94,15 @@ export function FlowDiagram({
   // Animate steps appearing
   useEffect(() => {
     setVisibleSteps([]);
-    const steps: number[] = [];
+    const ids: number[] = [];
     flow.steps.forEach((_, i) => {
       const timer = setTimeout(() => {
-        steps.push(i);
-        setVisibleSteps([...steps]);
+        ids.push(i);
+        setVisibleSteps([...ids]);
       }, i * 80 + 100);
       return () => clearTimeout(timer);
     });
-    return () => {
-      flow.steps.forEach((_step, i) => clearTimeout(i as any));
-    };
+    return () => {};
   }, [flow.id]);
 
   // Animate edge drawing
@@ -128,10 +133,15 @@ export function FlowDiagram({
 
   const { positions, edges } = calculateLayout(flow.steps.length, svgWidth);
 
+  // Dynamic SVG height based on rows
+  const rows = Math.ceil(flow.steps.length / Math.min(flow.steps.length, 5));
+  const svgHeight = rows * (NODE_HEIGHT + 80) + 180;
+
   // Generate smooth SVG path between two points
   const getPathD = (from: NodePosition, to: NodePosition): string => {
-    const midX = (from.x + to.x) / 2;
-    return `M ${from.x + 60} ${from.y + 50} C ${midX} ${from.y + 50}, ${midX} ${to.y + 50}, ${to.x - 60} ${to.y + 50}`;
+    const cx1 = from.x + (to.x - from.x) * 0.33;
+    const cx2 = from.x + (to.x - from.x) * 0.66;
+    return `M ${from.x} ${from.y + NODE_HEIGHT / 2 + 5} C ${cx1} ${from.y + NODE_HEIGHT / 2 + 5}, ${cx2} ${to.y + NODE_HEIGHT / 2 + 5}, ${to.x} ${to.y + NODE_HEIGHT / 2 + 5}`;
   };
 
   return (
@@ -151,14 +161,13 @@ export function FlowDiagram({
       {/* SVG Flow Graph */}
       <div className="flow-graph-container">
         <svg
-          width={svgWidth}
-          height={Math.max(...positions.map(p => p.y)) + 140}
-          viewBox={`0 0 ${svgWidth} ${Math.max(...positions.map(p => p.y)) + 140}`}
+          width="100%"
+          height={svgHeight}
+          viewBox={`0 0 ${svgWidth} ${svgHeight}`}
           className="flow-graph-svg"
-          style={{ width: '100%', height: 'auto' }}
+          style={{ overflow: 'visible' }}
         >
           <defs>
-            {/* Glow filter */}
             <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
               <feGaussianBlur stdDeviation="4" result="blur" />
               <feMerge>
@@ -166,8 +175,6 @@ export function FlowDiagram({
                 <feMergeNode in="SourceGraphic" />
               </feMerge>
             </filter>
-
-            {/* Active pulse animation */}
             <filter id="pulse-glow" x="-50%" y="-50%" width="200%" height="200%">
               <feGaussianBlur stdDeviation="6" result="blur" />
               <feMerge>
@@ -176,58 +183,18 @@ export function FlowDiagram({
                 <feMergeNode in="SourceGraphic" />
               </feMerge>
             </filter>
-
-            {/* Arrowhead marker */}
-            <marker
-              id="arrow-default"
-              viewBox="0 0 10 10"
-              refX="9"
-              refY="5"
-              markerWidth="8"
-              markerHeight="8"
-              orient="auto-start-reverse"
-            >
+            <marker id="arrow-default" viewBox="0 0 10 10" refX="9" refY="5"
+              markerWidth="8" markerHeight="8" orient="auto-start-reverse">
               <path d="M 0 0 L 10 5 L 0 10 z" fill="#4a4a5a" />
             </marker>
-            <marker
-              id="arrow-active"
-              viewBox="0 0 10 10"
-              refX="9"
-              refY="5"
-              markerWidth="8"
-              markerHeight="8"
-              orient="auto-start-reverse"
-            >
+            <marker id="arrow-active" viewBox="0 0 10 10" refX="9" refY="5"
+              markerWidth="8" markerHeight="8" orient="auto-start-reverse">
               <path d="M 0 0 L 10 5 L 0 10 z" fill={flow.color} />
             </marker>
-            <marker
-              id="arrow-completed"
-              viewBox="0 0 10 10"
-              refX="9"
-              refY="5"
-              markerWidth="8"
-              markerHeight="8"
-              orient="auto-start-reverse"
-            >
+            <marker id="arrow-completed" viewBox="0 0 10 10" refX="9" refY="5"
+              markerWidth="8" markerHeight="8" orient="auto-start-reverse">
               <path d="M 0 0 L 10 5 L 0 10 z" fill="#10b981" />
             </marker>
-            <marker
-              id="arrow-anim"
-              viewBox="0 0 10 10"
-              refX="9"
-              refY="5"
-              markerWidth="8"
-              markerHeight="8"
-              orient="auto-start-reverse"
-            >
-              <path d="M 0 0 L 10 5 L 0 10 z" fill={flow.color} />
-            </marker>
-
-            {/* Particle for animation */}
-            <radialGradient id="particle-gradient">
-              <stop offset="0%" stopColor={flow.color} stopOpacity="1" />
-              <stop offset="100%" stopColor={flow.color} stopOpacity="0" />
-            </radialGradient>
           </defs>
 
           {/* Edges */}
@@ -237,25 +204,16 @@ export function FlowDiagram({
             const isBeforeCurrent = edge.to <= currentStep;
             const isAtCurrent = edge.from === currentStep - 1 && edge.to === currentStep;
             const isAfterCurrent = edge.from >= currentStep;
-
-            // Animated particle along the edge
             const showParticle = isAtCurrent || (animatedEdge === edge.from && edge.to === animatedEdge + 1);
 
             return (
               <g key={`edge-${index}`}>
-                {/* Main edge path */}
                 <path
                   d={getPathD(fromPos, toPos)}
                   fill="none"
-                  stroke={
-                    isBeforeCurrent ? '#10b981' :
-                    isAtCurrent ? flow.color :
-                    isAfterCurrent ? '#2d2d3d' : '#2d2d3d'
-                  }
-                  strokeWidth={
-                    isBeforeCurrent || isAtCurrent ? 2.5 : 1.5
-                  }
-                  strokeDasharray={isAfterCurrent ? '4,4' : 'none'}
+                  stroke={isBeforeCurrent ? '#10b981' : isAtCurrent ? flow.color : '#2d2d3d'}
+                  strokeWidth={isBeforeCurrent || isAtCurrent ? 2.5 : 1.5}
+                  strokeDasharray={isAfterCurrent ? '5,5' : 'none'}
                   markerEnd={
                     isBeforeCurrent ? 'url(#arrow-completed)' :
                     isAtCurrent ? 'url(#arrow-active)' :
@@ -263,11 +221,9 @@ export function FlowDiagram({
                   }
                   style={{
                     transition: 'stroke 0.5s ease, stroke-width 0.5s ease',
-                    filter: isAtCurrent ? `drop-shadow(0 0 6px ${flow.color}60)` : 'none',
+                    filter: isAtCurrent ? `drop-shadow(0 0 8px ${flow.color}60)` : 'none',
                   }}
                 />
-
-                {/* Animated particle */}
                 {showParticle && (
                   <circle r="4" fill={flow.color} filter="url(#glow)">
                     <animateMotion
@@ -278,12 +234,10 @@ export function FlowDiagram({
                     />
                   </circle>
                 )}
-
-                {/* Timing label */}
                 {flow.steps[edge.to]?.timing && (
                   <text
                     x={(fromPos.x + toPos.x) / 2}
-                    y={(fromPos.y + toPos.y) / 2 - 8}
+                    y={(fromPos.y + toPos.y) / 2 + NODE_HEIGHT / 2 - 14}
                     textAnchor="middle"
                     fill="#606070"
                     fontSize="10"
@@ -302,11 +256,8 @@ export function FlowDiagram({
             const isActive = index === currentStep;
             const isCompleted = index < currentStep;
             const visible = visibleSteps.includes(index);
-
-            const nodeWidth = 120;
-            const nodeHeight = 70;
-            const rx = pos.x - nodeWidth / 2;
-            const ry = pos.y;
+            const nodeX = pos.x - NODE_WIDTH / 2;
+            const nodeY = pos.y - NODE_HEIGHT / 2;
 
             return (
               <g
@@ -320,182 +271,214 @@ export function FlowDiagram({
               >
                 <animate
                   attributeName="opacity"
-                  from="0"
-                  to="1"
-                  dur="0.4s"
+                  from="0" to="1"
+                  dur="0.5s"
                   fill="freeze"
-                  begin={`${index * 0.12 + 0.1}s`}
+                  begin={`${index * 0.12 + 0.15}s`}
                 />
 
-                {/* Connection line to previous (for L/R layout effect) */}
+                {/* Glow ring for active node */}
                 {isActive && (
                   <rect
-                    x={rx - 4}
-                    y={ry - 4}
-                    width={nodeWidth + 8}
-                    height={nodeHeight + 8}
-                    rx={12}
+                    x={nodeX - 6}
+                    y={nodeY - 6}
+                    width={NODE_WIDTH + 12}
+                    height={NODE_HEIGHT + 12}
+                    rx={14}
                     fill="none"
                     stroke={flow.color}
                     strokeWidth="2"
                     filter="url(#pulse-glow)"
-                    opacity="0.4"
+                    opacity="0.5"
                   >
                     <animate
                       attributeName="opacity"
-                      values="0.4;0.1;0.4"
+                      values="0.5;0.1;0.5"
                       dur="2s"
                       repeatCount="indefinite"
                     />
                   </rect>
                 )}
 
-                {/* Node background */}
+                {/* Node card */}
                 <rect
-                  x={rx}
-                  y={ry}
-                  width={nodeWidth}
-                  height={nodeHeight}
-                  rx={10}
-                  fill={
-                    isActive
-                      ? `${flow.color}20`
-                      : isCompleted
-                      ? '#10b9810d'
-                      : '#1a1a2e'
-                  }
-                  stroke={
-                    isActive
-                      ? flow.color
-                      : isCompleted
-                      ? '#10b981'
-                      : '#2d2d3d'
-                  }
+                  x={nodeX}
+                  y={nodeY}
+                  width={NODE_WIDTH}
+                  height={NODE_HEIGHT}
+                  rx={12}
+                  fill={isActive ? `${flow.color}18` : isCompleted ? '#10b9810d' : '#16162a'}
+                  stroke={isActive ? flow.color : isCompleted ? '#10b981' : '#2d2d3d'}
                   strokeWidth={isActive ? 2.5 : isCompleted ? 1.5 : 1}
                   style={{
                     transition: 'all 0.4s ease',
-                    filter: isActive ? `drop-shadow(0 0 12px ${flow.color}30)` : 'none',
+                    filter: isActive ? `drop-shadow(0 0 16px ${flow.color}25)` : 'none',
                   }}
                 />
 
-                {/* Top accent bar */}
+                {/* Top accent gradient bar */}
+                <defs>
+                  <linearGradient id={`grad-${index}`} x1="0" y1="0" x2="1" y2="0">
+                    <stop offset="0%" stopColor={isActive ? flow.color : isCompleted ? '#10b981' : 'transparent'} />
+                    <stop offset="100%" stopColor={isActive ? flow.color : isCompleted ? '#10b981' : 'transparent'} stopOpacity={isActive || isCompleted ? 0.3 : 0} />
+                  </linearGradient>
+                </defs>
                 <rect
-                  x={rx}
-                  y={ry}
-                  width={nodeWidth}
-                  height="3"
+                  x={nodeX}
+                  y={nodeY}
+                  width={NODE_WIDTH}
+                  height="4"
                   rx={2}
-                  fill={
-                    isActive
-                      ? flow.color
-                      : isCompleted
-                      ? '#10b981'
-                      : 'transparent'
-                  }
-                  style={{ transition: 'fill 0.4s ease' }}
+                  fill={`url(#grad-${index})`}
+                  style={{ transition: 'all 0.4s ease' }}
                 />
 
-                {/* Icon */}
-                <text
-                  x={pos.x}
-                  y={ry + 24}
-                  textAnchor="middle"
-                  fontSize="16"
-                >
-                  {step.icon}
-                </text>
-
-                {/* Label */}
-                <text
-                  x={pos.x}
-                  y={ry + 42}
-                  textAnchor="middle"
-                  fill={isActive ? flow.color : isCompleted ? '#10b981' : '#888'}
-                  fontSize="11"
-                  fontWeight="600"
-                  fontFamily="'JetBrains Mono', monospace"
-                  style={{ transition: 'fill 0.4s ease' }}
-                >
-                  {step.label.length > 16 ? step.label.substring(0, 14) + '…' : step.label}
-                </text>
-
-                {/* Step number badge */}
+                {/* Number badge */}
                 <circle
-                  cx={rx + 16}
-                  cy={ry + 16}
-                  r="10"
-                  fill={
-                    isActive
-                      ? flow.color
-                      : isCompleted
-                      ? '#10b981'
-                      : '#2d2d3d'
-                  }
-                  style={{ transition: 'fill 0.4s ease' }}
+                  cx={nodeX + 18}
+                  cy={nodeY + 18}
+                  r="11"
+                  fill={isActive ? flow.color : isCompleted ? '#10b981' : '#1e1e32'}
+                  stroke={isActive ? flow.color : isCompleted ? '#10b981' : '#2d2d3d'}
+                  strokeWidth="1"
+                  style={{ transition: 'all 0.4s ease' }}
                 />
                 <text
-                  x={pos.x - (nodeWidth / 2) + 16}
-                  y={ry + 19.5}
+                  x={nodeX + 18}
+                  y={nodeY + 22}
                   textAnchor="middle"
-                  fill={isActive || isCompleted ? 'white' : '#555'}
-                  fontSize="9"
+                  fill={isActive || isCompleted ? 'white' : '#444'}
+                  fontSize="10"
                   fontWeight="700"
                   fontFamily="'JetBrains Mono', monospace"
                 >
                   {index + 1}
                 </text>
 
-                {/* Hover tooltip */}
-                {hoveredNode === index && (
-                  <g>
-                    <rect
-                      x={rx - 5}
-                      y={ry - 50}
-                      width={nodeWidth + 10}
-                      height="40"
-                      rx={6}
-                      fill="#1a1a2e"
-                      stroke={flow.color}
-                      strokeWidth="1"
-                      opacity="0.95"
-                    />
-                    <text
-                      x={pos.x}
-                      y={ry - 34}
-                      textAnchor="middle"
-                      fill="#e8e8f0"
-                      fontSize="9"
-                      fontFamily="'JetBrains Mono', monospace"
-                    >
-                      {step.explanation.substring(0, 60)}...
-                    </text>
-                  </g>
+                {/* Icon */}
+                <text
+                  x={pos.x}
+                  y={nodeY + 38}
+                  textAnchor="middle"
+                  fontSize="18"
+                >
+                  {step.icon}
+                </text>
+
+                {/* Label - multi-line support */}
+                <text
+                  x={pos.x}
+                  y={nodeY + 58}
+                  textAnchor="middle"
+                  fill={isActive ? flow.color : isCompleted ? '#10b981' : '#777'}
+                  fontSize="11"
+                  fontWeight="600"
+                  fontFamily="'JetBrains Mono', monospace"
+                >
+                  <tspan x={pos.x} dy="0">{step.label.length > 18 ? step.label.substring(0, 16) + '…' : step.label}</tspan>
+                </text>
+
+                {step.sublabel && (
+                  <text
+                    x={pos.x}
+                    y={nodeY + 72}
+                    textAnchor="middle"
+                    fill="#555"
+                    fontSize="8.5"
+                    fontFamily="'JetBrains Mono', monospace"
+                  >
+                    {step.sublabel.length > 20 ? step.sublabel.substring(0, 18) + '…' : step.sublabel}
+                  </text>
                 )}
+
+                {/* Status indicators along bottom */}
+                <rect
+                  x={nodeX + 4}
+                  y={nodeY + NODE_HEIGHT - 6}
+                  width="6"
+                  height="6"
+                  rx="3"
+                  fill={isActive ? flow.color : isCompleted ? '#10b981' : '#333'}
+                  style={{ transition: 'fill 0.4s ease' }}
+                />
               </g>
             );
           })}
 
+          {/* Hover tooltips rendered in a separate <g> on top, outside clipping */}
+          {hoveredNode !== null && (() => {
+            const step = flow.steps[hoveredNode];
+            const pos = positions[hoveredNode];
+            if (!step || !pos) return null;
+            const tipW = 280;
+            const tipH = 70;
+            let tipX = pos.x + NODE_WIDTH / 2 + 15;
+            let tipY = pos.y - NODE_HEIGHT / 2;
+            // Flip if too far right
+            if (tipX + tipW > svgWidth) tipX = pos.x - NODE_WIDTH / 2 - tipW - 15;
+            if (tipY < 10) tipY = 10;
+
+            return (
+              <g className="svg-tooltip" style={{ pointerEvents: 'none' }}>
+                <rect
+                  x={tipX}
+                  y={tipY}
+                  width={tipW}
+                  height={tipH}
+                  rx={8}
+                  fill="#1a1a2e"
+                  stroke={flow.color}
+                  strokeWidth="1.5"
+                  opacity="0.96"
+                />
+                {/* Triangle pointer */}
+                <polygon
+                  points={`${pos.x + NODE_WIDTH / 2},${pos.y} ${pos.x + NODE_WIDTH / 2 + 8},${tipY + 8} ${pos.x + NODE_WIDTH / 2},${tipY + 8}`}
+                  fill="#1a1a2e"
+                  stroke={flow.color}
+                  strokeWidth="1"
+                />
+                <text x={tipX + 10} y={tipY + 18} fill={flow.color} fontSize="10" fontWeight="700" fontFamily="'JetBrains Mono', monospace">
+                  {step.label}
+                </text>
+                <text x={tipX + 10} y={tipY + 34} fill="#a0a0b0" fontSize="9" fontFamily="'JetBrains Mono', monospace">
+                  {step.explanation.substring(0, 80) + (step.explanation.length > 80 ? '…' : '')}
+                </text>
+                <text x={tipX + 10} y={tipY + 50} fill="#606070" fontSize="8.5" fontFamily="'JetBrains Mono', monospace">
+                  Timing: {step.timing || 'Instant'}
+                </text>
+                <text x={tipX + 10} y={tipY + 64} fill="#606070" fontSize="8.5" fontFamily="'JetBrains Mono', monospace">
+                  {Object.keys(step.state).length} state variables
+                </text>
+              </g>
+            );
+          })()}
+
           {/* "START" indicator */}
-          <circle cx={positions[0]?.x || 60} cy={positions[0]?.y + 70 || 100} r="6" fill="#10b981" />
-          <text
-            x={positions[0]?.x || 60}
-            y={positions[0]?.y + 88 || 100}
-            textAnchor="middle"
-            fill="#10b981"
-            fontSize="9"
-            fontWeight="600"
-            fontFamily="'JetBrains Mono', monospace"
-          >
-            START
-          </text>
+          {positions[0] && (
+            <>
+              <circle cx={positions[0].x} cy={svgHeight - 30} r="6" fill="#10b981" />
+              <text
+                x={positions[0].x}
+                y={svgHeight - 12}
+                textAnchor="middle"
+                fill="#10b981"
+                fontSize="9"
+                fontWeight="600"
+                fontFamily="'JetBrains Mono', monospace"
+              >
+                START
+              </text>
+            </>
+          )}
 
           {/* "END" indicator */}
           {positions[positions.length - 1] && (
             <>
-              <circle cx={positions[positions.length - 1].x} cy={positions[positions.length - 1].y + 70} r="6" fill={flow.color} />
+              <circle cx={positions[positions.length - 1].x} cy={svgHeight - 30} r="6" fill={flow.color} />
               <text
                 x={positions[positions.length - 1].x}
-                y={positions[positions.length - 1].y + 88}
+                y={svgHeight - 12}
                 textAnchor="middle"
                 fill={flow.color}
                 fontSize="9"

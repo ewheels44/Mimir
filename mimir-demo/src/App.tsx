@@ -18,6 +18,7 @@ function App() {
     setActiveFlowId(flowId);
     setCurrentStep(0);
     setIsPlaying(false);
+    setActiveArchTab(0);
   }, []);
 
   const handleStepChange = useCallback((step: number) => {

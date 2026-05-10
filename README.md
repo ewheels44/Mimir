@@ -2,7 +2,7 @@
 
 A semantic knowledge base that gives your AI agents instant access to your codebase, eliminating repeated discovery and context loss between sessions.
 
-**Works with**: [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) • [OpenAgents](https://github.com/darrenhinde/OpenAgentsControl)
+**Works with**: [Jcode](https://github.com/1jehuang/jcode) • [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) • [OpenAgents](https://github.com/darrenhinde/OpenAgentsControl)
 
 ---
 
@@ -36,6 +36,75 @@ python ~/Documents/Mimir/mimir.py init --code-dirs=src,tests
 | 30% of context spent on discovery | 5% on discovery, 95% on implementation |
 | No memory between sessions | Persistent semantic index across sessions |
 | Keyword searches miss related code | Semantic search finds concepts across files |
+
+---
+
+## Jcode Integration
+
+Mimir includes a built-in Jcode bridge for seamless integration with the [Jcode](https://github.com/1jehuang/jcode) agent server.
+
+### Quick Setup
+
+```bash
+# 1. Start Jcode
+jcode
+
+# 2. In another terminal, install Mimir and auto-configure Jcode
+cd ~/Projects/YourProject
+python ~/Documents/Mimir/mimir-init.py --jcode
+```
+
+This does three things:
+1. **Registers a Jcode skill** → `~/.jcode/skills/mimir-{project}.json` with all Mimir tools
+2. **Injects a system prompt** → `~/.jcode/prompts/mimir-{project}.md` with usage instructions
+3. **Registers the MCP server** → `~/.jcode/mcp.json` with the Mimir MCP server config
+
+### Manual Configuration
+
+If you prefer to configure things by editing files:
+
+**MCP Config** (`~/.jcode/mcp.json`):
+```json
+{
+  "servers": {
+    "mimir-my-project": {
+      "command": "/usr/bin/python3",
+      "args": ["/Users/ethanwheeler/Documents/Mimir/mcp_server_llamaindex.py"],
+      "env": {
+        "PROJECT_ROOT": "/path/to/your/project",
+        "PYTHONPATH": "/Users/ethanwheeler/Documents/Mimir/src"
+      }
+    }
+  }
+}
+```
+
+**Per-project config** (`.jcode/mcp.json` in project root) works too — same format.
+
+### Using Mimir Tools in Jcode
+
+Once configured, Jcode agents can call Mimir tools directly:
+
+```
+/mcp reload                    # Pick up new MCP servers
+
+# Then in conversation:
+mimir-knowledge_enrich_task("Implement JWT auth")
+mimir-knowledge_search("database connection pooling")
+mimir-knowledge_query("How does the caching layer work?")
+mimir-knowledge_graph_query("auth middleware", "database pool")
+mimir-knowledge_sdk_cache_get("stripe", "checkout sessions")
+```
+
+### Checking Status
+
+```bash
+# From within a Mimir-enabled project:
+python ~/Documents/Mimir/scripts/jcode/mimir-bridge.py --check
+
+# Or register manually:
+python ~/Documents/Mimir/scripts/jcode/mimir-bridge.py --auto
+```
 
 ---
 
@@ -726,10 +795,9 @@ After running `mimir-init.py --install`, your config will include:
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
     "mimir-knowledge": {
-      "type": "local",
       "command": ["~/Documents/Mimir/scripts/run_mcp_server.sh"],
-      "enabled": true,
-      "environment": {
+      "args": [],
+      "env": {
         "EMBEDDING_MODEL": "text-embedding-3-small",
         "OPENAI_BASE_URL": "https://openrouter.ai/api/v1",
         "LOG_LEVEL": "INFO"

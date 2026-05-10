@@ -88,6 +88,36 @@ All fields optional. Defaults work for most projects.
 | `langgraph/workflows/rag.py` | RAG workflow — retrieve → generate |
 | `langgraph/workflows/knowledge_agent.py` | Knowledge agent — multi-step research |
 
+## Jcode Bridge
+
+Mimir includes a built-in Jcode bridge (`scripts/jcode/mimir-bridge.py`) that auto-registers Mimir tools with the Jcode agent server.
+
+### What it does
+
+| Action | File | Purpose |
+|--------|------|---------|
+| Skill registration | `~/.jcode/skills/mimir-{project}.json` | All Mimir tools available to Jcode |
+| System prompt | `~/.jcode/prompts/mimir-{project}.md` | Usage instructions for agents |
+| MCP server config | `~/.jcode/mcp.json` | Points to Mimir MCP server |
+
+### Quick setup
+
+```bash
+# From within a Mimir-enabled project:
+python ~/Documents/Mimir/scripts/jcode/mimir-bridge.py --auto
+```
+
+### CLI options
+
+```bash
+python scripts/jcode/mimir-bridge.py --register-skill    # Register skill only
+python scripts/jcode/mimir-bridge.py --inject-prompt     # Inject system prompt only
+python scripts/jcode/mimir-bridge.py --check             # Check current status
+python scripts/jcode/mimir-bridge.py --unregister        # Remove all Mimir config
+```
+
+---
+
 ## Installation
 
 ```bash

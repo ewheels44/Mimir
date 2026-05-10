@@ -672,6 +672,11 @@ def main():
         action="store_true",
         help="Auto-configure Jcode integration (skill, prompt, MCP server)",
     )
+    parser.add_argument(
+        "--check-jcode",
+        action="store_true",
+        help="Check Jcode integration status",
+    )
 
     # Override paths
     parser.add_argument(
@@ -706,6 +711,73 @@ def main():
     else:
         opencode_config_dir = find_opencode_config_dir()
 
+    # Resolve project root (needed for --check-jcode and per-project init)
+    if args.project_root:
+        project_root = Path(args.project_root).resolve()
+    else:
+        project_root = detect_project_root()
+
+    # ─── Check Jcode Integration ──────────────────────────────────────────────────
+
+    if args.check_jcode:
+        try:
+            if str(mimir_root) not in sys.path:
+                sys.path.insert(0, str(mimir_root))
+            from scripts.jcode.mimir_bridge import (
+                register_skill,
+                inject_mimir_prompt,
+                register_mcp_server,
+                is_jcode_running,
+                find_jcode_socket,
+            )
+        except ImportError:
+            print("❌ Could not import Jcode bridge (script not found)")
+            return 1
+
+        print(f"\n🔍 Jcode Integration Check")
+        print(f"   Mimir root: {mimir_root}")
+
+        jcode_running = is_jcode_running()
+        print(f"   Jcode server: {'🟢 Running' if jcode_running else '🔴 Not running'}")
+
+        if jcode_running:
+            sock = find_jcode_socket()
+            print(f"   Socket: {sock}")
+
+        # Check skill file
+        skills_dir = Path.home() / ".jcode" / "skills"
+        skill_file = skills_dir / f"mimir-{project_root.name}.json"
+        print(f"   Skill file: {'🟢 Registered' if skill_file.exists() else '🔴 Not registered'}")
+        if skill_file.exists():
+            print(f"     → {skill_file}")
+
+        # Check MCP config
+        mcp_config_file = Path.home() / ".jcode" / "mcp.json"
+        if mcp_config_file.exists():
+            config = json.loads(mcp_config_file.read_text())
+            server_name = f"mimir-{project_root.name}"
+            has_server = "servers" in config and server_name in config["servers"]
+            print(f"   MCP server: {'🟢 Configured' if has_server else '🔴 Not configured'}")
+            if has_server:
+                print(f"     → {mcp_config_file}")
+        else:
+            print(f"   MCP config: 🔴 No ~/.jcode/mcp.json found")
+
+        # Check prompt file
+        prompt_file = Path.home() / ".jcode" / "prompts" / f"mimir-{project_root.name}.md"
+        print(f"   Prompt file: {'🟢 Injected' if prompt_file.exists() else '🔴 Not injected'}")
+        if prompt_file.exists():
+            print(f"     → {prompt_file}")
+
+        all_ok = (
+            jcode_running
+            and skill_file.exists()
+            and mcp_config_file.exists()
+            and prompt_file.exists()
+        )
+        print(f"\n{'✅ All Jcode integrations are active!' if all_ok else '⚠️  Some integrations are missing. Run with --jcode to set them up.'}")
+        return 0 if all_ok else 1
+
     # ─── Uninstall mode ───────────────────────────────────────────────────
 
     if args.uninstall:
@@ -724,11 +796,6 @@ def main():
         return 0 if global_install(mimir_root, opencode_config_dir, args.force) else 1
 
     # ─── Per-project init mode (default) ──────────────────────────────────
-
-    if args.project_root:
-        project_root = Path(args.project_root).resolve()
-    else:
-        project_root = detect_project_root()
 
     return 0 if init_project(project_root, mimir_root, args) else 1
 

@@ -24,8 +24,10 @@ from datetime import datetime
 
 MIMIR_DIR = Path.home() / "Documents" / "Mimir"
 # Support both "from mimir..." and "from src.mimir..." import styles
+# src/ must come first so "from mimir..." finds src/mimir/__init__.py,
+# not the top-level mimir.py script at MIMIR_DIR
+sys.path.insert(1, str(MIMIR_DIR))
 sys.path.insert(0, str(MIMIR_DIR / "src"))
-sys.path.insert(0, str(MIMIR_DIR))
 
 
 def setup_embeddings(config: dict) -> None:

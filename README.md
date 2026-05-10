@@ -100,10 +100,10 @@ mimir-knowledge_sdk_cache_get("stripe", "checkout sessions")
 
 ```bash
 # From within a Mimir-enabled project:
-python ~/Documents/Mimir/scripts/jcode/mimir-bridge.py --check
+python ~/Documents/Mimir/scripts/jcode/mimir_bridge.py --check
 
 # Or register manually:
-python ~/Documents/Mimir/scripts/jcode/mimir-bridge.py --auto
+python ~/Documents/Mimir/scripts/jcode/mimir_bridge.py --auto
 ```
 
 ---

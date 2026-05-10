@@ -271,10 +271,9 @@ def install_mcp_config(opencode_config_dir: Path, mimir_root: Path) -> dict:
     # Add Mimir knowledge server
     mcp_server = mimir_root / "scripts" / "run_mcp_server.sh"
     config["mcp"]["mimir-knowledge"] = {
-        "type": "local",
         "command": [str(mcp_server)],
-        "enabled": True,
-        "environment": {
+        "args": [],
+        "env": {
             "EMBEDDING_MODEL": "text-embedding-3-small",
             "OPENAI_BASE_URL": "https://openrouter.ai/api/v1",
             "LOG_LEVEL": "INFO",
@@ -285,13 +284,11 @@ def install_mcp_config(opencode_config_dir: Path, mimir_root: Path) -> dict:
     openspace_server = mimir_root / "scripts" / "run_openspace_mcp.sh"
     if openspace_server.exists():
         config["mcp"]["openspace"] = {
-            "type": "local",
             "command": [str(openspace_server)],
-            "environment": {
+            "args": [],
+            "env": {
                 "OPENSPACE_HOST_SKILL_DIRS": str(mimir_root / "skills"),
             },
-            "enabled": True,
-            "timeout": 600000,
         }
 
     config_path.write_text(json.dumps(config, indent=2) + "\n")
@@ -442,7 +439,12 @@ def create_project_setup_script(project_root: Path, mimir_root: Path) -> Path:
 import subprocess, sys
 from pathlib import Path
 
-central = Path("{mimir_root / ".opencode" / "mimir-index.py"}").resolve()
+MIMIR_DIR = Path("{mimir_root}").resolve()
+# Support both "from mimir..." and "from src.mimir..." import styles
+sys.path.insert(0, str(MIMIR_DIR / "src"))
+sys.path.insert(0, str(MIMIR_DIR))
+
+central = MIMIR_DIR / ".opencode" / "mimir-index.py"
 if central.exists():
     subprocess.run([sys.executable, str(central)] + sys.argv[1:])
 else:
@@ -471,6 +473,36 @@ def create_agents_md(project_root: Path, mimir_root: Path) -> Path:
         )
 
     return dest
+
+
+def install_git_hook(project_root: Path, mimir_root: Path) -> bool:
+    """Install the Mimir git post-commit hook for auto-reindexing."""
+    git_dir = project_root / ".git"
+    if not git_dir.exists():
+        return False  # Not a git repo — skip silently
+
+    hooks_dir = git_dir / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+
+    hook_path = hooks_dir / "post-commit"
+    source_hook = mimir_root / "scripts" / "git-hooks" / "post-commit"
+
+    if not source_hook.exists():
+        return False
+
+    # Read the source hook and set the MIMIR_HOME path
+    hook_content = source_hook.read_text()
+
+    # If the hook already exists, back it up
+    if hook_path.exists():
+        backup_dir = project_root / ".mimir" / "hook-backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        shutil.copy2(hook_path, backup_dir / f"post-commit.{timestamp}.bak")
+
+    hook_path.write_text(hook_content)
+    hook_path.chmod(0o755)
+    return True
 
 
 def init_project(project_root: Path, mimir_root: Path, args) -> bool:
@@ -531,6 +563,33 @@ def init_project(project_root: Path, mimir_root: Path, args) -> bool:
         print(f"   ✓ Created: {agents_path}")
     else:
         print(f"   ⏭️  Skipped: {agents_path} (exists)")
+
+    # Git post-commit hook for auto-reindexing
+    if install_git_hook(project_root, mimir_root):
+        print(f"   ✓ Installed git post-commit hook (auto-reindex on commit)")
+    else:
+        print(f"   ⏭️  Skipped git hook (not a git repo or hook already installed)")
+
+    # Jcode bridge integration
+    if getattr(args, 'jcode', False):
+        try:
+            # Add Mimir root to path so the bridge can be imported
+            if str(mimir_root) not in sys.path:
+                sys.path.insert(0, str(mimir_root))
+            from scripts.jcode.mimir_bridge import (
+                register_skill,
+                inject_mimir_prompt,
+                register_mcp_server,
+            )
+            print(f"\n🔗 Jcode integration:")
+            r1 = register_skill(project_root)
+            print(f"   {r1}")
+            r2 = inject_mimir_prompt(project_root)
+            print(f"   {r2}")
+            r3 = register_mcp_server(project_root, mimir_root)
+            print(f"   {r3}")
+        except ImportError:
+            print(f"   ⚠️  Could not import Jcode bridge (script not found)")
 
     # API key check
     api_key = get_openrouter_api_key()
@@ -606,6 +665,11 @@ def main():
         "--no-index",
         action="store_true",
         help="Skip initial document indexing",
+    )
+    parser.add_argument(
+        "--jcode",
+        action="store_true",
+        help="Auto-configure Jcode integration (skill, prompt, MCP server)",
     )
 
     # Override paths

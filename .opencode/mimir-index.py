@@ -23,8 +23,9 @@ from pathlib import Path
 from datetime import datetime
 
 MIMIR_DIR = Path.home() / "Documents" / "Mimir"
-sys.path.insert(0, str(MIMIR_DIR))
+# Support both "from mimir..." and "from src.mimir..." import styles
 sys.path.insert(0, str(MIMIR_DIR / "src"))
+sys.path.insert(0, str(MIMIR_DIR))
 
 
 def setup_embeddings(config: dict) -> None:
@@ -468,7 +469,6 @@ def main():
     if not args.no_knowledge_graph:
         print("\n🔍 Extracting knowledge graph relationships...")
         try:
-            sys.path.insert(0, str(MIMIR_DIR / "src"))
             from mimir.knowledge_graph import extract_code_relationships
 
             # Use from_index=True to extract from indexed files, not directories

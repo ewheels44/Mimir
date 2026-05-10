@@ -104,16 +104,16 @@ Mimir includes a built-in Jcode bridge (`scripts/jcode/mimir-bridge.py`) that au
 
 ```bash
 # From within a Mimir-enabled project:
-python ~/Documents/Mimir/scripts/jcode/mimir-bridge.py --auto
+python ~/Documents/Mimir/scripts/jcode/mimir_bridge.py --auto
 ```
 
 ### CLI options
 
 ```bash
-python scripts/jcode/mimir-bridge.py --register-skill    # Register skill only
-python scripts/jcode/mimir-bridge.py --inject-prompt     # Inject system prompt only
-python scripts/jcode/mimir-bridge.py --check             # Check current status
-python scripts/jcode/mimir-bridge.py --unregister        # Remove all Mimir config
+python scripts/jcode/mimir_bridge.py --register-skill    # Register skill only
+python scripts/jcode/mimir_bridge.py --inject-prompt     # Inject system prompt only
+python scripts/jcode/mimir_bridge.py --check             # Check current status
+python scripts/jcode/mimir_bridge.py --unregister        # Remove all Mimir config
 ```
 
 ---

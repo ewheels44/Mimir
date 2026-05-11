@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 DEFAULTS = {
     # Models
     "embedding_model": "text-embedding-3-large",
-    "llm_model": "google/gemini-3.1-flash-lite-preview",
+    "llm_model": "o3-mini",
     # Directories (relative to project_root)
     "docs_dir": "docs",
     "knowledge_dir": ".knowledge/llamaindex",

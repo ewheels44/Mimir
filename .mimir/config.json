@@ -1,0 +1,33 @@
+{
+  "docs_dir": "docs",
+  "code_dirs": [
+    "langgraph",
+    "src",
+    "tests",
+    "scripts",
+    "examples",
+    "web"
+  ],
+  "knowledge_dir": ".knowledge/llamaindex",
+  "embedding_model": "text-embedding-3-large",
+  "files": [
+    "AGENTS.md",
+    "README.md",
+    "mimir-init.py",
+    "mcp_server_llamaindex.py",
+    "full_index.py"
+  ],
+  "openspace": {
+    "enabled": true,
+    "skill_dir": "skills/mimir-knowledge",
+    "bridge": {
+      "cache_maxsize": 128,
+      "cache_ttl_seconds": 600,
+      "circuit_breaker_threshold": 3,
+      "circuit_breaker_reset_seconds": 60,
+      "search_timeout_seconds": 30,
+      "max_context_tokens": 2500,
+      "top_k": 5
+    }
+  }
+}

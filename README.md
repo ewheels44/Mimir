@@ -106,6 +106,12 @@ python ~/Documents/Mimir/scripts/jcode/mimir_bridge.py --check
 python ~/Documents/Mimir/scripts/jcode/mimir_bridge.py --auto
 ```
 
+Alternatively, verify Jcode integration from any project:
+
+```bash
+mimir jcode --check
+```
+
 ---
 
 ## Fresh System Installation
@@ -251,6 +257,11 @@ git commit
 post-commit hook fires (background, non-blocking)
     │
     ▼
+Checks if docs/ files changed in this commit
+    │
+    ├── No docs changes → skip (instant exit)
+    │
+    ▼
 Detects changed files (SHA-256 content hashing)
     │
     ▼
@@ -260,11 +271,17 @@ Incremental reindex (only changed files)
 Knowledge base updated — agents see fresh context
 ```
 
+The post-commit hook (`scripts/git-hooks/post-commit`) is a lightweight bash
+script that only triggers reindexing when documentation files under `docs/`
+change. Source code changes alone don't trigger a reindex — edit `.mimir/config.json`
+to add `code_dirs` if you want code changes tracked too.
+
 ### Features
 
 - **Zero manual steps** — runs after every commit
+- **Docs-aware** — only triggers when `docs/` content changes (configurable)
 - **Content-aware** — only reindexes files whose content actually changed
-- **Non-blocking** — runs in background, never blocks git operations
+- **Non-blocking** — runs synchronously but completes in seconds
 - **Lock-protected** — prevents concurrent reindex runs
 - **macOS compatible** — works on macOS and Linux
 
@@ -738,6 +755,7 @@ Here's a complete working setup from a real installation:
 │   ├── handoff.py                # Handoff document generator
 │   ├── projects.py               # Multi-project management
 │   ├── metrics.py                # Cost tracking
+│   ├── token_callback.py         # LangChain callback for actual token usage
 │   └── watcher.py                # File watcher
 ├── tests/                   # Test suite (264 tests)
 │   ├── test_config.py
@@ -748,10 +766,10 @@ Here's a complete working setup from a real installation:
 │   └── test_utils.py
 ├── langgraph/               # Workflows
 │   ├── workflows/
-│   │   ├── rag.py                # Basic RAG workflow
-│   │   ├── knowledge_agent.py    # Agentic exploration
-│   │   ├── call_prep.py          # Customer call briefing
-│   │   ├── session_diff.py       # Session diff report
+│   │   ├── rag.py                # Basic RAG workflow (with token tracking)
+│   │   ├── knowledge_agent.py    # Agentic exploration (with token tracking)
+│   │   ├── call_prep.py          # Customer call briefing (with token tracking)
+│   │   ├── session_diff.py       # Session diff report (with token tracking)
 │   │   └── utils.py              # Shared workflow utilities
 │   └── cli.py                    # Workflow CLI
 ├── skills/                  # Agent skills
@@ -808,6 +826,19 @@ After running `mimir-init.py --install`, your config will include:
 ```
 
 The installer auto-detects your Mimir path — no manual editing needed.
+
+### Jcode Bridge Commands
+
+```bash
+# Verify Jcode integration status
+mimir jcode --check
+
+# Quick setup (registers skill, prompt, and MCP config)
+python ~/Documents/Mimir/scripts/jcode/mimir_bridge.py --auto
+
+# Clean up all Mimir Jcode config
+python ~/Documents/Mimir/scripts/jcode/mimir_bridge.py --unregister
+```
 
 ### Auth Config: `~/.local/share/opencode/auth.json`
 
@@ -1126,7 +1157,7 @@ This returns:
 
 ### "No module named 'llama_index'"
 
-The MCP server uses `uv` to manage dependencies automatically. If this fails:
+The MCP server can run with either `uv` or plain `python3`. If both are missing:
 
 ```bash
 cd ~/Documents/Mimir
@@ -1165,20 +1196,37 @@ python ~/Documents/Mimir/mimir.py index
 ~/Documents/Mimir/scripts/run_mcp_server.sh --help
 
 # Check logs (opencode shows MCP logs in console)
+# The wrapper now supports both uv and plain python3
 ```
 
-### Subagents not using Mimir
+### Subagents with Built-in Permissions
 
-Subagents now have Mimir tool permissions built-in. Just include instructions in your prompt:
+The following subagents have Mimir tool permissions built-in automatically — no `load_skills` parameter needed:
+
+| Subagent | Built-in Tools |
+|----------|---------------|
+| `ContextScout` | `mimir-knowledge_search`, `mimir-knowledge_enrich_task` |
+| `CoderAgent` | `mimir-knowledge_search`, `mimir-knowledge_enrich_task` |
+| `TaskManager` | `mimir-knowledge_search`, `mimir-knowledge_enrich_task` |
+
+**Usage** — just include instructions in your prompt:
 
 ```typescript
+// CORRECT — just add instructions, no special parameter needed
 task(
     subagent_type="ContextScout",
     prompt="Find authentication patterns. Use mimir-knowledge_search for project-specific queries."
 )
+
+// WRONG — this parameter does NOT exist
+task(
+    subagent_type="ContextScout",
+    load_skills=["mimir"],  // ❌ Does not exist!
+    prompt="Find authentication patterns..."
+)
 ```
 
-For subagents without built-in Mimir permissions (explore, librarian), embed instructions:
+For other subagents (explore, librarian, etc.), embed Mimir instructions directly in the prompt:
 
 ```typescript
 task(
@@ -1187,12 +1235,34 @@ task(
 )
 ```
 
+### Workflow Token Tracking
+
+All LangGraph workflows (`rag`, `agent`, `prep`, `session-diff`) now track **actual token usage** via `TokenUsageCallbackHandler` (in `src/mimir/token_callback.py`). This hooks into LangChain's callback system to capture real prompt/completion token counts from API responses, replacing previous estimates. Metrics are automatically recorded per query.
+
 ---
 
 ## Documentation
 
 - **[AGENTS.md](AGENTS.md)** — Comprehensive agent documentation (indexing, workflows, API reference)
 - **[docs/](docs/)** — Additional documentation
+
+---
+
+## Changelog (Recent)
+
+Notable changes in the current version:
+
+| Change | Impact |
+|--------|--------|
+| **Unified CLI** (`mimir.py`) | All commands through single entry point: `install`, `uninstall`, `init`, `server`, `index`, `search`, `rag`, `agent`, `prep`, `diff`, `metrics`, `projects`, `handoff`, `cache`, `list`, `health` |
+| **Git hook rewrite** | Now checks for `docs/` file changes before triggering reindex — faster, no false positives |
+| **LangGraph token tracking** | `TokenUsageCallbackHandler` captures actual token usage from API calls in all workflows |
+| **Subagent tool permissions** | ContextScout, CoderAgent, TaskManager have built-in Mimir tool permissions — no `load_skills` needed |
+| **Production installer** | `mimir.py install` backs up config, sets up MCP server, and injects system context rules |
+| **OpenSpace bridge hardening** | Circuit breaker (3 failures → 60s cooldown), caching (128 entries, 10min TTL), timeout (30s) |
+| **Weighted Dijkstra graph queries** | `graph_query` finds strongest-coupling paths between modules, not just shortest |
+| **Demo app redesign** | Animated architecture diagram, theme toggle, flow diagram, state inspector |
+| **Batch indexing** | Documents indexed in batches to reduce API calls and memory usage |
 
 ---
 

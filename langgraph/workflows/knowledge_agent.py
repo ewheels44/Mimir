@@ -47,7 +47,7 @@ async def check_knowledge(state: AgentState) -> AgentState:
 
 
 async def agent(state: AgentState) -> AgentState:
-    llm = create_llm(model="google/gemini-3.1-flash-lite-preview", temperature=0)
+    llm = create_llm(temperature=0)
 
     stats = state.get("knowledge_stats", {})
     has_index = stats.get("has_index", False)

@@ -44,7 +44,6 @@ async def generate(state: AgentState) -> AgentState:
     # Create token callback to capture actual usage
     token_callback = create_token_callback()
     llm = create_llm(
-        model="google/gemini-3.1-flash-lite-preview",
         temperature=0,
         callbacks=[token_callback],
     )

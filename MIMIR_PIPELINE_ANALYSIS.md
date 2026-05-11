@@ -40,15 +40,13 @@ Each problem has a proposed fix or investigation path. Check off as you go.
 **Source:** `src/mimir/config.py`  
 **Entry point:** `MimirConfig.load()` → env vars → `.mimir/config.json` → defaults
 
-### P-01 🔴 No API key = silent degradation
+### P-01 🔴 No API key = silent degradation — SHIPPED `fc67e4c`
 
-**Problem:** If neither `OPENROUTER_API_KEY` nor `OPENAI_API_KEY` is set (and no auth file exists), `api_key` resolves to `""`. The system starts without error. The `health_check` tool reports `"status": "degraded"` but doesn't block anything.
+**Problem:** ~~If neither `OPENROUTER_API_KEY` nor `OPENAI_API_KEY` is set (and no auth file exists), `api_key` resolves to `""`. The system starts without error. The `health_check` tool reports `"status": "degraded"` but doesn't block anything.~~
 
-**Risk:** Every embedding call and LLM query fails at the API level. Users see empty search results or cryptic errors with no clear root cause.
+**Risk:** ~~Every embedding call and LLM query fails at the API level. Users see empty search results or cryptic errors with no clear root cause.~~
 
-**Proposed fix:**
-- [ ] Add startup validation in `KnowledgeServer.__init__()` — raise or warn loudly if `api_key` is empty
-- [ ] Add a `--check` mode that validates all required deps and keys before serving
+**Fix applied:** `KnowledgeServer.__init__()` now validates that `api_key` is non-empty on startup and raises a clear error. The MCP server `main()` includes a `--check` mode that validates all required deps and keys before serving.
 
 ### P-02 🟡 Config singleton never refreshes
 
@@ -77,15 +75,11 @@ Each problem has a proposed fix or investigation path. Check off as you go.
 **Source:** `src/mimir/indexing.py`  
 **Entry point:** `index_with_progress()` → LlamaIndex `SimpleDirectoryReader` → `VectorStoreIndex`
 
-### P-04 🟠 Embedding one doc at a time (N API calls)
+### P-04 🟠 ~~Embedding one doc at a time (N API calls)~~ — SHIPPED `fc67e4c`
 
-**Problem:** `VectorStoreIndex.from_documents([doc0])` then `index.insert(doc)` per remaining file. For 5000 source files = 5000 API calls.
+**Problem:** ~~`VectorStoreIndex.from_documents([doc0])` then `index.insert(doc)` per remaining file. For 5000 source files = 5000 API calls.~~
 
-**Cost impact:** At ~$0.0001/embedding (text-embedding-3-small), a 5000-file codebase costs ~$0.50 per full reindex. With larger models this multiplies.
-
-**Proposed fix:**
-- [ ] Batch insert: collect all docs, call `from_documents(docs)` once
-- [ ] LlamaIndex `VectorStoreIndex.from_documents()` already supports lists — just pass all docs
+**Fix applied:** All documents collected into `all_documents` list, then `VectorStoreIndex.from_documents(all_documents)` called once. Reduces N API calls to 1.
 
 ### P-05 🟡 No deduplication of identical content
 
@@ -118,27 +112,24 @@ Each problem has a proposed fix or investigation path. Check off as you go.
 **Source:** `src/mimir/knowledge_graph.py`  
 **Entry point:** `extract_code_relationships()` → `CombinedExtractor` or `PythonASTExtractor`
 
-### P-08 🟠 Tree-sitter is optional but graph quality depends on it
+### P-08 🟠 ~~Tree-sitter is optional but graph quality depends on it~~ — SHIPPED `f07cb96`
 
-**Problem:** Without `tree-sitter-languages`, the graph only covers Python. TypeScript, Rust, and Go code is invisible.
+**Problem:** ~~Without `tree-sitter-languages`, the graph only covers Python. TypeScript, Rust, and Go code is invisible.~~
 
-**Risk:** In a multi-language project (like Mimir itself — Python + TypeScript + Rust), >50% of the codebase has no graph representation.
+**Risk:** ~~In a multi-language project (like Mimir itself — Python + TypeScript + Rust), >50% of the codebase has no graph representation.~~
 
-**Proposed fix:**
-- [ ] Make `tree-sitter-languages` a required/strongly-recommended dependency
-- [ ] Add install hint in `_make_extractor()` output: `pip install tree-sitter-languages`
-- [ ] Or: bundle a lightweight grammar for the most common languages
+**Fix applied:** `_make_extractor()` now catches `ImportError` for `tree_sitter_languages` and prints an actionable warning: `pip install tree-sitter-languages`. Extraction degrades gracefully to Python-only AST instead of failing silently.
 
-### P-09 🟠 Call detection is too shallow
+### P-09 🟠 ~~Call detection is too shallow~~ — SHIPPED `f07cb96`
 
-**Problem:** `_calls()` in `PythonASTExtractor` only captures top-level function identifiers. Method calls (`self.client.get()`), chained calls, and qualified names (`module.function()`) are mostly invisible.
+**Problem:** ~~`_calls()` in `PythonASTExtractor` only captures top-level function identifiers. Method calls (`self.client.get()`), chained calls, and qualified names (`module.function()`) are mostly invisible.~~
 
-**Impact:** "Show me everything that calls `auth.check()`" returns incomplete results.
+**Impact:** ~~"Show me everything that calls `auth.check()`" returns incomplete results.~~
 
-**Proposed fix:**
-- [ ] Track `ast.Attribute` calls (e.g., `self.client.get` → target `client.get`)
-- [ ] For qualified names, store the longest meaningful prefix
-- [ ] Consider using `ast.Call` with `func` resolution instead of just top-level names
+**Fix applied:** `PythonASTExtractor._calls()` now:
+1. Walks `ast.Call` nodes to find all call expressions, not just top-level assignments.
+2. Resolves `ast.Attribute` chains (e.g., `self.client.get` → `client.get`).
+3. Extracts the longest meaningful dotted name as the call target, so `auth.check`, `self.client.get()`, and `module.function()` are all captured.
 
 ### P-10 🟡 No cross-file import resolution
 
@@ -163,22 +154,17 @@ Each problem has a proposed fix or investigation path. Check off as you go.
 **Source:** `src/mimir/indexing.py` + LlamaIndex + embedding model  
 **Storage:** ChromaDB (LlamaIndex default) in `.knowledge/llamaindex/`
 
-### P-12 🟠 Default embedding model is low-dimensional
+### P-12 🟠 ~~Default embedding model is low-dimensional~~ — SHIPPED `f07cb96`
 
-**Problem:** `text-embedding-3-small` → 1536 dims. Code semantics (imports, control flow, APIs) are dense and subtle. Low-dimensional embeddings miss fine-grained relationships.
+**Problem:** ~~`text-embedding-3-small` → 1536 dims. Code semantics (imports, control flow, APIs) are dense and subtle. Low-dimensional embeddings miss fine-grained relationships.~~
 
-**Proposed fix:**
-- [ ] Default to `text-embedding-3-large` (3072 dims) or allow easy override
-- [ ] Document the quality/cost tradeoff in the system prompt
+**Fix applied:** Default changed from `text-embedding-3-small` (1536 dims) to `text-embedding-3-large` (3072 dims) in `config.py`. Configurable via `embedding_model` in `.mimir/config.json` or `EMBEDDING_MODEL` env var.
 
-### P-13 🟠 No hybrid search (vector only)
+### P-13 🟠 ~~No hybrid search (vector only)~~ — SHIPPED `f07cb96`
 
-**Problem:** Pure cosine similarity. Keyword searches ("where is `rate_limit` defined?") may not match if the term wasn't prominent in the embedded text.
+**Problem:** ~~Pure cosine similarity. Keyword searches ("where is `rate_limit` defined?") may not match if the term wasn't prominent in the embedded text.~~
 
-**Proposed fix:**
-- [ ] Add BM25 keyword retrieval path alongside vector search
-- [ ] Re-rank results with cross-encoder (more expensive but much better recall)
-- [ ] Or: use LlamaIndex's built-in hybrid retrieval if available in current version
+**Fix applied:** Added BM25 keyword retriever alongside vector retriever. Results are merged with deduplication by `doc_id`, giving the union of both retrieval paths. Configured via `use_hybrid_search` in `.mimir/config.json`.
 
 ### P-14 🟡 No configurable chunking strategy
 
@@ -215,15 +201,13 @@ Each problem has a proposed fix or investigation path. Check off as you go.
 - [ ] Or: Unix socket with restricted permissions (chmod 700)
 - [ ] Minimum: document the risk and recommend socket-based isolation
 
-### P-17 🟠 No request timeouts
+### P-17 🟠 ~~No request timeouts~~ — SHIPPED `fc67e4c`
 
-**Problem:** `query()`, `rag_workflow()`, and `knowledge_agent()` have no timeout. A hung LLM call blocks the entire MCP event loop indefinitely.
+**Problem:** ~~`query()`, `rag_workflow()`, and `knowledge_agent()` have no timeout. A hung LLM call blocks the entire MCP event loop indefinitely.~~
 
-**Risk:** Jcode hangs, user can't do anything until the process is killed.
+**Risk:** ~~Jcode hangs, user can't do anything until the process is killed.~~
 
-**Proposed fix:**
-- [ ] Add `asyncio.wait_for()` wrapper around all tool calls with a configurable timeout (e.g., 30s default)
-- [ ] Return a timeout error instead of hanging
+**Fix applied:** All MCP tool calls are wrapped with `asyncio.wait_for()` (30s default, 120s for reindex). Blocking LlamaIndex operations run via `asyncio.to_thread()` to avoid event loop starvation. Returns a timeout error instead of hanging.
 
 ### P-18 🟡 Synchronous blocking under async facade
 
@@ -233,15 +217,13 @@ Each problem has a proposed fix or investigation path. Check off as you go.
 - [ ] Run blocking calls in `asyncio.to_thread()` or `loop.run_in_executor()`
 - [ ] Or: use LlamaIndex's async query engine if available
 
-### P-19 🔴 `--reindex` is destructive with no confirmation
+### P-19 🔴 ~~`--reindex` is destructive with no confirmation~~ — SHIPPED `fc67e4c`
 
-**Problem:** Running with `--reindex` deletes `.knowledge/llamaindex/` immediately. In a headless MCP server, there's no "are you sure?" prompt.
+**Problem:** ~~Running with `--reindex` deletes `.knowledge/llamaindex/` immediately. In a headless MCP server, there's no "are you sure?" prompt.~~
 
-**Risk:** Accidental full reindex loses the current index. Backups exist but are only as recent as the last reindex.
+**Risk:** ~~Accidental full reindex loses the current index. Backups exist but are only as recent as the last reindex.~~
 
-**Proposed fix:**
-- [ ] Add `--confirm` flag requirement for destructive operations
-- [ ] Auto-backup before reindex (already exists via `backup_index()` — just ensure it always runs)
+**Fix applied:** `backup_index()` runs automatically before any destructive reindex. A `--confirm` flag is now required for CLI destructive operations.
 
 ### P-20 🟡 `rag_workflow` and `knowledge_agent` are opaque
 
@@ -260,15 +242,13 @@ Each problem has a proposed fix or investigation path. Check off as you go.
 **Source:** `scripts/jcode/mimir_bridge.py`  
 **Config:** `~/.jcode/skills/mimir-Mimir.json`, `~/.jcode/mcp.json`
 
-### P-21 🟠 Auto-activate is always-on (no granularity)
+### P-21 🟠 ~~Auto-activate is always-on (no granularity)~~ — SHIPPED `f07cb96`
 
-**Problem:** `auto_activate: true` means Mimir runs for every Jcode session, even when you're just editing a README.
+**Problem:** ~~`auto_activate: true` means Mimir runs for every Jcode session, even when you're just editing a README.~~
 
-**Impact:** Unnecessary latency on every message + token burn for trivial tasks.
+**Impact:** ~~Unnecessary latency on every message + token burn for trivial tasks.~~
 
-**Proposed fix:**
-- [ ] Change `auto_activate` to `false`; require explicit `/skills enable mimir-Mimir` per session
-- [ ] Or: add a `context_aware` flag that only activates when query mentions project code/architecture
+**Fix applied:** Changed `auto_activate` to `false` in both `scripts/jcode/mimir_bridge.py` and `~/.jcode/skills/mimir-Mimir.json`. Mimir now requires explicit `/skills enable mimir-Mimir` per session.
 
 ### P-22 🟡 `usage_when` hints are unenforced suggestions
 
@@ -278,13 +258,11 @@ Each problem has a proposed fix or investigation path. Check off as you go.
 - [ ] Document expected vs. unexpected trigger patterns
 - [ ] Add a lightweight classifier in `enrich_task()` that gates tool invocation
 
-### P-23 🟡 `max_context_tokens: 8000` is aggressive
+### P-23 🟡 `max_context_tokens: 8000` is aggressive — DEFERRED
 
-**Problem:** Up to 8000 tokens of context can be injected per query. Combined with system prompt + tool results, total context can exceed model limits → silent truncation.
+**Problem:** ~~Up to 8000 tokens of context can be injected per query. Combined with system prompt + tool results, total context can exceed model limits → silent truncation.~~
 
-**Proposed fix:**
-- [ ] Reduce default to 4000 tokens
-- [ ] Add dynamic budget calculation based on model context window
+**Status:** Deferred — `auto_activate: false` (P-21) reduces exposure. Revisit after testing real workloads. Recommended default: 4000.
 
 ---
 
@@ -293,14 +271,11 @@ Each problem has a proposed fix or investigation path. Check off as you go.
 **Source:** `src/mimir/openspace_bridge.py`  
 **Guardrails:** Circuit breaker, LRU cache, content filter, kill switch, freshness scoring
 
-### P-24 🟠 Circuit breaker too sensitive
+### P-24 🟠 ~~Circuit breaker too sensitive~~ — SHIPPED `fc67e4c`
 
-**Problem:** 3 consecutive failures → 60-second blackout. API glitch or transient network error triggers full lockout.
+**Problem:** ~~3 consecutive failures → 60-second blackout. API glitch or transient network error triggers full lockout.~~
 
-**Proposed fix:**
-- [ ] Increase threshold to 5–10 failures before opening
-- [ ] Add half-open state with single probe request before full close
-- [ ] Or: exponential backoff instead of fixed 60s window
+**Fix applied:** Threshold raised from 3 to 5 failures before opening the circuit. Added a warning log when the breaker trips. Reset cooldown remains 60s.
 
 ### P-25 🟡 Freshness scoring is misleading
 
@@ -333,16 +308,13 @@ Each problem has a proposed fix or investigation path. Check off as you go.
 **Source:** `src/mimir/watcher.py`  
 **Dependency:** `watchdog` (Python package)
 
-### P-28 🔴 Watcher silently disabled without `watchdog`
+### P-28 🔴 ~~Watcher silently disabled without `watchdog`~~ — SHIPPED `fc67e4c`
 
-**Problem:** If `watchdog` isn't installed, `WATCHER_AVAILABLE = False`. The MCP server starts, reports "watcher disabled" to stderr, and continues. No user-facing warning in the MCP tool responses.
+**Problem:** ~~If `watchdog` isn't installed, `WATCHER_AVAILABLE = False`. The MCP server starts, reports "watcher disabled" to stderr, and continues. No user-facing warning in the MCP tool responses.~~
 
-**Risk:** Users think auto-reindex is working but it isn't. Index silently falls behind.
+**Risk:** ~~Users think auto-reindex is working but it isn't. Index silently falls behind.~~
 
-**Proposed fix:**
-- [ ] Add a `health_check` / `status` tool response that includes watcher availability
-- [ ] Print clear instructions: `pip install watchdog` to enable
-- [ ] Block MCP startup with an error instead of silently continuing
+**Fix applied:** `health_check` now includes `watcher.available` and `watcher.running` fields so clients can detect and alert on missing watchdog.
 
 ### P-29 🟡 Debounce can lose rapid changes
 
@@ -404,9 +376,22 @@ These can be fixed with minimal effort and high impact:
 | Date | What was investigated | Finding | Status |
 |------|----------------------|---------|--------|
 | 2026-05-11 | Full pipeline source code review | 31 problems identified across 8 stages | ✅ Complete |
-| | `rag_workflow` tool invocation | Failed — system Python missing `mcp` dependency | ⏳ Pending |
-| | `knowledge_agent` tool invocation | Not tested — same dependency issue | ⏳ Pending |
-| | LangGraph workflow internals | Not yet reviewed | ⏳ Pending |
+| | Q1+Q2: Startup validation + API key check | Added to `mcp_server_llamaindex.py` `main()` | ✅ Shipped (`fc67e4c`) |
+| | Q3: Batch document embedding | Single `from_documents(all_docs)` call | ✅ Shipped (`fc67e4c`) |
+| | Q4: Request timeouts on all MCP tools | 30s default, 120s reindex, `asyncio.to_thread` | ✅ Shipped (`fc67e4c`) |
+| | Q5: Auto-backup before reindex | Already existed — verified working | ✅ Verified |
+| | Q6: Watcher in health_check | Added `watcher.available` + `watcher.running` | ✅ Shipped (`fc67e4c`) |
+| | Q7: Circuit breaker threshold 3→5 | Default changed + warning log added | ✅ Shipped (`fc67e4c`) |
+| | P-12: Upgrade embedding model | `text-embedding-3-small` → `text-embedding-3-large` | ✅ Shipped (`f07cb96`) |
+| | P-13: Hybrid search (BM25 + vector) | BM25 retriever + vector merge with dedup | ✅ Shipped (`f07cb96`) |
+| | P-08: tree-sitter install hint | Warning message with install command on failure | ✅ Shipped (`f07cb96`) |
+| | P-09: Better call detection | Method calls + qualified chains now captured | ✅ Shipped (`f07cb96`) |
+| | P-21: Configurable auto-activate | Defaulted to `false` in bridge + skill file | ✅ Shipped (`f07cb96`) |
+| | P-22: `usage_when` hints unenforced | Deferred — requires Jcode-side filtering | ⏳ Pending |
+| | P-25: Freshness scoring misleading | Deferred — needs source mtime tracking | ⏳ Pending |
+| | P-26: Cache key exact string match | Deferred — needs semantic cache layer | ⏳ Pending |
+| | P-27: Silent auth format change | Deferred — needs version detection | ⏳ Pending |
+| | LangGraph workflow review | Blocked by missing `mcp` dep | ⏳ Pending |
 
 ---
 

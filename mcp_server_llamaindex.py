@@ -210,7 +210,32 @@ class KnowledgeServer:
         if index is None:
             return "No knowledge base found. Run with --index to create one."
 
-        nodes = index.as_retriever(similarity_top_k=top_k).retrieve(query)
+        # Hybrid retrieval: vector similarity + BM25 keyword fallback
+        try:
+            from llama_index.core.postprocessor import SimilarityPostprocessor
+            from llama_index.retrievers.bm25 import BM25Retriever
+
+            vector_retriever = index.as_retriever(similarity_top_k=top_k * 2)
+            bm25_retriever = BM25Retriever.from_defaults(
+                index=index, similarity_top_k=top_k
+            )
+
+            vector_nodes = vector_retriever.retrieve(query)
+            bm25_nodes = bm25_retriever.retrieve(query)
+
+            # Merge and deduplicate by node_id, preferring vector results
+            seen_ids: set[str] = set()
+            nodes = []
+            for node in vector_nodes + bm25_nodes:
+                nid = node.node_id
+                if nid not in seen_ids:
+                    seen_ids.add(nid)
+                    nodes.append(node)
+                if len(nodes) >= top_k:
+                    break
+        except ImportError:
+            # Fallback to vector-only if BM25 unavailable
+            nodes = index.as_retriever(similarity_top_k=top_k).retrieve(query)
         duration_ms = int((time.time() - start_time) * 1000)
 
         # Track metrics - record_query will calculate realistic costs

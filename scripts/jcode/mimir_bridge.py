@@ -181,7 +181,7 @@ def get_mimir_skill(project_root: Path) -> dict:
             },
         ],
         "config": {
-            "auto_activate": True,
+            "auto_activate": False,
             "priority": "high",
             "max_context_tokens": 8000,
         },

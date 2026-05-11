@@ -452,25 +452,53 @@ class PythonASTExtractor:
         return rels
 
     def _calls(self, tree: ast.Module, rel_path: str) -> List[Relationship]:
-        """Top-level function / method calls — deduplicated per file."""
+        """Function / method calls — deduplicated per file.
+
+        Now captures:
+          - bare calls:     foo()
+          - method calls:   self.client.get()
+          - attr calls:     module.func()
+          - chained calls:  self.builder().configure().run()
+        """
         rels: List[Relationship] = []
-        seen: Set[str] = set()
+        seen_local: Set[str] = set()
+
+        # Also track calls at deeper levels (self.x.y())
+        seen_qualified: Set[str] = set()
+
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             name = self._call_name(node.func)
-            # Only keep simple identifiers (not full dotted chains which get noisy)
-            top = name.split(".")[0] if name else ""
-            if top and top not in seen and _is_valid_identifier(top, "python"):
-                seen.add(top)
+            if not name:
+                continue
+
+            # For simple top-level names (foo), keep just the identifier
+            top = name.split(".")[0]
+            if top and _is_valid_identifier(top, "python"):
+                if top not in seen_local:
+                    seen_local.add(top)
+                    rels.append(
+                        Relationship(
+                            source=rel_path,
+                            target=top,
+                            relation_type="calls",
+                            metadata={"line": node.lineno},
+                        )
+                    )
+
+            # Also record qualified chains (self.client.get) for richer graph
+            if "." in name and name not in seen_qualified:
+                seen_qualified.add(name)
                 rels.append(
                     Relationship(
                         source=rel_path,
-                        target=top,
+                        target=name,
                         relation_type="calls",
-                        metadata={"line": node.lineno},
+                        metadata={"line": node.lineno, "qualified": True},
                     )
                 )
+
         return rels
 
     @staticmethod
@@ -527,6 +555,11 @@ def _try_import_treesitter() -> Tuple[Optional[object], Optional[object]]:
 
         return get_parser, get_language
     except ImportError:
+        print(
+            "⚠️  tree-sitter-languages not installed — knowledge graph will only cover Python. "
+            "Run: pip install tree-sitter-languages   # adds TS/JS/Rust/Go support",
+            flush=True,
+        )
         return None, None
 
 

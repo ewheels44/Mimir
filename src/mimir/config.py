@@ -51,7 +51,7 @@ DEFAULTS = {
     "bridge_enabled": True,
     "bridge_cache_maxsize": 128,
     "bridge_cache_ttl_seconds": 600,
-    "bridge_circuit_breaker_threshold": 3,
+    "bridge_circuit_breaker_threshold": 5,
     "bridge_circuit_breaker_reset_seconds": 60,
     "bridge_search_timeout_seconds": 30.0,
     "bridge_max_context_tokens": 2500,

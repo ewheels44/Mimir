@@ -6,6 +6,7 @@ This module provides the shared indexing logic with progress bars
 used by both the CLI (mimir-index.py) and the MCP server.
 """
 
+import hashlib
 import json
 import os
 import shutil
@@ -171,6 +172,62 @@ def clear_manifest(knowledge_dir: Path) -> None:
     save_manifest(knowledge_dir, manifest)
 
 
+BACKUP_DIR_NAME = ".knowledge_backups"
+MAX_BACKUPS = 3
+
+
+def backup_index(knowledge_dir: Path) -> Optional[Path]:
+    """Back up the existing index before a destructive reindex.
+
+    Creates a timestamped copy in .knowledge_backups/ and prunes old
+    backups to keep at most MAX_BACKUPS.
+
+    Returns the backup directory path, or None if nothing to back up.
+    """
+    if not knowledge_dir.exists():
+        return None
+
+    backup_root = knowledge_dir.parent / BACKUP_DIR_NAME
+    backup_root.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_dir = backup_root / f"index_{timestamp}"
+
+    try:
+        shutil.copytree(str(knowledge_dir), str(backup_dir))
+    except Exception as e:
+        print(f"   ⚠️  Failed to back up index: {e}")
+        return None
+
+    # Prune old backups (keep newest MAX_BACKUPS)
+    try:
+        existing = sorted(
+            [d for d in backup_root.iterdir() if d.is_dir()],
+            key=lambda d: d.name,
+        )
+        for old in existing[:-MAX_BACKUPS]:
+            shutil.rmtree(str(old))
+    except Exception:
+        pass  # Non-fatal
+
+    return backup_dir
+
+
+def restore_index_backup(backup_dir: Path, knowledge_dir: Path) -> bool:
+    """Restore index from a backup directory. Returns True on success."""
+    if not backup_dir.exists():
+        return False
+
+    try:
+        if knowledge_dir.exists():
+            shutil.rmtree(str(knowledge_dir))
+        shutil.copytree(str(backup_dir), str(knowledge_dir))
+        return True
+    except Exception as e:
+        print(f"   ❌ Failed to restore backup: {e}")
+        return False
+
+
 def list_indexed_files(knowledge_dir: Path) -> dict:
     """Get a detailed listing of all indexed files."""
     manifest = load_manifest(knowledge_dir)
@@ -270,6 +327,20 @@ def detect_changed_files(
 ) -> dict:
     previous_state = load_hash_state(project_root)
     previous_hashes = previous_state.get("file_hashes", {})
+    previous_mtime = previous_state.get("last_mtime_check", 0)
+
+    # ── Quick mtime check ──────────────────────────────────────────────
+    # If no watched directory has been modified since last check AND we
+    # previously hashed all files, skip the expensive full hash walk.
+    try:
+        current_mtime = max(
+            (d.stat().st_mtime for d in watched_dirs if d.exists()),
+            default=0,
+        )
+        if current_mtime <= previous_mtime and previous_hashes:
+            return {"added": [], "modified": [], "deleted": []}
+    except OSError:
+        pass
 
     current_hashes = {}
     all_files = []
@@ -304,7 +375,12 @@ def detect_changed_files(
             modified.append(Path(path))
 
     if update_state:
-        save_hash_state(project_root, {"file_hashes": current_hashes})
+        new_mtime = max(
+            (d.stat().st_mtime for d in watched_dirs if d.exists()),
+            default=0,
+        )
+        state = {"file_hashes": current_hashes, "last_mtime_check": new_mtime}
+        save_hash_state(project_root, state)
 
     return {
         "added": added,
@@ -457,23 +533,14 @@ def index_with_progress(
 
     storage_context = StorageContext.from_defaults()
 
+    # Batch create index from all documents at once to reduce API calls
     if verbose:
         if all_documents:
             index = VectorStoreIndex.from_documents(
-                [all_documents[0]],
+                all_documents,
                 storage_context=storage_context,
-                show_progress=False,
+                show_progress=True,
             )
-
-            if len(all_documents) > 1:
-                with get_progress_bar(
-                    total=len(all_documents) - 1,
-                    desc="   Embedding docs",
-                    unit="doc",
-                ) as pbar:
-                    for doc in all_documents[1:]:
-                        index.insert(doc)
-                        pbar.update(1)
             print("   ✓ Index created")
         else:
             index = VectorStoreIndex.from_documents(

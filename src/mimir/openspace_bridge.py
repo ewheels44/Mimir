@@ -482,9 +482,8 @@ class MimirOpenSpaceBridge:
                     text = _filter_sensitive(text)
 
                 score = node.score if hasattr(node, "score") else 0.0
-                # Truncate to stay within token budget
-                # Rough estimate: 1 token ≈ 4 chars
-                max_chars = self._config.max_context_tokens * 4 // top_k
+                # Add safety margin: 1 token = ~4 chars
+                max_chars = self._config.max_context_tokens * 4 // max(top_k, 1) // 2
                 if len(text) > max_chars:
                     text = text[:max_chars] + "..."
 
@@ -600,6 +599,12 @@ class MimirOpenSpaceBridge:
                     self._config.circuit_breaker_threshold,
                     self._config.circuit_breaker_reset_seconds,
                 )
+                if self._circuit.failure_count >= self._config.circuit_breaker_threshold:
+                    logger.warning(
+                        "Circuit breaker tripped after %d failures (%d threshold)",
+                        self._circuit.failure_count,
+                        self._config.circuit_breaker_threshold,
+                    )
                 logger.error("Mimir search failed: %s", e)
                 return EnrichmentResult(
                     success=False,

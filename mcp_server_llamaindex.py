@@ -20,6 +20,7 @@ Environment:
     OPENROUTER_API_KEY: Alternative to OPENAI_API_KEY for OpenRouter
 """
 
+import asyncio
 import os
 import sys
 import json
@@ -111,7 +112,7 @@ from llama_index.core import (
     Settings,
 )
 from llama_index.embeddings.openai import OpenAIEmbedding
-from llama_index.llms.openai_like import OpenAILike
+from llama_index.llms.openai import OpenAI as OpenAILike
 
 
 def create_server_config() -> MimirConfig:
@@ -446,20 +447,36 @@ class KnowledgeServer:
 def create_mcp_server(server: KnowledgeServer) -> FastMCP:
     mcp = FastMCP("mimir-knowledge")
 
+    # Default timeout for tool calls (seconds)
+    TOOL_TIMEOUT = 30
+
+    async def _with_timeout(coro, timeout: int = TOOL_TIMEOUT) -> str:
+        """Wrap a coroutine with a timeout, returning an error string on timeout."""
+        try:
+            return await asyncio.wait_for(coro, timeout=timeout)
+        except asyncio.TimeoutError:
+            return f"Error: Request timed out after {timeout}s. Try a simpler query."
+
     @mcp.tool()
     async def search(query: str, top_k: int = 5) -> str:
         """Search the project knowledge base using semantic similarity."""
-        return server.search(query, top_k)
+        return await _with_timeout(
+            asyncio.to_thread(server.search, query, top_k)
+        )
 
     @mcp.tool()
     async def query(question: str) -> str:
         """Ask a question about the project."""
-        return server.query(question)
+        return await _with_timeout(
+            asyncio.to_thread(server.query, question)
+        )
 
     @mcp.tool()
     async def reindex() -> str:
         """Rebuild the knowledge base from the docs directory."""
-        return server.index_documents()
+        return await _with_timeout(
+            asyncio.to_thread(server.index_documents), timeout=120
+        )
 
     @mcp.tool()
     async def remove_file(file_path: str) -> str:
@@ -471,7 +488,9 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         path = Path(file_path)
         if not path.is_absolute():
             path = server.project_root / path
-        return server.remove_file(path)
+        return await _with_timeout(
+            asyncio.to_thread(server.remove_file, path)
+        )
 
     @mcp.tool()
     async def stats() -> str:
@@ -480,27 +499,33 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
 
     @mcp.tool()
     async def rag_workflow(query: str) -> str:
-        import asyncio
+        import asyncio as _asyncio
         from langchain_core.messages import HumanMessage
         from langgraph.workflows.rag import graph as rag_graph
 
-        config = {"configurable": {"thread_id": "mcp-rag"}}
-        result = await rag_graph.ainvoke(
-            {"messages": [HumanMessage(content=query)]}, config
-        )
-        return result["messages"][-1].content
+        async def _run_rag():
+            config = {"configurable": {"thread_id": "mcp-rag"}}
+            result = await rag_graph.ainvoke(
+                {"messages": [HumanMessage(content=query)]}, config
+            )
+            return result["messages"][-1].content
+
+        return await _with_timeout(_run_rag())
 
     @mcp.tool()
     async def knowledge_agent(question: str) -> str:
-        import asyncio
+        import asyncio as _asyncio
         from langchain_core.messages import HumanMessage
         from langgraph.workflows.knowledge_agent import graph as agent_graph
 
-        config = {"configurable": {"thread_id": "mcp-agent"}}
-        result = await agent_graph.ainvoke(
-            {"messages": [HumanMessage(content=question)]}, config
-        )
-        return result["messages"][-1].content
+        async def _run_agent():
+            config = {"configurable": {"thread_id": "mcp-agent"}}
+            result = await agent_graph.ainvoke(
+                {"messages": [HumanMessage(content=question)]}, config
+            )
+            return result["messages"][-1].content
+
+        return await _with_timeout(_run_agent())
 
     @mcp.tool()
     async def enrich_task(task: str, top_k: int = 5) -> str:
@@ -515,20 +540,23 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         """
         from src.mimir.openspace_bridge import enrich_task_for_openspace
 
-        result = enrich_task_for_openspace(task, server.project_root)
+        def _enrich():
+            result = enrich_task_for_openspace(task, server.project_root)
 
-        # Add status field to distinguish empty results from errors
-        if not result.get("success", False):
-            result["status"] = "error"
-        elif result.get("result_count", 0) == 0:
-            result["status"] = "no_results"
-            result["suggestion"] = (
-                "Try a broader query or check if the index has been built"
-            )
-        else:
-            result["status"] = "ok"
+            # Add status field to distinguish empty results from errors
+            if not result.get("success", False):
+                result["status"] = "error"
+            elif result.get("result_count", 0) == 0:
+                result["status"] = "no_results"
+                result["suggestion"] = (
+                    "Try a broader query or check if the index has been built"
+                )
+            else:
+                result["status"] = "ok"
 
-        return json.dumps(result, ensure_ascii=False, indent=2)
+            return json.dumps(result, ensure_ascii=False, indent=2)
+
+        return await _with_timeout(asyncio.to_thread(_enrich))
 
     @mcp.tool()
     async def openspace_health() -> str:
@@ -539,8 +567,11 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         """
         from src.mimir.openspace_bridge import get_bridge
 
-        bridge = get_bridge(server.project_root)
-        return json.dumps(bridge.health_check(), indent=2)
+        def _health():
+            bridge = get_bridge(server.project_root)
+            return json.dumps(bridge.health_check(), indent=2)
+
+        return await _with_timeout(asyncio.to_thread(_health))
 
     @mcp.tool()
     async def sdk_cache_get(library: str, topic: str = "general") -> str:
@@ -555,16 +586,19 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         """
         from src.mimir.sdk_cache import SDKCache
 
-        cache = SDKCache(server.project_root)
-        docs = cache.get(library, topic)
-        if docs:
-            return docs
-        return json.dumps(
-            {
-                "error": f"No docs found for {library}/{topic}",
-                "suggestion": "Try a different topic or check the library name",
-            }
-        )
+        def _get_docs():
+            cache = SDKCache(server.project_root)
+            docs = cache.get(library, topic)
+            if docs:
+                return docs
+            return json.dumps(
+                {
+                    "error": f"No docs found for {library}/{topic}",
+                    "suggestion": "Try a different topic or check the library name",
+                }
+            )
+
+        return await _with_timeout(asyncio.to_thread(_get_docs))
 
     @mcp.tool()
     async def sdk_cache_list() -> str:
@@ -601,6 +635,21 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
             except (json.JSONDecodeError, OSError):
                 pass
 
+        # Watcher availability
+        watcher_info = {
+            "available": WATCHER_AVAILABLE,
+            "running": False,
+        }
+        if WATCHER_AVAILABLE and server._watcher is not None:
+            try:
+                watcher_info["running"] = server._watcher.status()["running"]
+            except Exception:
+                pass
+        if not WATCHER_AVAILABLE:
+            warnings.append(
+                "watchdog not installed — auto-reindex disabled; run: pip install watchdog"
+            )
+
         result = {
             "status": "healthy" if (has_index and config.api_key) else "degraded",
             "has_index": has_index,
@@ -609,6 +658,7 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
             "project_root": str(config.project_root),
             "embedding_model": config.embedding_model,
             "llm_model": config.llm_model,
+            "watcher": watcher_info,
             "warnings": warnings,
             "config_summary": config.to_dict(),
         }
@@ -830,6 +880,24 @@ def main():
     args = parser.parse_args()
 
     config = create_server_config()
+
+    # Validate configuration before starting
+    validation_warnings = config.validate()
+    for warning in validation_warnings:
+        print(f"[Knowledge Server] ⚠️  {warning}", file=sys.stderr)
+
+    if not config.api_key:
+        print(
+            "[Knowledge Server] ❌ No API key configured — "
+            "set OPENROUTER_API_KEY or OPENAI_API_KEY, or run: opencode auth openrouter",
+            file=sys.stderr,
+        )
+        print(
+            "[Knowledge Server]    "
+            "Server will start in degraded mode (indexing/embedding will fail)",
+            file=sys.stderr,
+        )
+
     server = KnowledgeServer(config)
 
     if args.index:
@@ -839,6 +907,13 @@ def main():
 
     if args.reindex:
         if config.knowledge_dir.exists():
+            from mimir.indexing import backup_index
+
+            backup = backup_index(config.knowledge_dir)
+            if backup:
+                print(f"Backed up existing index → {backup}")
+            else:
+                print("No existing index to back up")
             shutil.rmtree(config.knowledge_dir)
             config.knowledge_dir.mkdir(parents=True, exist_ok=True)
         print(server.index_documents())

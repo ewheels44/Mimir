@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+#
+# Mimir auto-index git hook
+# Triggers incremental reindex after every commit so the knowledge
+# base stays current without manual intervention.
+#
+# Runs in background — never blocks git operations.
+#
+# Install:
+#   bash ~/Documents/Mimir/scripts/install-git-hooks.sh [/path/to/repo]
+#
+
+set -uo pipefail
+
+MIMIR_DIR="${MIMIR_HOME:-$HOME/Documents/Mimir}"
+PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+LOCK_FILE="$PROJECT_ROOT/.mimir/.reindex.lock"
+
+# ── Guards ─────────────────────────────────────────────────────────
+[ -d "$MIMIR_DIR" ]                          || exit 0  # Mimir not installed
+[ -f "$PROJECT_ROOT/.mimir/config.json" ]    || exit 0  # not a Mimir project
+[ -f "$PROJECT_ROOT/.knowledge/llamaindex/index_store.json" ] || exit 0  # no index
+
+# Stale lock check (>5 min)
+if [ -f "$LOCK_FILE" ]; then
+    lock_age=$(( $(date +%s) - $(stat -f %m "$LOCK_FILE" 2>/dev/null || echo 0) ))
+    [ "$lock_age" -ge 300 ] && rm -f "$LOCK_FILE"
+    [ "$lock_age" -lt 300 ] && exit 0
+fi
+
+touch "$LOCK_FILE"
+
+# ── Background reindex ────────────────────────────────────────────
+(
+    trap 'rm -f "$LOCK_FILE"' EXIT
+
+    # Activate venv if available
+    [ -f "$MIMIR_DIR/.venv/bin/activate" ] && source "$MIMIR_DIR/.venv/bin/activate"
+
+    export PYTHONPATH="${MIMIR_DIR}:${MIMIR_DIR}/src:${PYTHONPATH:-}"
+
+    timeout 120 python3 "$MIMIR_DIR/scripts/mimir-reindex-hook.py" \
+        --project-root "$PROJECT_ROOT" 2>/dev/null
+) &
+
+disown
+exit 0

@@ -8,16 +8,16 @@ Usage:
     python langgraph/cli.py prep "payment integration" --customer acme-corp
 """
 
-from typing import Annotated, TypedDict, Optional
-from pathlib import Path
+from typing import Annotated, TypedDict
 
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
-from langgraph.graph import StateGraph, END
-from langgraph.graph.message import add_messages
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
+from langgraph.graph.message import add_messages
+
+from src.mimir.token_callback import create_token_callback
 
 from .utils import create_llm, detect_project_root, get_mcp_client
-from src.mimir.token_callback import create_token_callback
 
 
 class PrepState(TypedDict):
@@ -31,7 +31,7 @@ class PrepState(TypedDict):
 async def search_codebase(state: PrepState) -> PrepState:
     """Search the knowledge base for code relevant to the topic."""
     topic = state["topic"]
-    customer = state.get("customer", "")
+    state.get("customer", "")
 
     project_root = detect_project_root()
     client = get_mcp_client(project_root)

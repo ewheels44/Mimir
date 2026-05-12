@@ -11,7 +11,6 @@ Consolidates common patterns that were previously duplicated across:
 from pathlib import Path
 from typing import Optional
 
-
 # Project root detection markers (ordered by reliability)
 PROJECT_MARKERS = [
     ".opencode",
@@ -169,8 +168,8 @@ def resolve_api_key() -> tuple[str, Optional[str]]:
     Returns:
         Tuple of (api_key, api_base_url). Empty string if no key found.
     """
-    import os
     import json
+    import os
 
     # Check env vars first
     api_key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get(

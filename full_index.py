@@ -10,9 +10,9 @@ This script reads .mimir/config.json and indexes docs/ + code_dirs
 with intelligent exclusions for cache files, images, and binaries.
 """
 
+import argparse
 import os
 import sys
-import argparse
 from pathlib import Path
 
 MIMIR_DIR = Path.home() / "Documents" / "Mimir"
@@ -94,12 +94,13 @@ def main():
             knowledge_dir.mkdir(parents=True, exist_ok=True)
 
     print("Loading config and creating server...")
+    from llama_index.core import SimpleDirectoryReader, StorageContext, VectorStoreIndex
+
     from mcp_server_llamaindex import KnowledgeServer
     from mimir.config import MimirConfig
-    from llama_index.core import SimpleDirectoryReader, VectorStoreIndex, StorageContext
 
     config = MimirConfig.load()
-    server = KnowledgeServer(config)
+    KnowledgeServer(config)
 
     print(f"\nIndexing with exclusions: {len(EXCLUDE_PATTERNS)} patterns")
 

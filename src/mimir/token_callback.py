@@ -4,11 +4,10 @@ This hooks into LangChain's callback system to record real token usage
 from LLM and embedding API responses.
 """
 
-from typing import Any, Dict, List, Optional
-from uuid import UUID
+from typing import Any
+
 from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.messages import BaseMessage
-from langchain_core.outputs import LLMResult, ChatResult
+from langchain_core.outputs import ChatResult, LLMResult
 
 
 class TokenUsageCallbackHandler(BaseCallbackHandler):
@@ -43,7 +42,7 @@ class TokenUsageCallbackHandler(BaseCallbackHandler):
             self.total_tokens += usage.get("total_tokens", 0)
             self.has_data = True
 
-    def get_usage(self) -> Dict[str, int]:
+    def get_usage(self) -> dict[str, int]:
         return {
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,

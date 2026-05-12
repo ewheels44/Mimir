@@ -1,0 +1,6 @@
+## Mimir Context Priority
+Rules are in `~/.config/opencode/prompts/system-context.md` (global, always loaded).
+Reference is in AGENTS.md (project-specific, read when needed).
+
+## Recursive Development
+When working on Mimir itself, call `mimir-knowledge_enrich_task()` before every task. This is the core validation loop.

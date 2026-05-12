@@ -19,6 +19,7 @@ Usage:
     cache.list_cached()  # ["stripe", "nextjs", "react"]
 """
 
+import contextlib
 import json
 import logging
 import sys
@@ -183,10 +184,8 @@ class SDKCache:
             meta_path = self._meta_path(library)
             meta = {}
             if meta_path.exists():
-                try:
+                with contextlib.suppress(json.JSONDecodeError):
                     meta = json.loads(meta_path.read_text())
-                except json.JSONDecodeError:
-                    pass
 
             meta["fetched_at"] = datetime.now().isoformat()
             meta["ttl_days"] = self.ttl_days
@@ -224,10 +223,8 @@ class SDKCache:
             meta_path = lib_dir / "meta.json"
             meta = {}
             if meta_path.exists():
-                try:
+                with contextlib.suppress(json.JSONDecodeError):
                     meta = json.loads(meta_path.read_text())
-                except json.JSONDecodeError:
-                    pass
 
             # Count doc files
             doc_files = list(lib_dir.glob("*.md"))
@@ -264,6 +261,7 @@ class SDKCache:
 # ── CLI interface ──────────────────────────────────────────────────
 def main():
     import argparse
+
     from src.mimir.config import MimirConfig
 
     parser = argparse.ArgumentParser(description="SDK Documentation Cache")

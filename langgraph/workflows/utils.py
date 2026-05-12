@@ -5,10 +5,10 @@ Handles OpenRouter API configuration and MCP client setup.
 """
 
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any, Optional
 
-from langchain_openai import ChatOpenAI
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_openai import ChatOpenAI
 
 
 def create_llm(
@@ -84,7 +84,7 @@ def detect_project_root() -> Path:
     return get_config().project_root
 
 
-def get_mcp_config(project_root: Optional[Path] = None) -> Dict[str, Any]:
+def get_mcp_config(project_root: Optional[Path] = None) -> dict[str, Any]:
     """Get MCP client configuration.
 
     Centralizes the MCP server configuration that was previously duplicated

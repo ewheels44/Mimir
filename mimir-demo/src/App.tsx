@@ -1,32 +1,66 @@
 import { useState, useCallback } from 'react';
-import { FlowDiagram } from './components/FlowDiagram';
 import { StateInspector } from './components/StateInspector';
 import { ExplanationPanel } from './components/ExplanationPanel';
+import { ArchitectureDiagram } from './components/ArchitectureDiagram';
+import { ConceptsPanel } from './components/ConceptsPanel';
+import { ArchitectureExplainer } from './components/ArchitectureExplainer';
 import { allFlows } from './data/flows';
-import { architectureFlow } from './data/architecture';
-import { ArchStep } from './data/architecture';
+import './styles/index.css';
+
+type Theme = 'dark' | 'light';
 
 function App() {
   const [activeFlowId, setActiveFlowId] = useState<string>('indexing');
   const [currentStep, setCurrentStep] = useState<number>(0);
-  const [isPlaying, setIsPlaying] = useState<boolean>(false);
-  const [activeArchTab, setActiveArchTab] = useState<number>(0);
+  const [showArchitecture, setShowArchitecture] = useState<boolean>(false);
+  const [showExplainer, setShowExplainer] = useState<boolean>(false);
+  const [activeArchNode, setActiveArchNode] = useState<number | null>(null);
+  const [theme, setTheme] = useState<Theme>('dark');
+  const [plainEnglish, setPlainEnglish] = useState<boolean>(true);
 
   const activeFlow = allFlows.find(f => f.id === activeFlowId) || allFlows[0];
 
   const handleFlowChange = useCallback((flowId: string) => {
     setActiveFlowId(flowId);
     setCurrentStep(0);
-    setIsPlaying(false);
-    setActiveArchTab(0);
+    setShowArchitecture(false);
+    setShowExplainer(false);
+    setActiveArchNode(null);
   }, []);
 
-  const handleStepChange = useCallback((step: number) => {
-    setCurrentStep(step);
+  const toggleTheme = useCallback(() => {
+    setTheme(prev => {
+      const next = prev === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      return next;
+    });
   }, []);
 
-  const togglePlay = useCallback(() => {
-    setIsPlaying(prev => !prev);
+  const handleArchNodeSelect = useCallback((index: number) => {
+    if (index < 0) {
+      setActiveArchNode(null);
+      return;
+    }
+    setActiveArchNode(index);
+    // Map architecture node to a flow — tier 1 = user query flow start, etc.
+    const tierMap: Record<number, { flowId: string; stepIdx: number }[]> = {
+      0: [{ flowId: 'rag', stepIdx: 0 }],   // User Query → RAG
+      1: [{ flowId: 'rag', stepIdx: 1 }],   // MCP Client → Embed Query
+      2: [{ flowId: 'rag', stepIdx: 0 }],   // LangGraph Router → RAG Query
+      3: [{ flowId: 'rag', stepIdx: 2 }],   // Embedding Engine → Embed Query
+      4: [{ flowId: 'rag', stepIdx: 3 }],   // Vector Store → Vector Search
+      5: [{ flowId: 'rag', stepIdx: 3 }],   // Content Filter → Search (same step)
+      6: [{ flowId: 'indexing', stepIdx: 0 }], // File Watcher → Detect Changes
+      7: [{ flowId: 'bridge', stepIdx: 0 }],   // MCP Server → Kill Switch Check
+      8: [{ flowId: 'indexing', stepIdx: 3 }], // Manifest DB → Update Manifest
+    };
+    const targets = tierMap[index];
+    if (targets && targets.length > 0) {
+      const target = targets[0];
+      setActiveFlowId(target.flowId);
+      setCurrentStep(target.stepIdx);
+      setShowArchitecture(false);
+    }
   }, []);
 
   const renderArchitectureDiagram = () => (
@@ -37,65 +71,17 @@ function App() {
       <p className="architecture-subtitle">
         A four-layer system: your tools query through orchestrated workflows,
         backed by semantic retrieval, with change-aware infrastructure keeping everything fresh.
+        Click any node to jump to its flow step, or hover for quick previews.
       </p>
-
-      <div className="architecture-diagram">
-        {architectureFlow.map((layer) => (
-          <div key={layer.tier} className="arch-layer">
-            <div className="arch-layer-label">Layer {layer.tier} · {layer.label}</div>
-            <div className="arch-layer-nodes">
-              {layer.steps.map((step: ArchStep) => (
-                <div
-                  key={step.title}
-                  className={`arch-node ${activeArchTab === layer.tier * 10 + step.position ? 'arch-node-highlight' : ''}`}
-                  onClick={() => setActiveArchTab(layer.tier * 10 + step.position)}
-                  style={{
-                    borderColor: activeArchTab === layer.tier * 10 + step.position ? step.color : undefined,
-                    boxShadow: activeArchTab === layer.tier * 10 + step.position
-                      ? `0 0 20px ${step.color}40`
-                      : undefined,
-                  }}
-                >
-                  <div className="arch-node-icon">{step.icon}</div>
-                  <div className="arch-node-title">{step.title}</div>
-                  <div className="arch-node-subtitle">{step.subtitle}</div>
-                  <div className="arch-node-desc">{step.description}</div>
-
-                  {/* Show inputs/outputs when selected */}
-                  {activeArchTab === layer.tier * 10 + step.position && (
-                    <div style={{ marginTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.3rem', fontSize: '0.7rem' }}>
-                      {step.inputs && (
-                        <div style={{ color: '#f59e0b' }}>
-                          📥 IN: {step.inputs.join(', ')}
-                        </div>
-                      )}
-                      {step.outputs && (
-                        <div style={{ color: '#10b981' }}>
-                          📤 OUT: {step.outputs.join(', ')}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-
-            {/* Connector between layers */}
-            {layer.tier < 4 && (
-              <div className="arch-layer-connector">
-                <div className="arch-connector-arrows">
-                  {layer.steps.map((_: ArchStep, i: number) => (
-                    <span key={i} className="arch-connector-arrow">↓</span>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        ))}
+      <div className="architecture-diagram-container">
+        <ArchitectureDiagram
+          activeNode={activeArchNode}
+          onNodeSelect={handleArchNodeSelect}
+        />
       </div>
 
       {/* Architecture Legend */}
-      <div style={{ marginTop: '1.5rem', display: 'flex', justifyContent: 'center', gap: '2rem', flexWrap: 'wrap', fontSize: '0.78rem', color: '#606070' }}>
+      <div className="architecture-legend">
         <span>💬 User input flows top-down</span>
         <span>📂 Infrastructure pushes changes up</span>
         <span>🔀 LangGraph orchestrates the middle layers</span>
@@ -104,7 +90,7 @@ function App() {
   );
 
   return (
-    <div className="app">
+    <div className="app" data-theme={theme}>
       {/* Sticky Header */}
       <header className="header">
         <h1>🗿 Mimir</h1>
@@ -122,14 +108,40 @@ function App() {
             </button>
           ))}
           <button
-            className={`nav-btn ${activeArchTab >= 10 ? 'active' : ''}`}
+            className={`nav-btn ${showArchitecture ? 'active' : ''}`}
             onClick={() => {
-              setActiveArchTab(10);
+              setShowArchitecture(true);
+              setShowExplainer(false);
               setCurrentStep(0);
             }}
-            style={{ borderColor: activeArchTab >= 10 ? '#6366f1' : undefined }}
+            style={{ borderColor: showArchitecture ? '#6366f1' : undefined }}
           >
             🏗️ Architecture
+          </button>
+          <button
+            className={`nav-btn ${showExplainer ? 'active' : ''}`}
+            onClick={() => {
+              setShowExplainer(true);
+              setShowArchitecture(false);
+              setCurrentStep(0);
+            }}
+            style={{ borderColor: showExplainer ? '#8b5cf6' : undefined }}
+          >
+            📖 Explain
+          </button>
+          <button
+            className={`nav-btn ${plainEnglish ? 'active' : ''}`}
+            onClick={() => setPlainEnglish(prev => !prev)}
+            title={`Switch to ${plainEnglish ? 'technical' : 'plain English'} mode`}
+          >
+            {plainEnglish ? '🔤 Tech' : '🧒 ELI5'}
+          </button>
+          <button
+            className="nav-btn theme-toggle"
+            onClick={toggleTheme}
+            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+          >
+            {theme === 'dark' ? '☀️ Light' : '🌙 Dark'}
           </button>
         </nav>
       </header>
@@ -142,12 +154,20 @@ function App() {
           A semantic knowledge base that gives your AI agents instant access to your codebase.
           Index once, query forever. Every step is explained below with live state tracking.
         </p>
+        <div className="hero-toggle-hint">
+          <span className={`toggle-indicator ${plainEnglish ? 'active' : ''}`}>🧒 ELI5</span>
+          <span className="toggle-separator">|</span>
+          <span className={`toggle-indicator ${!plainEnglish ? 'active' : ''}`}>🔤 Tech</span>
+          <span className="toggle-hint-text"> — Toggle between plain English and technical views</span>
+        </div>
       </div>
 
       <div className="main-content">
         {/* === Architecture Overview === */}
-        {activeArchTab >= 10 ? (
+        {showArchitecture ? (
           renderArchitectureDiagram()
+        ) : showExplainer ? (
+          <ArchitectureExplainer plainEnglish={plainEnglish} />
         ) : (
           <>
             {/* Flow Header */}
@@ -163,20 +183,6 @@ function App() {
               </div>
             </div>
 
-            {/* Flow Diagram */}
-            <div className="flow-container">
-              <FlowDiagram
-                flow={activeFlow}
-                currentStep={currentStep}
-                onStepChange={handleStepChange}
-                onReset={() => setCurrentStep(0)}
-                onNext={() => setCurrentStep(prev => Math.min(prev + 1, activeFlow.steps.length - 1))}
-                onPrev={() => setCurrentStep(prev => Math.max(prev - 1, 0))}
-                isPlaying={isPlaying}
-                onTogglePlay={togglePlay}
-              />
-            </div>
-
             {/* Detail Panels */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
               <StateInspector
@@ -184,12 +190,21 @@ function App() {
                 stepIndex={currentStep}
                 totalSteps={activeFlow.steps.length}
                 flowColor={activeFlow.color}
+                plainEnglish={plainEnglish}
               />
               <ExplanationPanel
                 step={activeFlow.steps[currentStep]}
                 flowColor={activeFlow.color}
                 stepIndex={currentStep}
                 totalSteps={activeFlow.steps.length}
+                plainEnglish={plainEnglish}
+              />
+            </div>
+
+            {/* Concepts Panel */}
+            <div style={{ marginTop: '1.5rem' }}>
+              <ConceptsPanel
+                activeFlowId={activeFlowId}
               />
             </div>
           </>

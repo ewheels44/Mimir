@@ -3,8 +3,9 @@ import fnmatch
 import logging
 import signal
 import threading
+from datetime import datetime
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Optional
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -13,13 +14,10 @@ from src.mimir.indexing import (
     EXCLUDE_PATTERNS,
     detect_changed_files,
     incremental_reindex,
-    save_hash_state,
     load_hash_state,
+    save_hash_state,
 )
 from src.mimir.knowledge_graph import incremental_graph_update
-
-import sys
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +139,7 @@ class MimirFileWatcher:
     def __init__(
         self,
         project_root: Path,
-        watched_dirs: List[Path],
+        watched_dirs: list[Path],
         knowledge_dir: Path,
         index_lock: Optional[threading.RLock] = None,
     ):

@@ -1,33 +1,23 @@
-[project]
-name = "mimir-knowledge"
-version = "0.1.0"
-description = "Multi-project knowledge base MCP server using LlamaIndex"
-requires-python = ">=3.11"
-dependencies = [
-    "mcp>=1.0.0",
-    "llama-index>=0.11.0",
-    "llama-index-embeddings-openai>=0.2.0",
-    "llama-index-llms-openai-like>=0.1.0",
-    "openai>=1.0.0",
-    "fastapi>=0.104.0",
-    "uvicorn[standard]>=0.24.0",
-    "httpx>=0.25.0",
-]
+[tool.ruff]
+# Line length (black compatible)
+line-length = 88
 
-[project.optional-dependencies]
-langgraph = [
-    "langgraph>=0.2.0",
-    "langchain>=0.3.0",
-    "langchain-openai>=0.2.0",
-    "langchain-mcp-adapters>=0.1.0",
-]
-dev = [
-    "python-dotenv>=1.0.0",
-]
+# Target Python version
+target-version = "py311"
 
-[tool.hatch.build.targets.wheel]
-bypass-selection = true
+[tool.ruff.format]
+# Use spaces for indentation
+indent-style = "space"
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+# Compatible with black
+quote-style = "double"
+
+[tool.ruff.lint]
+# Enable flake8 and other rule sets
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "TCH"]
+
+# Ignore some rules that might be too strict for now
+ignore = ["E501", "B008", "UP045"]
+
+# Allow fixes for these rules
+fixable = ["ALL"]

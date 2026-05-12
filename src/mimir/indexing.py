@@ -8,14 +8,14 @@ used by both the CLI (mimir-index.py) and the MCP server.
 
 import hashlib
 import json
-import os
 import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
-from src.mimir.utils import EXCLUDE_PATTERNS, should_exclude as _should_exclude
+from src.mimir.utils import EXCLUDE_PATTERNS
+from src.mimir.utils import should_exclude as _should_exclude
 
 
 def get_progress_bar(iterable=None, desc="", total=None, unit="it", ncols=80):
@@ -91,7 +91,7 @@ def load_manifest(knowledge_dir: Path) -> dict:
         try:
             with open(manifest_path) as f:
                 return json.load(f)
-        except (json.JSONDecodeError, IOError):
+        except (OSError, json.JSONDecodeError):
             pass
     return {
         "version": "1.0",
@@ -112,7 +112,7 @@ def save_manifest(knowledge_dir: Path, manifest: dict) -> None:
 def add_to_manifest(
     knowledge_dir: Path,
     directory: Path,
-    files: List[str],
+    files: list[str],
     document_count: int,
     is_incremental: bool = False,
     file_hashes: Optional[dict] = None,
@@ -238,7 +238,6 @@ def list_indexed_files(knowledge_dir: Path) -> dict:
 # SHA-256 File Hash Functions
 # =============================================================================
 
-import hashlib
 
 MAX_FILE_SIZE_FOR_HASHING = 50 * 1024 * 1024  # 50MB threshold
 
@@ -267,7 +266,7 @@ def compute_file_hash(file_path: Path) -> Optional[str]:
             for chunk in iter(lambda: f.read(8192), b""):
                 sha256_hash.update(chunk)
         return sha256_hash.hexdigest()
-    except (IOError, OSError) as e:
+    except OSError as e:
         print(f"   Warning: Could not hash {file_path}: {e}")
         return None
 
@@ -296,7 +295,7 @@ def load_hash_state(project_root: Path) -> dict:
                 if "file_hashes" not in state:
                     return {"file_hashes": {}}
                 return state
-        except (json.JSONDecodeError, IOError):
+        except (OSError, json.JSONDecodeError):
             pass
     return {"file_hashes": {}}
 
@@ -321,9 +320,9 @@ def save_hash_state(project_root: Path, state: dict) -> None:
 
 def detect_changed_files(
     project_root: Path,
-    watched_dirs: List[Path],
+    watched_dirs: list[Path],
     update_state: bool = True,
-    custom_exclude_patterns: Optional[List[str]] = None,
+    custom_exclude_patterns: Optional[list[str]] = None,
 ) -> dict:
     previous_state = load_hash_state(project_root)
     previous_hashes = previous_state.get("file_hashes", {})
@@ -392,11 +391,11 @@ def detect_changed_files(
 def index_with_progress(
     project_root: Path,
     docs_dir: Path,
-    code_dirs: List[Path],
+    code_dirs: list[Path],
     knowledge_dir: Path,
     force_reindex: bool = False,
     verbose: bool = True,
-    custom_exclude_patterns: Optional[List[str]] = None,
+    custom_exclude_patterns: Optional[list[str]] = None,
 ) -> bool:
     """
     Index documents with progress bars.
@@ -416,8 +415,8 @@ def index_with_progress(
     try:
         from llama_index.core import (
             SimpleDirectoryReader,
-            VectorStoreIndex,
             StorageContext,
+            VectorStoreIndex,
         )
     except ImportError as e:
         print(f"❌ Missing dependency: {e}")
@@ -593,7 +592,7 @@ def _get_stable_doc_id(file_path: Path) -> str:
 def _use_refresh_ref_docs(index) -> bool:
     """Check if the index supports refresh_ref_docs method."""
     return hasattr(index, "refresh_ref_docs") and callable(
-        getattr(index, "refresh_ref_docs")
+        index.refresh_ref_docs
     )
 
 
@@ -645,7 +644,7 @@ def add_directory_with_progress(
     source_dir: Path,
     knowledge_dir: Path,
     verbose: bool = True,
-    custom_exclude_patterns: Optional[List[str]] = None,
+    custom_exclude_patterns: Optional[list[str]] = None,
 ) -> bool:
     """
     Add documents from a directory to existing index with progress bars.
@@ -663,8 +662,8 @@ def add_directory_with_progress(
     try:
         from llama_index.core import (
             SimpleDirectoryReader,
-            load_index_from_storage,
             StorageContext,
+            load_index_from_storage,
         )
     except ImportError as e:
         print(f"❌ Missing dependency: {e}")
@@ -772,9 +771,8 @@ def add_file_to_index(
     """
     try:
         from llama_index.core import (
-            SimpleDirectoryReader,
-            load_index_from_storage,
             StorageContext,
+            load_index_from_storage,
         )
     except ImportError as e:
         print(f"❌ Missing dependency: {e}")
@@ -915,8 +913,8 @@ def remove_file_from_index(
     """
     try:
         from llama_index.core import (
-            load_index_from_storage,
             StorageContext,
+            load_index_from_storage,
         )
     except ImportError as e:
         print(f"❌ Missing dependency: {e}")
@@ -1006,8 +1004,8 @@ def remove_directory_from_index(
     """
     try:
         from llama_index.core import (
-            load_index_from_storage,
             StorageContext,
+            load_index_from_storage,
         )
     except ImportError as e:
         print(f"❌ Missing dependency: {e}")
@@ -1032,7 +1030,7 @@ def remove_directory_from_index(
     files_to_remove = []
 
     # Find all files that belong to this directory
-    for dir_key, info in manifest.get("indexed_directories", {}).items():
+    for _dir_key, info in manifest.get("indexed_directories", {}).items():
         for file_path in info.get("files", []):
             file_path_obj = Path(file_path)
             try:
@@ -1131,7 +1129,7 @@ def remove_directory_from_index(
 
 def incremental_reindex(
     project_root: Path,
-    watched_dirs: List[Path],
+    watched_dirs: list[Path],
     knowledge_dir: Path,
     verbose: bool = False,
 ) -> dict:
@@ -1152,9 +1150,9 @@ def incremental_reindex(
 
     try:
         from llama_index.core import (
-            load_index_from_storage,
-            StorageContext,
             Document,
+            StorageContext,
+            load_index_from_storage,
         )
     except ImportError as e:
         logger.error(f"Missing dependency: {e}")

@@ -12,8 +12,8 @@ from pathlib import Path
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from mimir.projects import ProjectManager, ProjectEntry
 from mimir.handoff import HandoffGenerator
+from mimir.projects import ProjectManager
 
 
 def cmd_list(args):

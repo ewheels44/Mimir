@@ -6,9 +6,77 @@ interface StateInspectorProps {
   stepIndex: number;
   totalSteps: number;
   flowColor: string;
+  plainEnglish?: boolean;
 }
 
-export function StateInspector({ step, stepIndex, totalSteps, flowColor }: StateInspectorProps) {
+function getPlainKey(key: string): string {
+  const map: Record<string, string> = {
+    'has_index': 'Index exists?',
+    'source_files': 'Indexed files',
+    'document_count': 'Total documents',
+    'project_root': 'Project folder',
+    'index_freshness': 'Last updated',
+    'thought_process': 'Thinking',
+    'tool_selected': 'Tool chosen',
+    'args': 'Parameters',
+    'reasoning': 'Why this tool?',
+    'neighbors_found': 'Connected nodes found',
+    'top_connections': 'Key connections',
+    'conversation_messages': 'Messages so far',
+    'current_loop': 'Current loop',
+    'needs_more_info': 'Need more info?',
+    'has_answer': 'Has answer?',
+    'sources_cited': 'Sources cited',
+    'confidence': 'Confidence',
+    'total_tokens_used': 'Tokens used',
+    'loops_completed': 'Loops done',
+    'nodes_explored': 'Nodes explored',
+    'failure_count': 'Failures so far',
+    'threshold': 'Failure limit',
+    'circuit_state': 'Circuit state',
+    'reset_after': 'Reset after',
+    'cache_max_size': 'Max cached answers',
+    'ttl_seconds': 'Cache freshness (seconds)',
+    'cache_hit': 'Found in cache?',
+    'current_size': 'Cached answers now',
+    'new_vectors_inserted': 'New vectors added',
+    'total_vectors_in_store': 'Total vectors',
+    'storage_size': 'Storage size',
+    'persisted_to_disk': 'Saved to disk?',
+    'last_updated': 'Last saved',
+    'indexed_files': 'Total files indexed',
+    'model': 'Model used',
+    'dimensions': 'Vector size',
+    'embeddings_generated': 'Embeddings created',
+    'api_cost': 'API cost',
+    'query_vector': 'Query vector',
+    'candidates_scanned': 'Vectors scanned',
+    'similarity_scores': 'Relevance scores',
+    'retrieved_docs': 'Documents found',
+    'similarity_threshold': 'Minimum relevance',
+    'context_length': 'Context size',
+    'sources': 'Source files',
+    'format': 'Output format',
+    'token_budget': 'Token budget',
+    'query': 'User query',
+    'results_count': 'Results returned',
+    'freshness_score': 'Freshness score',
+    'freshness_label': 'Freshness label',
+    'blocked_patterns_found': 'Secrets found',
+    'redacted_content': 'Redactions made',
+    'safe_results': 'Safe results',
+    'filtered_out_files': 'Blocked files',
+    'results_truncated': 'Results trimmed',
+    'context_ready': 'Context prepared?',
+    'max_context_tokens': 'Max context tokens',
+    'prompt_tokens': 'Prompt tokens',
+    'completion_tokens': 'Completion tokens',
+    'total_latency': 'Total time',
+  };
+  return map[key] || key;
+}
+
+export function StateInspector({ step, stepIndex, totalSteps, flowColor, plainEnglish = false }: StateInspectorProps) {
   const entries = Object.entries(step.state);
 
   const getTypeColor = (type: string) => {
@@ -89,32 +157,35 @@ export function StateInspector({ step, stepIndex, totalSteps, flowColor }: State
 
       {/* State Panel */}
       <div className="state-panel">
-        {entries.map(([key, data], index) => (
-          <div
-            key={key}
-            className="state-item"
-            style={{
-              animation: `stateFadeIn 0.4s ease ${index * 0.08}s both`,
-              '--state-accent': getTypeColor(data.type),
-            } as React.CSSProperties}
-          >
-            <div className="state-item-left">
-              <span className="state-type-icon">{getTypeIcon(data.type)}</span>
-              <span className="state-key">{key}</span>
+        {entries.map(([key, data], index) => {
+          const plainKey = plainEnglish ? getPlainKey(key) : key;
+          return (
+            <div
+              key={key}
+              className="state-item"
+              style={{
+                animation: `stateFadeIn 0.4s ease ${index * 0.08}s both`,
+                '--state-accent': getTypeColor(data.type),
+              } as React.CSSProperties}
+            >
+              <div className="state-item-left">
+                <span className="state-type-icon">{getTypeIcon(data.type)}</span>
+                <span className="state-key">{plainKey}</span>
+              </div>
+              <div className="state-item-right">
+                <span
+                  className={`state-value state-value-${data.type}`}
+                  title={typeof data.value === 'string' ? data.value : String(data.value)}
+                >
+                  {formatValue(data.value)}
+                </span>
+                <span className="state-type-badge" style={{ color: getTypeColor(data.type) }}>
+                  {data.type}
+                </span>
+              </div>
             </div>
-            <div className="state-item-right">
-              <span
-                className={`state-value state-value-${data.type}`}
-                title={typeof data.value === 'string' ? data.value : String(data.value)}
-              >
-                {formatValue(data.value)}
-              </span>
-              <span className="state-type-badge" style={{ color: getTypeColor(data.type) }}>
-                {data.type}
-              </span>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Legend */}

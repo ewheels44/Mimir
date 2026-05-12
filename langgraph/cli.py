@@ -3,13 +3,13 @@ import argparse
 import asyncio
 import sys
 import time
-from pathlib import Path
 
 from langchain_core.messages import HumanMessage
-from workflows.rag import graph as rag_graph
-from workflows.knowledge_agent import graph as agent_graph
 from workflows.call_prep import graph as prep_graph
+from workflows.knowledge_agent import graph as agent_graph
+from workflows.rag import graph as rag_graph
 from workflows.session_diff import graph as diff_graph
+
 from src.mimir.metrics import format_report, get_tracker
 
 
@@ -58,7 +58,7 @@ async def run_rag(query: str):
             docs_retrieved=len(context),
             duration_ms=duration_ms,
         )
-        print(f"\n[Metrics] Recorded with estimated tokens")
+        print("\n[Metrics] Recorded with estimated tokens")
 
 
 async def run_agent(query: str):

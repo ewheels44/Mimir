@@ -20,20 +20,20 @@ Environment:
     OPENROUTER_API_KEY: Alternative to OPENAI_API_KEY for OpenRouter
 """
 
-import asyncio
-import os
-import sys
-import json
-import shutil
 import argparse
-import time
-import threading
+import asyncio
 import atexit
-import signal
+import json
 import logging
+import os
+import shutil
+import signal
+import sys
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Optional
-from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # Ensure src directory is in sys.path for imports
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -94,25 +94,23 @@ except ImportError:
         "watchdog not installed - file watcher disabled"
     )
 
-from mimir.config import MimirConfig, get_config
-from mimir.metrics import get_tracker
-from mimir.shared_index import (
-    SharedIndexRegistry,
-    merge_results,
-    format_tagged_results,
-    validate_scope,
-)
+import contextlib  # noqa: E402
 
-from mcp.server.fastmcp import FastMCP
-from llama_index.core import (
-    VectorStoreIndex,
-    SimpleDirectoryReader,
-    StorageContext,
-    load_index_from_storage,
+from llama_index.core import (  # noqa: E402
     Settings,
+    StorageContext,
+    VectorStoreIndex,
+    load_index_from_storage,
 )
-from llama_index.embeddings.openai import OpenAIEmbedding
-from llama_index.llms.openai import OpenAI as OpenAILike
+from llama_index.embeddings.openai import OpenAIEmbedding  # noqa: E402
+from llama_index.llms.openai import OpenAI as OpenAILike  # noqa: E402
+from mcp.server.fastmcp import FastMCP  # noqa: E402
+
+from mimir.config import MimirConfig, get_config  # noqa: E402
+from mimir.metrics import get_tracker  # noqa: E402
+from mimir.shared_index import (  # noqa: E402
+    SharedIndexRegistry,
+)
 
 
 def create_server_config() -> MimirConfig:
@@ -212,7 +210,6 @@ class KnowledgeServer:
 
         # Hybrid retrieval: vector similarity + BM25 keyword fallback
         try:
-            from llama_index.core.postprocessor import SimilarityPostprocessor
             from llama_index.retrievers.bm25 import BM25Retriever
 
             vector_retriever = index.as_retriever(similarity_top_k=top_k * 2)
@@ -479,7 +476,7 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         """Wrap a coroutine with a timeout, returning an error string on timeout."""
         try:
             return await asyncio.wait_for(coro, timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return f"Error: Request timed out after {timeout}s. Try a simpler query."
 
     @mcp.tool()
@@ -524,8 +521,8 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
 
     @mcp.tool()
     async def rag_workflow(query: str) -> str:
-        import asyncio as _asyncio
         from langchain_core.messages import HumanMessage
+
         from langgraph.workflows.rag import graph as rag_graph
 
         async def _run_rag():
@@ -539,8 +536,8 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
 
     @mcp.tool()
     async def knowledge_agent(question: str) -> str:
-        import asyncio as _asyncio
         from langchain_core.messages import HumanMessage
+
         from langgraph.workflows.knowledge_agent import graph as agent_graph
 
         async def _run_agent():
@@ -666,10 +663,8 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
             "running": False,
         }
         if WATCHER_AVAILABLE and server._watcher is not None:
-            try:
+            with contextlib.suppress(Exception):
                 watcher_info["running"] = server._watcher.status()["running"]
-            except Exception:
-                pass
         if not WATCHER_AVAILABLE:
             warnings.append(
                 "watchdog not installed — auto-reindex disabled; run: pip install watchdog"
@@ -701,7 +696,6 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
 
     def _web_get(path: str, params: dict | None = None) -> str:
         """GET request to the Rust web server. Returns JSON string."""
-        import os
         from urllib.error import URLError
         from urllib.parse import urlencode
         from urllib.request import Request, urlopen

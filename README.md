@@ -10,14 +10,15 @@ A semantic knowledge base that gives your AI agents instant access to your codeb
 
 ```bash
 # 1. Clone
-git clone https://github.com/ewheels44/Mimir.git ~/Documents/Mimir
+git clone https://github.com/ewheels44/Mimir.git ~/Mimir
+# Or any location you prefer: git clone https://github.com/ewheels44/Mimir.git /path/to/your/Mimir
 
 # 2. Global install (once — sets up MCP server + system rules)
-python ~/Documents/Mimir/mimir.py install
+python /path/to/Mimir/mimir.py install
 
 # 3. Per-project (in each project you want to index)
 cd ~/Projects/YourProject
-python ~/Documents/Mimir/mimir.py init --code-dirs=src,tests
+python /path/to/Mimir/mimir.py init --code-dirs=src,tests
 
 # 4. Restart OpenCode — your agents now have semantic search.
 ```
@@ -51,7 +52,7 @@ jcode
 
 # 2. In another terminal, install Mimir and auto-configure Jcode
 cd ~/Projects/YourProject
-python ~/Documents/Mimir/mimir-init.py --jcode
+python /path/to/Mimir/mimir-init.py --jcode
 ```
 
 This does three things:
@@ -100,10 +101,10 @@ mimir-knowledge_sdk_cache_get("stripe", "checkout sessions")
 
 ```bash
 # From within a Mimir-enabled project:
-python ~/Documents/Mimir/scripts/jcode/mimir_bridge.py --check
+python /path/to/Mimir/scripts/jcode/mimir_bridge.py --check
 
 # Or register manually:
-python ~/Documents/Mimir/scripts/jcode/mimir_bridge.py --auto
+python /path/to/Mimir/scripts/jcode/mimir_bridge.py --auto
 ```
 
 Alternatively, verify Jcode integration from any project:
@@ -128,7 +129,8 @@ mimir jcode --check
 ### Step 1: Clone Mimir
 
 ```bash
-git clone https://github.com/ewheels44/Mimir.git ~/Documents/Mimir
+git clone https://github.com/ewheels44/Mimir.git ~/Mimir
+# Or any location: git clone https://github.com/ewheels44/Mimir.git /your/preferred/path
 ```
 
 ### Step 2: Configure OpenRouter API Key
@@ -145,7 +147,7 @@ opencode auth openrouter
 ### Step 3: Global Install
 
 ```bash
-python ~/Documents/Mimir/mimir.py install
+python /path/to/Mimir/mimir.py install
 ```
 
 This does three things automatically:
@@ -153,13 +155,13 @@ This does three things automatically:
 2. Adds the Mimir MCP server to your global config (preserves existing entries)
 3. Injects Mimir rules into your system context (marker-based, clean uninstall)
 
-To uninstall later: `python ~/Documents/Mimir/mimir.py uninstall`
+To uninstall later: `python /path/to/Mimir/mimir.py uninstall`
 
 ### Step 4: Verify Installation
 
 ```bash
 # Restart OpenCode, then check tools are available
-cd ~/Documents/Mimir
+cd /path/to/Mimir
 opencode
 # Ask: "What tools are available?"
 ```
@@ -172,7 +174,7 @@ opencode
 
 ```bash
 cd ~/Projects/YourProject
-python ~/Documents/Mimir/mimir.py init --code-dirs=src,tests
+python /path/to/Mimir/mimir.py init --code-dirs=src,tests
 ```
 
 This creates:
@@ -194,32 +196,32 @@ YourProject/
 echo "# My Project Architecture" > docs/README.md
 
 # Index docs only
-python ~/Documents/Mimir/mimir.py index
+python /path/to/Mimir/mimir.py index
 
 # Add source code (optional)
 # Edit .mimir/config.json:
 #   {"code_dirs": ["src", "tests"]}
-python ~/Documents/Mimir/mimir.py index --reindex
+python /path/to/Mimir/mimir.py index --reindex
 
 # Or add incrementally
-python ~/Documents/Mimir/mimir.py index --add src
+python /path/to/Mimir/mimir.py index --add src
 ```
 
 ### Query Your Knowledge Base
 
 ```bash
 # One-shot search
-python ~/Documents/Mimir/mimir.py search "How does auth work?"
+python /path/to/Mimir/mimir.py search "How does auth work?"
 
 # RAG workflow
-python ~/Documents/Mimir/mimir.py rag "Explain the database layer"
+python /path/to/Mimir/mimir.py rag "Explain the database layer"
 
 # Knowledge agent
-python ~/Documents/Mimir/mimir.py agent "Find all API endpoints"
+python /path/to/Mimir/mimir.py agent "Find all API endpoints"
 
 # FDE workflows
-python ~/Documents/Mimir/mimir.py prep "video latency issues"
-python ~/Documents/Mimir/mimir.py diff --days 1
+python /path/to/Mimir/mimir.py prep "video latency issues"
+python /path/to/Mimir/mimir.py diff --days 1
 
 # Via opencode (automatic)
 # Just ask questions — agents use Mimir tools automatically
@@ -231,13 +233,13 @@ Install the git hook so your knowledge base stays current automatically:
 
 ```bash
 # Install in current project
-bash ~/Documents/Mimir/scripts/install-git-hooks.sh
+bash /path/to/Mimir/scripts/install-git-hooks.sh
 
 # Install in a specific project
-bash ~/Documents/Mimir/scripts/install-git-hooks.sh /path/to/project
+bash /path/to/Mimir/scripts/install-git-hooks.sh /path/to/project
 
 # Install in all Mimir projects
-bash ~/Documents/Mimir/scripts/install-git-hooks.sh --all
+bash /path/to/Mimir/scripts/install-git-hooks.sh --all
 ```
 
 After installation, every `git commit` triggers a background incremental reindex. No manual steps needed.
@@ -292,7 +294,7 @@ to add `code_dirs` if you want code changes tracked too.
 cat .mimir/reindex.log
 
 # Check tracked files
-python ~/Documents/Mimir/mimir.py stats
+python /path/to/Mimir/mimir.py stats
 ```
 
 ---
@@ -347,13 +349,13 @@ Check .knowledge/sdk-cache/stripe/
 
 ```bash
 # List cached libraries
-python ~/Documents/Mimir/mimir.py cache list
+python /path/to/Mimir/mimir.py cache list
 
 # Get docs for a library
-python ~/Documents/Mimir/mimir.py cache get stripe --topic "checkout sessions"
+python /path/to/Mimir/mimir.py cache get stripe --topic "checkout sessions"
 
 # Force refresh
-python ~/Documents/Mimir/mimir.py cache refresh stripe --topic "webhooks"
+python /path/to/Mimir/mimir.py cache refresh stripe --topic "webhooks"
 ```
 
 ---
@@ -426,7 +428,7 @@ External nodes (stdlib, third-party) are excluded from path-finding — only int
 The graph query tools require the **Rust web server** to be running:
 
 ```bash
-cd ~/Documents/Mimir/web
+cd /path/to/Mimir/web
 ./dev.sh --project /path/to/your/project
 ```
 
@@ -516,10 +518,10 @@ Reference large SDKs (indexed once globally) alongside customer code in a single
 
 ```bash
 # 1. Index a shared SDK (once, globally)
-python ~/Documents/Mimir/mimir.py index --shared-index ~/path/to/sdk/ --name acme-sdk
+python /path/to/Mimir/mimir.py index --shared-index ~/path/to/sdk/ --name acme-sdk
 
 # 2. List available shared indices
-python ~/Documents/Mimir/mimir.py index --shared-list
+python /path/to/Mimir/mimir.py index --shared-list
 
 # 3. Add to your project's .mimir/config.json:
 #    "shared_indexes": { "acme-sdk": "~/.mimir/shared-indexes/acme-sdk/llamaindex" }
@@ -554,20 +556,20 @@ Manage multiple customer engagements with isolated knowledge bases:
 
 ```bash
 # Register projects
-python ~/Documents/Mimir/mimir.py projects add ~/Projects/customer-a --name customer-a
-python ~/Documents/Mimir/mimir.py projects add ~/Projects/customer-b --name customer-b
+python /path/to/Mimir/mimir.py projects add ~/Projects/customer-a --name customer-a
+python /path/to/Mimir/mimir.py projects add ~/Projects/customer-b --name customer-b
 
 # List all projects
-python ~/Documents/Mimir/mimir.py projects list
+python /path/to/Mimir/mimir.py projects list
 
 # Switch context
-python ~/Documents/Mimir/mimir.py projects switch customer-a
+python /path/to/Mimir/mimir.py projects switch customer-a
 
 # Check status of all projects
-python ~/Documents/Mimir/mimir.py projects status
+python /path/to/Mimir/mimir.py projects status
 
 # Auto-discover projects in common locations
-python ~/Documents/Mimir/mimir.py projects discover
+python /path/to/Mimir/mimir.py projects discover
 ```
 
 ```
@@ -584,8 +586,8 @@ Generate a structured briefing before a customer call:
 
 ```bash
 # Generate a structured briefing before a customer call
-python ~/Documents/Mimir/mimir.py prep "video latency issues"
-python ~/Documents/Mimir/mimir.py prep "payment integration" --customer acme-corp
+python /path/to/Mimir/mimir.py prep "video latency issues"
+python /path/to/Mimir/mimir.py prep "payment integration" --customer acme-corp
 ```
 
 The briefing includes:
@@ -602,10 +604,10 @@ See what you learned in recent sessions:
 
 ```bash
 # What happened in the last day?
-python ~/Documents/Mimir/mimir.py diff
+python /path/to/Mimir/mimir.py diff
 
 # Last 3 days
-python ~/Documents/Mimir/mimir.py diff --days 3
+python /path/to/Mimir/mimir.py diff --days 3
 ```
 
 The report includes:
@@ -620,18 +622,18 @@ Generate a handoff document when transferring to the permanent team:
 
 ```bash
 # Generate for current directory
-python ~/Documents/Mimir/mimir.py handoff
+python /path/to/Mimir/mimir.py handoff
 
 # Generate for a registered project
-python ~/Documents/Mimir/mimir.py handoff --project customer-a
+python /path/to/Mimir/mimir.py handoff --project customer-a
 
 # With engagement summary
-python ~/Documents/Mimir/mimir.py handoff --project customer-a \
+python /path/to/Mimir/mimir.py handoff --project customer-a \
   --summary "Built video calling integration using WebRTC" \
   --customer "Acme Corp"
 
 # Custom output path
-python ~/Documents/Mimir/mimir.py handoff --project customer-a -o docs/handoff.md
+python /path/to/Mimir/mimir.py handoff --project customer-a -o docs/handoff.md
 ```
 
 The handoff document includes 9 sections:
@@ -733,7 +735,7 @@ Here's a complete working setup from a real installation:
 ### Directory Structure
 
 ```
-~/Documents/Mimir/           # Central installation
+/path/to/Mimir/           # Central installation
 ├── mimir.py                       # Unified CLI (all commands)
 ├── mcp_server_llamaindex.py       # MCP server (used by mimir server)
 ├── mimir-init.py                  # Project initializer (used by mimir init)
@@ -813,7 +815,7 @@ After running `mimir-init.py --install`, your config will include:
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
     "mimir-knowledge": {
-      "command": ["~/Documents/Mimir/scripts/run_mcp_server.sh"],
+      "command": ["/path/to/Mimir/scripts/run_mcp_server.sh"],
       "args": [],
       "env": {
         "EMBEDDING_MODEL": "text-embedding-3-small",
@@ -834,10 +836,10 @@ The installer auto-detects your Mimir path — no manual editing needed.
 mimir jcode --check
 
 # Quick setup (registers skill, prompt, and MCP config)
-python ~/Documents/Mimir/scripts/jcode/mimir_bridge.py --auto
+python /path/to/Mimir/scripts/jcode/mimir_bridge.py --auto
 
 # Clean up all Mimir Jcode config
-python ~/Documents/Mimir/scripts/jcode/mimir_bridge.py --unregister
+python /path/to/Mimir/scripts/jcode/mimir_bridge.py --unregister
 ```
 
 ### Auth Config: `~/.local/share/opencode/auth.json`
@@ -1029,7 +1031,7 @@ Visual interface for exploring your knowledge base:
 
 ```bash
 # Development mode
-cd ~/Documents/Mimir/web
+cd /path/to/Mimir/web
 ./dev.sh --project /path/to/your/project
 
 # Production build
@@ -1052,10 +1054,10 @@ Mimir tracks usage and calculates savings:
 
 ```bash
 # View 30-day report
-python ~/Documents/Mimir/mimir.py metrics
+python /path/to/Mimir/mimir.py metrics
 
 # View last 7 days
-python ~/Documents/Mimir/mimir.py metrics --days 7
+python /path/to/Mimir/mimir.py metrics --days 7
 ```
 
 **Typical Savings**: 60-80% reduction in token costs vs. traditional exploration.
@@ -1067,7 +1069,7 @@ python ~/Documents/Mimir/mimir.py metrics --days 7
 All commands go through a single entry point: `mimir.py`
 
 ```bash
-python ~/Documents/Mimir/mimir.py <command>
+python /path/to/Mimir/mimir.py <command>
 ```
 
 ### Core
@@ -1145,7 +1147,7 @@ python ~/Documents/Mimir/mimir.py <command>
 ### Quick Diagnosis
 
 ```bash
-python ~/Documents/Mimir/mimir.py health
+python /path/to/Mimir/mimir.py health
 ```
 
 This returns:
@@ -1160,7 +1162,7 @@ This returns:
 The MCP server can run with either `uv` or plain `python3`. If both are missing:
 
 ```bash
-cd ~/Documents/Mimir
+cd /path/to/Mimir
 uv sync
 ```
 
@@ -1174,7 +1176,7 @@ cat ~/.local/share/opencode/auth.json
 export OPENROUTER_API_KEY="sk-or-v1-your-key"
 
 # Or check what MimirConfig sees:
-cd ~/Documents/Mimir
+cd /path/to/Mimir
 python -c "from src.mimir.config import get_config, reset_config; reset_config(); c = get_config(); print(c.to_dict())"
 ```
 
@@ -1183,17 +1185,17 @@ python -c "from src.mimir.config import get_config, reset_config; reset_config()
 ```bash
 # Check what MimirConfig resolves to:
 cd /path/to/your/project
-python ~/Documents/Mimir/mimir.py health
+python /path/to/Mimir/mimir.py health
 
 # Index the project
-python ~/Documents/Mimir/mimir.py index
+python /path/to/Mimir/mimir.py index
 ```
 
 ### MCP server not starting
 
 ```bash
 # Check the wrapper script
-~/Documents/Mimir/scripts/run_mcp_server.sh --help
+/path/to/Mimir/scripts/run_mcp_server.sh --help
 
 # Check logs (opencode shows MCP logs in console)
 # The wrapper now supports both uv and plain python3

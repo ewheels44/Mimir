@@ -1,11 +1,10 @@
-from typing import Annotated, TypedDict, Literal
-from pathlib import Path
 import json
+from typing import Annotated, Literal, Optional, TypedDict
 
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage
-from langgraph.graph import StateGraph, END
-from langgraph.graph.message import add_messages
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
+from langgraph.graph.message import add_messages
 
 from .utils import create_llm, detect_project_root, get_mcp_client
 
@@ -13,6 +12,17 @@ from .utils import create_llm, detect_project_root, get_mcp_client
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     knowledge_stats: dict
+    mcp_client: Optional[object]  # Store client in state for reuse
+
+
+async def cleanup_client(state: AgentState):
+    """Clean up MCP client if it exists in state."""
+    client = state.get("mcp_client")
+    if client and hasattr(client, 'close'):
+        try:
+            await client.close()
+        except Exception as e:
+            print(f"[Knowledge Agent] Error closing MCP client: {e}")
 
 
 async def check_knowledge(state: AgentState) -> AgentState:
@@ -39,11 +49,11 @@ async def check_knowledge(state: AgentState) -> AgentState:
                 stats = result
             else:
                 stats = {"has_index": False}
-            return {**state, "knowledge_stats": stats}
+            return {**state, "knowledge_stats": stats, "mcp_client": client}
     except Exception as e:
         print(f"[Knowledge Agent] Error checking knowledge base: {e}")
 
-    return {**state, "knowledge_stats": {"has_index": False}}
+    return {**state, "knowledge_stats": {"has_index": False}, "mcp_client": client}
 
 
 async def agent(state: AgentState) -> AgentState:
@@ -53,6 +63,7 @@ async def agent(state: AgentState) -> AgentState:
     has_index = stats.get("has_index", False)
 
     if not has_index:
+        await cleanup_client(state)
         return {
             **state,
             "messages": [
@@ -69,8 +80,10 @@ async def agent(state: AgentState) -> AgentState:
 
 Use the search or query tools to find information. Be concise and cite sources."""
 
-    project_root = detect_project_root()
-    client = get_mcp_client(project_root)
+    client = state.get("mcp_client")
+    if not client:
+        project_root = detect_project_root()
+        client = get_mcp_client(project_root)
 
     tools = await client.get_tools()
     llm_with_tools = llm.bind_tools(tools)
@@ -79,7 +92,7 @@ Use the search or query tools to find information. Be concise and cite sources."
         [HumanMessage(content=system_prompt)] + state["messages"]
     )
 
-    return {**state, "messages": [response]}
+    return {**state, "messages": [response], "mcp_client": client}
 
 
 async def execute_tools(state: AgentState) -> AgentState:
@@ -88,8 +101,10 @@ async def execute_tools(state: AgentState) -> AgentState:
     if not last_message.tool_calls:
         return state
 
-    project_root = detect_project_root()
-    client = get_mcp_client(project_root)
+    client = state.get("mcp_client")
+    if not client:
+        project_root = detect_project_root()
+        client = get_mcp_client(project_root)
 
     tools = await client.get_tools()
     tools_by_name = {tool.name: tool for tool in tools}
@@ -123,17 +138,23 @@ async def execute_tools(state: AgentState) -> AgentState:
                 ToolMessage(content=f"Tool {tool_name} not found", tool_call_id=tool_id)
             )
 
-    return {**state, "messages": tool_messages}
+    return {**state, "messages": tool_messages, "mcp_client": client}
 
 
-def should_continue(state: AgentState) -> Literal["execute_tools", "__end__"]:
+def should_continue(state: AgentState) -> Literal["execute_tools", "cleanup", "__end__"]:
     messages = state["messages"]
     last_message = messages[-1]
 
     if last_message.tool_calls:
         return "execute_tools"
 
-    return END
+    return "cleanup"
+
+
+async def cleanup(state: AgentState) -> AgentState:
+    """Cleanup node to close MCP client."""
+    await cleanup_client(state)
+    return state
 
 
 def create_graph():
@@ -142,13 +163,15 @@ def create_graph():
     workflow.add_node("check", check_knowledge)
     workflow.add_node("agent", agent)
     workflow.add_node("execute_tools", execute_tools)
+    workflow.add_node("cleanup", cleanup)
 
     workflow.set_entry_point("check")
     workflow.add_edge("check", "agent")
     workflow.add_conditional_edges(
-        "agent", should_continue, {"execute_tools": "execute_tools", "__end__": END}
+        "agent", should_continue, {"execute_tools": "execute_tools", "cleanup": "cleanup", "__end__": END}
     )
     workflow.add_edge("execute_tools", "agent")
+    workflow.add_edge("cleanup", END)
 
     return workflow.compile(checkpointer=MemorySaver())
 

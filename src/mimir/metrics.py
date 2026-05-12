@@ -10,13 +10,10 @@ v2 additions:
 """
 
 import json
-import os
-import time
-from dataclasses import dataclass, asdict, field
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
-
 
 # ---------------------------------------------------------------------------
 # Cost tables
@@ -359,8 +356,7 @@ class MetricsTracker:
                         continue
                     try:
                         data = json.loads(line)
-                        if cutoff:
-                            if datetime.fromisoformat(data["timestamp"]) < cutoff:
+                        if cutoff and datetime.fromisoformat(data["timestamp"]) < cutoff:
                                 continue
                         metrics.append(QueryMetrics.from_dict(data))
                     except (json.JSONDecodeError, KeyError, TypeError):

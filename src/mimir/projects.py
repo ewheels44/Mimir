@@ -4,12 +4,13 @@ Multi-Project Management for Mimir
 Manages multiple Mimir projects with a central registry.
 """
 
+import builtins
+import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
-import json
-import logging
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +153,7 @@ class ProjectManager:
         """Get a project by name."""
         return self._projects.get(name)
 
-    def list(self) -> List[ProjectEntry]:
+    def list(self) -> list[ProjectEntry]:
         """List all registered projects."""
         return list(self._projects.values())
 
@@ -173,7 +174,7 @@ class ProjectManager:
         logger.info(f"Switched to project '{name}'")
         return entry
 
-    def discover(self, search_paths: Optional[List[Path | str]] = None) -> List[Path]:
+    def discover(self, search_paths: Optional[builtins.list[Path | str]] = None) -> builtins.list[Path]:
         """Discover Mimir projects by searching for .mimir/config.json files."""
         if search_paths is None:
             search_paths = [

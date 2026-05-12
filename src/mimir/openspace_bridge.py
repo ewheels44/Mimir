@@ -27,11 +27,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import re
 import time
-from dataclasses import dataclass, field
-from functools import lru_cache
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -267,10 +265,7 @@ _BLOCKED_FILENAMES = {
 
 def _is_sensitive(text: str) -> bool:
     """Check if text contains sensitive patterns."""
-    for pattern in _SENSITIVE_PATTERNS:
-        if pattern.search(text):
-            return True
-    return False
+    return any(pattern.search(text) for pattern in _SENSITIVE_PATTERNS)
 
 
 def _filter_sensitive(text: str) -> str:
@@ -380,9 +375,7 @@ class MimirOpenSpaceBridge:
         """Check kill switch + circuit breaker."""
         if not self._config.enabled:
             return False
-        if self._circuit.check(self._config.circuit_breaker_reset_seconds):
-            return False
-        return True
+        return not self._circuit.check(self._config.circuit_breaker_reset_seconds)
 
     def _resolve_api_key(self) -> tuple[str, Optional[str]]:
         """Resolve API key — uses MimirConfig as single source of truth."""

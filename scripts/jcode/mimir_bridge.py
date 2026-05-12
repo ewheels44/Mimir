@@ -181,9 +181,20 @@ def get_mimir_skill(project_root: Path) -> dict:
             },
         ],
         "config": {
-            "auto_activate": False,
+            "auto_activate": "smart",  # Uses should_use_mimir() classifier
             "priority": "high",
             "max_context_tokens": 8000,
+            "activation": {
+                "mode": "smart",  # Options: on|off|smart
+                "skip_patterns": [
+                    "git", "ls", "cd", "mkdir", "rm",
+                    "readme", "license", "changelog"
+                ],
+                "require_keywords": [
+                    "code", "function", "class", "bug", "feature",
+                    "implement", "fix", "refactor", "test"
+                ]
+            }
         },
     }
 
@@ -216,6 +227,26 @@ You have access to deep project knowledge for **{project_root.name}**.
 The knowledge base is located at `{project_root / ".knowledge" / "llamaindex"}`
 and includes semantic search, a code knowledge graph, and RAG workflows.
 
+### Smart Auto-Activation (NEW)
+
+Mimir now uses **smart activation** - it automatically decides when to use
+project knowledge based on the task:
+
+**ALWAYS use Mimir for:**
+- Tasks with code keywords: "function", "class", "bug", "feature", "refactor", "implement", "fix"
+- Questions: "how does X work?", "where is Y used?", "trace Z"
+- Architecture tasks: "design", "pattern", "flow", "dependency"
+
+**SKIP Mimir for:**
+- Shell operations: `git`, `ls`, `cd`, `mkdir`, `rm`, `cp`, `mv`
+- Documentation-only: editing README, LICENSE, CHANGELOG
+- Non-project questions: weather, time, general knowledge
+
+**Decision rule:**
+If the task mentions code, functions, classes, bugs, features, or asks
+"how/where/why" about the project → use Mimir.
+If it's shell commands or docs → skip Mimir.
+
 ### When to use Mimir tools:
 1. **Before starting any task**: Call `mimir-knowledge_enrich_task(task_description)`
    to get project-specific conventions, patterns, and context.
@@ -239,6 +270,10 @@ and includes semantic search, a code knowledge graph, and RAG workflows.
 - Starting a task? → `mimir-knowledge_enrich_task` FIRST, then implement
 - Need to trace how X connects to Y? → `mimir-knowledge_graph_query`
 - External library question? → `mimir-knowledge_sdk_cache_get` → web fallback
+
+### Programmatic check:
+For automation, use the `should_use_mimir()` function from `mimir.activation`
+to programmatically determine if Mimir should be used for a task.
 """
 
 

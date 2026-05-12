@@ -28,7 +28,6 @@ import sys
 import time
 from pathlib import Path
 
-
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 MIMIR_RULES_START = "<!-- MIMIR_RULES_START -->"
@@ -299,7 +298,7 @@ def install_mcp_config(opencode_config_dir: Path, mimir_root: Path) -> dict:
 
 def global_install(mimir_root: Path, opencode_config_dir: Path, force: bool) -> bool:
     """Run global installation: MCP config + system rules."""
-    print(f"\n🔧 Global Mimir Install")
+    print("\n🔧 Global Mimir Install")
     print(f"   Mimir root: {mimir_root}")
     print(f"   OpenCode config: {opencode_config_dir}")
 
@@ -315,7 +314,7 @@ def global_install(mimir_root: Path, opencode_config_dir: Path, force: bool) -> 
     if mcp_result["backed_up"]:
         print(f"   ✓ Backed up opencode.json → {mcp_result['backed_up']}")
     if mcp_result["updated"]:
-        print(f"   ✓ Updated opencode.json with Mimir MCP server")
+        print("   ✓ Updated opencode.json with Mimir MCP server")
 
     # 2. System rules
     print("\n📋 System Rules:")
@@ -323,24 +322,24 @@ def global_install(mimir_root: Path, opencode_config_dir: Path, force: bool) -> 
     if rules_result["backed_up"]:
         print(f"   ✓ Backed up system-context.md → {rules_result['backed_up']}")
     if rules_result["injected"]:
-        print(f"   ✓ Injected Mimir rules into system-context.md")
+        print("   ✓ Injected Mimir rules into system-context.md")
     if rules_result["skipped"]:
-        print(f"   ⏭️  Mimir rules already present (use --force to re-inject)")
+        print("   ⏭️  Mimir rules already present (use --force to re-inject)")
 
     # 3. API key check
     api_key = get_openrouter_api_key()
     if api_key:
-        print(f"\n🔑 OpenRouter API key found")
+        print("\n🔑 OpenRouter API key found")
     else:
-        print(f"\n⚠️  No OpenRouter API key found")
-        print(f"   Set OPENROUTER_API_KEY or run: opencode auth openrouter")
+        print("\n⚠️  No OpenRouter API key found")
+        print("   Set OPENROUTER_API_KEY or run: opencode auth openrouter")
 
-    print(f"\n✅ Global install complete!")
-    print(f"\nNext steps:")
-    print(f"  1. Restart OpenCode to pick up the MCP server")
+    print("\n✅ Global install complete!")
+    print("\nNext steps:")
+    print("  1. Restart OpenCode to pick up the MCP server")
     mimir_cli = Path(__file__).resolve().parent / "mimir.py"
     print(f"  2. In any project, run: python {mimir_cli} init --code-dirs=src,tests")
-    print(f"  3. Then use: mimir-knowledge_enrich_task()")
+    print("  3. Then use: mimir-knowledge_enrich_task()")
     print(f"\nTo uninstall: python {mimir_cli} uninstall")
 
     return True
@@ -351,7 +350,7 @@ def global_install(mimir_root: Path, opencode_config_dir: Path, force: bool) -> 
 
 def global_uninstall(opencode_config_dir: Path) -> bool:
     """Remove Mimir from global config. Restores backups if available."""
-    print(f"\n🗑️  Mimir Uninstall")
+    print("\n🗑️  Mimir Uninstall")
     backup_dir = opencode_config_dir / "mimir-backups"
 
     restored = False
@@ -359,7 +358,7 @@ def global_uninstall(opencode_config_dir: Path) -> bool:
     # Try to restore opencode.json from backup
     config_path = opencode_config_dir / "opencode.json"
     if restore_latest_backup("opencode.json", config_path, backup_dir):
-        print(f"   ✓ Restored opencode.json from backup")
+        print("   ✓ Restored opencode.json from backup")
         restored = True
     elif config_path.exists():
         # Clean removal of Mimir entries
@@ -377,7 +376,7 @@ def global_uninstall(opencode_config_dir: Path) -> bool:
     # Try to restore system-context.md from backup
     system_context = opencode_config_dir / "prompts" / "system-context.md"
     if restore_latest_backup("system-context.md", system_context, backup_dir):
-        print(f"   ✓ Restored system-context.md from backup")
+        print("   ✓ Restored system-context.md from backup")
         restored = True
     elif system_context.exists():
         # Clean removal using markers
@@ -386,17 +385,17 @@ def global_uninstall(opencode_config_dir: Path) -> bool:
             before = content.split(MIMIR_RULES_START)[0]
             after = content.split(MIMIR_RULES_END)[1]
             system_context.write_text(before.rstrip() + after)
-            print(f"   ✓ Removed Mimir rules from system-context.md")
+            print("   ✓ Removed Mimir rules from system-context.md")
             restored = True
 
     if not restored:
-        print(f"   ℹ️  Nothing to uninstall")
+        print("   ℹ️  Nothing to uninstall")
 
     if backup_dir.exists():
         print(f"\n   Backups preserved at: {backup_dir}/")
         print(f"   To delete: rm -rf {backup_dir}")
 
-    print(f"\n✅ Uninstall complete. Restart OpenCode to apply.")
+    print("\n✅ Uninstall complete. Restart OpenCode to apply.")
     return True
 
 
@@ -512,10 +511,8 @@ def init_project(project_root: Path, mimir_root: Path, args) -> bool:
         from tqdm import tqdm
     except ImportError:
         # Fallback if tqdm not installed
-        def tqdm(iterable, **kwargs):
-            return iterable
 
-        class tqdm:
+        class tqdm:  # noqa: F811
             @staticmethod
             def write(msg):
                 print(msg)
@@ -567,9 +564,9 @@ def init_project(project_root: Path, mimir_root: Path, args) -> bool:
 
     # Git post-commit hook for auto-reindexing
     if install_git_hook(project_root, mimir_root):
-        print(f"   ✓ Installed git post-commit hook (auto-reindex on commit)")
+        print("   ✓ Installed git post-commit hook (auto-reindex on commit)")
     else:
-        print(f"   ⏭️  Skipped git hook (not a git repo or hook already installed)")
+        print("   ⏭️  Skipped git hook (not a git repo or hook already installed)")
 
     # Jcode bridge integration
     if getattr(args, 'jcode', False):
@@ -578,11 +575,11 @@ def init_project(project_root: Path, mimir_root: Path, args) -> bool:
             if str(mimir_root) not in sys.path:
                 sys.path.insert(0, str(mimir_root))
             from scripts.jcode.mimir_bridge import (
-                register_skill,
                 inject_mimir_prompt,
                 register_mcp_server,
+                register_skill,
             )
-            print(f"\n🔗 Jcode integration:")
+            print("\n🔗 Jcode integration:")
             r1 = register_skill(project_root)
             print(f"   {r1}")
             r2 = inject_mimir_prompt(project_root)
@@ -590,19 +587,19 @@ def init_project(project_root: Path, mimir_root: Path, args) -> bool:
             r3 = register_mcp_server(project_root, mimir_root)
             print(f"   {r3}")
         except ImportError:
-            print(f"   ⚠️  Could not import Jcode bridge (script not found)")
+            print("   ⚠️  Could not import Jcode bridge (script not found)")
 
     # API key check
     api_key = get_openrouter_api_key()
     if api_key:
-        print(f"\n🔑 OpenRouter API key found")
+        print("\n🔑 OpenRouter API key found")
     else:
-        print(f"\n⚠️  No OpenRouter API key found")
-        print(f"   Set OPENROUTER_API_KEY or run: opencode auth openrouter")
+        print("\n⚠️  No OpenRouter API key found")
+        print("   Set OPENROUTER_API_KEY or run: opencode auth openrouter")
 
     # Index documents
     if not args.no_index and docs_dir.exists() and any(docs_dir.iterdir()):
-        print(f"\n📚 Indexing documents...")
+        print("\n📚 Indexing documents...")
         env = {**os.environ}
         if api_key:
             env["OPENROUTER_API_KEY"] = api_key
@@ -618,16 +615,16 @@ def init_project(project_root: Path, mimir_root: Path, args) -> bool:
             print(f"\n❌ Indexing failed (exit code {result.returncode})")
             return False
     elif not args.no_index:
-        print(f"\n⚠️  No documents to index yet")
-        print(f"   Add files to docs/ then run: python .opencode/mimir-index.py")
+        print("\n⚠️  No documents to index yet")
+        print("   Add files to docs/ then run: python .opencode/mimir-index.py")
 
-    print(f"\n✅ Project initialized!")
-    print(f"\nNext steps:")
-    print(f"  1. Add docs to docs/ and code to your source dirs")
-    print(f"  2. Index: python .opencode/mimir-index.py")
-    print(f"  3. Query: mimir-knowledge_enrich_task('your question')")
-    print(f"\n💡 For graph queries (how does X connect to Y?), start the Web UI:")
-    print(f"   cd ~/Documents/Mimir/web && ./dev.sh --project $(pwd)")
+    print("\n✅ Project initialized!")
+    print("\nNext steps:")
+    print("  1. Add docs to docs/ and code to your source dirs")
+    print("  2. Index: python .opencode/mimir-index.py")
+    print("  3. Query: mimir-knowledge_enrich_task('your question')")
+    print("\n💡 For graph queries (how does X connect to Y?), start the Web UI:")
+    print("   cd ~/Documents/Mimir/web && ./dev.sh --project $(pwd)")
 
     return True
 
@@ -724,17 +721,14 @@ def main():
             if str(mimir_root) not in sys.path:
                 sys.path.insert(0, str(mimir_root))
             from scripts.jcode.mimir_bridge import (
-                register_skill,
-                inject_mimir_prompt,
-                register_mcp_server,
-                is_jcode_running,
                 find_jcode_socket,
+                is_jcode_running,
             )
         except ImportError:
             print("❌ Could not import Jcode bridge (script not found)")
             return 1
 
-        print(f"\n🔍 Jcode Integration Check")
+        print("\n🔍 Jcode Integration Check")
         print(f"   Mimir root: {mimir_root}")
 
         jcode_running = is_jcode_running()
@@ -761,7 +755,7 @@ def main():
             if has_server:
                 print(f"     → {mcp_config_file}")
         else:
-            print(f"   MCP config: 🔴 No ~/.jcode/mcp.json found")
+            print("   MCP config: 🔴 No ~/.jcode/mcp.json found")
 
         # Check prompt file
         prompt_file = Path.home() / ".jcode" / "prompts" / f"mimir-{project_root.name}.md"

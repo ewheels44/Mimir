@@ -384,7 +384,7 @@ def _load_config_file(project_root: Path) -> dict:
         try:
             with open(config_path) as f:
                 return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
+        except (OSError, json.JSONDecodeError) as e:
             logger.warning("Failed to load config file %s: %s", config_path, e)
     return {}
 

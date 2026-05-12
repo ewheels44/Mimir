@@ -22,15 +22,16 @@ Public API
 """
 
 import ast
+import contextlib
 import json
 import keyword
 import os
 import re
 import tempfile
 from collections import defaultdict
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
+from typing import Optional
 
 from src.mimir.utils import should_exclude as _should_exclude_files
 
@@ -38,7 +39,7 @@ from src.mimir.utils import should_exclude as _should_exclude_files
 # Constants
 # ---------------------------------------------------------------------------
 
-EXCLUDE_DIRS: Set[str] = {
+EXCLUDE_DIRS: set[str] = {
     "__pycache__",
     "node_modules",
     ".venv",
@@ -58,7 +59,7 @@ EXCLUDE_DIRS: Set[str] = {
     ".output",
 }
 
-EXTENSION_TO_LANGUAGE: Dict[str, str] = {
+EXTENSION_TO_LANGUAGE: dict[str, str] = {
     ".py": "python",
     ".ts": "typescript",
     ".tsx": "typescript",
@@ -71,14 +72,14 @@ EXTENSION_TO_LANGUAGE: Dict[str, str] = {
 }
 
 # Per-language keywords — used to filter noise out of extracted identifiers.
-_PYTHON_KW: FrozenSet[str] = frozenset(keyword.kwlist) | {
+_PYTHON_KW: frozenset[str] = frozenset(keyword.kwlist) | {
     "True",
     "False",
     "None",
     "self",
     "cls",
 }
-_JS_KW: FrozenSet[str] = frozenset(
+_JS_KW: frozenset[str] = frozenset(
     {
         "var",
         "let",
@@ -124,7 +125,7 @@ _JS_KW: FrozenSet[str] = frozenset(
         "void",
     }
 )
-_RUST_KW: FrozenSet[str] = frozenset(
+_RUST_KW: frozenset[str] = frozenset(
     {
         "fn",
         "let",
@@ -161,7 +162,7 @@ _RUST_KW: FrozenSet[str] = frozenset(
         "box",
     }
 )
-_GO_KW: FrozenSet[str] = frozenset(
+_GO_KW: frozenset[str] = frozenset(
     {
         "func",
         "var",
@@ -203,7 +204,7 @@ _GO_KW: FrozenSet[str] = frozenset(
     }
 )
 
-_LANG_KEYWORDS: Dict[str, FrozenSet[str]] = {
+_LANG_KEYWORDS: dict[str, frozenset[str]] = {
     "python": _PYTHON_KW,
     "typescript": _JS_KW,
     "javascript": _JS_KW,
@@ -227,7 +228,7 @@ class Relationship:
     relation_type: (
         str  # imports_module | imports_from | inherits_from | calls | has_method
     )
-    metadata: Dict
+    metadata: dict
 
     def to_dict(self) -> dict:
         return {
@@ -244,7 +245,7 @@ class CodeEntity:
     entity_type: str  # class | method | function | struct | interface
     file_path: str
     line_number: int
-    metadata: Dict
+    metadata: dict
 
 
 # ---------------------------------------------------------------------------
@@ -296,14 +297,14 @@ class PythonASTExtractor:
 
     def __init__(self, project_root: Path):
         self.project_root = Path(project_root)
-        self.relationships: List[Relationship] = []
-        self.entities: Dict[str, CodeEntity] = {}
+        self.relationships: list[Relationship] = []
+        self.entities: dict[str, CodeEntity] = {}
 
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
 
-    def extract_from_file(self, file_path: Path) -> List[Relationship]:
+    def extract_from_file(self, file_path: Path) -> list[Relationship]:
         if file_path.suffix.lower() != ".py":
             return []
         try:
@@ -317,14 +318,14 @@ class PythonASTExtractor:
             return []
 
         rel_path = self._rel(file_path)
-        rels: List[Relationship] = []
+        rels: list[Relationship] = []
         rels.extend(self._imports(tree, rel_path))
         rels.extend(self._classes(tree, rel_path))
         rels.extend(self._calls(tree, rel_path))
         return rels
 
-    def extract_from_directory(self, directory: Path) -> List[Relationship]:
-        found: List[Relationship] = []
+    def extract_from_directory(self, directory: Path) -> list[Relationship]:
+        found: list[Relationship] = []
         for py_file in sorted(directory.rglob("*.py")):
             if _should_exclude(py_file):
                 continue
@@ -347,8 +348,8 @@ class PythonASTExtractor:
             json.dump(data, f, indent=2)
         print(f"\n✅ Saved {len(self.relationships)} relationships → {output_path}")
 
-    def get_stats(self) -> Dict:
-        type_counts: Dict[str, int] = defaultdict(int)
+    def get_stats(self) -> dict:
+        type_counts: dict[str, int] = defaultdict(int)
         for r in self.relationships:
             type_counts[r.relation_type] += 1
         return {
@@ -368,8 +369,8 @@ class PythonASTExtractor:
         except ValueError:
             return str(path)
 
-    def _imports(self, tree: ast.Module, rel_path: str) -> List[Relationship]:
-        rels: List[Relationship] = []
+    def _imports(self, tree: ast.Module, rel_path: str) -> list[Relationship]:
+        rels: list[Relationship] = []
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
@@ -400,8 +401,8 @@ class PythonASTExtractor:
                     )
         return rels
 
-    def _classes(self, tree: ast.Module, rel_path: str) -> List[Relationship]:
-        rels: List[Relationship] = []
+    def _classes(self, tree: ast.Module, rel_path: str) -> list[Relationship]:
+        rels: list[Relationship] = []
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef):
                 continue
@@ -451,7 +452,7 @@ class PythonASTExtractor:
                     )
         return rels
 
-    def _calls(self, tree: ast.Module, rel_path: str) -> List[Relationship]:
+    def _calls(self, tree: ast.Module, rel_path: str) -> list[Relationship]:
         """Function / method calls — deduplicated per file.
 
         Now captures:
@@ -460,11 +461,11 @@ class PythonASTExtractor:
           - attr calls:     module.func()
           - chained calls:  self.builder().configure().run()
         """
-        rels: List[Relationship] = []
-        seen_local: Set[str] = set()
+        rels: list[Relationship] = []
+        seen_local: set[str] = set()
 
         # Also track calls at deeper levels (self.x.y())
-        seen_qualified: Set[str] = set()
+        seen_qualified: set[str] = set()
 
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -475,8 +476,7 @@ class PythonASTExtractor:
 
             # For simple top-level names (foo), keep just the identifier
             top = name.split(".")[0]
-            if top and _is_valid_identifier(top, "python"):
-                if top not in seen_local:
+            if top and _is_valid_identifier(top, "python") and top not in seen_local:
                     seen_local.add(top)
                     rels.append(
                         Relationship(
@@ -527,21 +527,21 @@ class PythonASTExtractor:
 # Node type sets per language — what we look for when walking the tree.
 # These match the actual grammar node types produced by tree-sitter-languages.
 
-_TS_IMPORT_NODES: Dict[str, Set[str]] = {
+_TS_IMPORT_NODES: dict[str, set[str]] = {
     "typescript": {"import_statement", "import_declaration"},
     "javascript": {"import_statement", "import_declaration"},
     "rust": {"use_declaration"},
     "go": {"import_declaration", "import_spec"},
 }
 
-_TS_CLASS_NODES: Dict[str, Set[str]] = {
+_TS_CLASS_NODES: dict[str, set[str]] = {
     "typescript": {"class_declaration", "abstract_class_declaration", "class_body"},
     "javascript": {"class_declaration", "class_expression"},
     "rust": {"struct_item", "impl_item", "trait_item", "enum_item"},
     "go": {"type_spec"},
 }
 
-_TS_CALL_NAME_NODES: Dict[str, Set[str]] = {
+_TS_CALL_NAME_NODES: dict[str, set[str]] = {
     "typescript": {"identifier"},
     "javascript": {"identifier"},
     "rust": {"identifier"},
@@ -549,9 +549,9 @@ _TS_CALL_NAME_NODES: Dict[str, Set[str]] = {
 }
 
 
-def _try_import_treesitter() -> Tuple[Optional[object], Optional[object]]:
+def _try_import_treesitter() -> tuple[Optional[object], Optional[object]]:
     try:
-        from tree_sitter_languages import get_parser, get_language  # type: ignore
+        from tree_sitter_languages import get_language, get_parser  # type: ignore
 
         return get_parser, get_language
     except ImportError:
@@ -572,7 +572,7 @@ class TreeSitterExtractor:
     Only handles non-Python files. Use CombinedExtractor to get both.
     """
 
-    SUPPORTED: Set[str] = {"typescript", "javascript", "rust", "go"}
+    SUPPORTED: set[str] = {"typescript", "javascript", "rust", "go"}
 
     def __init__(self, project_root: Path):
         get_parser, get_language = _try_import_treesitter()
@@ -584,15 +584,15 @@ class TreeSitterExtractor:
         self._get_parser = get_parser
         self._get_language = get_language
         self.project_root = Path(project_root)
-        self.relationships: List[Relationship] = []
-        self.entities: Dict[str, CodeEntity] = {}
-        self._parser_cache: Dict[str, object] = {}
+        self.relationships: list[Relationship] = []
+        self.entities: dict[str, CodeEntity] = {}
+        self._parser_cache: dict[str, object] = {}
 
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
 
-    def extract_from_file(self, file_path: Path) -> List[Relationship]:
+    def extract_from_file(self, file_path: Path) -> list[Relationship]:
         lang = EXTENSION_TO_LANGUAGE.get(file_path.suffix.lower())
         if lang not in self.SUPPORTED:
             return []
@@ -624,8 +624,8 @@ class TreeSitterExtractor:
         rels = extractor_fn(tree.root_node, source_bytes, rel_path, lang)
         return rels
 
-    def extract_from_directory(self, directory: Path) -> List[Relationship]:
-        found: List[Relationship] = []
+    def extract_from_directory(self, directory: Path) -> list[Relationship]:
+        found: list[Relationship] = []
         supported_exts = {
             ext for ext, lang in EXTENSION_TO_LANGUAGE.items() if lang in self.SUPPORTED
         }
@@ -656,9 +656,9 @@ class TreeSitterExtractor:
             json.dump(data, f, indent=2)
         print(f"\n✅ Saved {len(self.relationships)} relationships → {output_path}")
 
-    def get_stats(self) -> Dict:
-        type_counts: Dict[str, int] = defaultdict(int)
-        lang_counts: Dict[str, int] = defaultdict(int)
+    def get_stats(self) -> dict:
+        type_counts: dict[str, int] = defaultdict(int)
+        lang_counts: dict[str, int] = defaultdict(int)
         for r in self.relationships:
             type_counts[r.relation_type] += 1
             lang_counts[r.metadata.get("lang", "unknown")] += 1
@@ -690,10 +690,10 @@ class TreeSitterExtractor:
 
     def _extract_ts_js(
         self, root, source: bytes, rel_path: str, lang: str
-    ) -> List[Relationship]:
-        rels: List[Relationship] = []
-        seen_imports: Set[str] = set()
-        seen_calls: Set[str] = set()
+    ) -> list[Relationship]:
+        rels: list[Relationship] = []
+        seen_imports: set[str] = set()
+        seen_calls: set[str] = set()
 
         for node in _walk_ts_tree(root):
             ntype = node.type
@@ -726,7 +726,7 @@ class TreeSitterExtractor:
                 "class_expression",
             ):
                 class_name = None
-                bases: List[str] = []
+                bases: list[str] = []
 
                 for child in node.children:
                     if child.type in ("identifier", "type_identifier"):
@@ -804,10 +804,10 @@ class TreeSitterExtractor:
 
     def _extract_rust(
         self, root, source: bytes, rel_path: str, lang: str
-    ) -> List[Relationship]:
-        rels: List[Relationship] = []
-        seen_uses: Set[str] = set()
-        seen_calls: Set[str] = set()
+    ) -> list[Relationship]:
+        rels: list[Relationship] = []
+        seen_uses: set[str] = set()
+        seen_calls: set[str] = set()
 
         for node in _walk_ts_tree(root):
             ntype = node.type
@@ -884,9 +884,7 @@ class TreeSitterExtractor:
                 if func_node is None:
                     continue
                 # Rust calls: identifier, field_expression, scoped_identifier
-                if func_node.type == "identifier":
-                    name = _ts_node_text(func_node, source)
-                elif func_node.type == "scoped_identifier":
+                if func_node.type == "identifier" or func_node.type == "scoped_identifier":
                     name = _ts_node_text(func_node, source)
                 elif func_node.type == "field_expression":
                     # Full qualified name: receiver.method → "receiver.method"
@@ -913,10 +911,10 @@ class TreeSitterExtractor:
 
     def _extract_go(
         self, root, source: bytes, rel_path: str, lang: str
-    ) -> List[Relationship]:
-        rels: List[Relationship] = []
-        seen_imports: Set[str] = set()
-        seen_calls: Set[str] = set()
+    ) -> list[Relationship]:
+        rels: list[Relationship] = []
+        seen_imports: set[str] = set()
+        seen_calls: set[str] = set()
 
         for node in _walk_ts_tree(root):
             ntype = node.type
@@ -1000,14 +998,14 @@ class CombinedExtractor:
         self._ts = TreeSitterExtractor(project_root)
 
     @property
-    def relationships(self) -> List[Relationship]:
+    def relationships(self) -> list[Relationship]:
         return self._py.relationships + self._ts.relationships
 
     @property
-    def entities(self) -> Dict[str, CodeEntity]:
+    def entities(self) -> dict[str, CodeEntity]:
         return {**self._py.entities, **self._ts.entities}
 
-    def extract_from_file(self, file_path: Path) -> List[Relationship]:
+    def extract_from_file(self, file_path: Path) -> list[Relationship]:
         if file_path.suffix.lower() == ".py":
             rels = self._py.extract_from_file(file_path)
             self._py.relationships.extend(rels)
@@ -1016,9 +1014,9 @@ class CombinedExtractor:
             self._ts.relationships.extend(rels)
         return rels
 
-    def extract_from_directory(self, directory: Path) -> List[Relationship]:
+    def extract_from_directory(self, directory: Path) -> list[Relationship]:
         """Walk directory, routing each file to the right extractor."""
-        found: List[Relationship] = []
+        found: list[Relationship] = []
         supported_exts = set(EXTENSION_TO_LANGUAGE.keys())
 
         for path in sorted(directory.rglob("*")):
@@ -1048,9 +1046,9 @@ class CombinedExtractor:
             json.dump(data, f, indent=2)
         print(f"\n✅ Saved {len(self.relationships)} relationships → {output_path}")
 
-    def get_stats(self) -> Dict:
-        type_counts: Dict[str, int] = defaultdict(int)
-        lang_counts: Dict[str, int] = defaultdict(int)
+    def get_stats(self) -> dict:
+        type_counts: dict[str, int] = defaultdict(int)
+        lang_counts: dict[str, int] = defaultdict(int)
         for r in self.relationships:
             type_counts[r.relation_type] += 1
             lang_counts[r.metadata.get("lang", "python")] += 1
@@ -1090,7 +1088,7 @@ def _make_extractor(
 def extract_code_relationships(
     project_root: Path,
     output_dir: Optional[Path] = None,
-    code_dirs: Optional[List[str]] = None,
+    code_dirs: Optional[list[str]] = None,
     from_index: bool = False,
 ) -> "CombinedExtractor | PythonASTExtractor":
     """
@@ -1187,13 +1185,13 @@ def extract_code_relationships(
     extractor.save_to_file(output_dir / "code_relationships.json")
 
     stats = extractor.get_stats()
-    print(f"\n📊  Statistics:")
+    print("\n📊  Statistics:")
     print(f"    Total relationships : {stats['total_relationships']}")
     print(f"    Total entities      : {stats['total_entities']}")
-    print(f"    By relationship type:")
+    print("    By relationship type:")
     for rel_type, count in sorted(stats["by_type"].items()):
         print(f"      {rel_type:<20} {count}")
-    print(f"    By language:")
+    print("    By language:")
     for lang, count in sorted(stats["by_language"].items()):
         print(f"      {lang:<20} {count}")
 
@@ -1211,7 +1209,7 @@ def load_project_config(project_root: Path) -> dict:
         try:
             with open(config_path) as f:
                 return json.load(f)
-        except (json.JSONDecodeError, IOError):
+        except (OSError, json.JSONDecodeError):
             pass
     return {}
 
@@ -1219,7 +1217,7 @@ def load_project_config(project_root: Path) -> dict:
 def load_indexed_files(
     project_root: Path,
     knowledge_dir: Optional[Path] = None,
-) -> List[Path]:
+) -> list[Path]:
     if knowledge_dir is None:
         knowledge_dir = project_root / ".knowledge" / "llamaindex"
     manifest_path = knowledge_dir / "manifest.json"
@@ -1228,11 +1226,11 @@ def load_indexed_files(
     try:
         with open(manifest_path) as f:
             manifest = json.load(f)
-    except (json.JSONDecodeError, IOError):
+    except (OSError, json.JSONDecodeError):
         return []
 
     supported = set(EXTENSION_TO_LANGUAGE.keys())
-    files: List[Path] = []
+    files: list[Path] = []
     for _, info in manifest.get("indexed_directories", {}).items():
         for file_path_str in info.get("files", []):
             path = Path(file_path_str)
@@ -1250,9 +1248,9 @@ def load_indexed_files(
 
 def incremental_graph_update(
     project_root: Path,
-    changed_files: Dict[str, List[str]],
+    changed_files: dict[str, list[str]],
     output_dir: Optional[Path] = None,
-) -> Tuple[int, int, int]:
+) -> tuple[int, int, int]:
     """
     Apply incremental changes to the existing knowledge graph without a full rebuild.
 
@@ -1288,8 +1286,8 @@ def incremental_graph_update(
     graph_path = output_dir / "code_relationships.json"
 
     # ── Load existing graph ────────────────────────────────────────────────
-    existing_entities: Dict[str, dict] = {}
-    existing_relationships: List[dict] = []
+    existing_entities: dict[str, dict] = {}
+    existing_relationships: list[dict] = []
 
     if graph_path.exists():
         try:
@@ -1297,7 +1295,7 @@ def incremental_graph_update(
                 data = json.load(f)
             existing_entities = data.get("entities", {})
             existing_relationships = data.get("relationships", [])
-        except (json.JSONDecodeError, IOError) as exc:
+        except (OSError, json.JSONDecodeError) as exc:
             print(f"  [WARN] Could not load existing graph: {exc}. Starting fresh.")
 
     # ── Normalise file paths to relative strings ───────────────────────────
@@ -1310,30 +1308,30 @@ def incremental_graph_update(
                 return str(p)
         return str(p)
 
-    deleted_files: Set[str] = {_to_rel(f) for f in changed_files.get("deleted", [])}
-    modified_files: Set[str] = {_to_rel(f) for f in changed_files.get("modified", [])}
-    added_files: List[str] = [_to_rel(f) for f in changed_files.get("added", [])]
+    deleted_files: set[str] = {_to_rel(f) for f in changed_files.get("deleted", [])}
+    modified_files: set[str] = {_to_rel(f) for f in changed_files.get("modified", [])}
+    added_files: list[str] = [_to_rel(f) for f in changed_files.get("added", [])]
 
     # Files whose old data must be purged (deleted + modified old versions)
-    files_to_purge: Set[str] = deleted_files | modified_files
+    files_to_purge: set[str] = deleted_files | modified_files
 
     # ── Remove entities/relationships for purged files ─────────────────────
-    removed_entity_keys: Set[str] = {
+    removed_entity_keys: set[str] = {
         key
         for key, ent in existing_entities.items()
         if ent.get("file_path") in files_to_purge
     }
     removed_count = len(removed_entity_keys)
 
-    surviving_entities: Dict[str, dict] = {
+    surviving_entities: dict[str, dict] = {
         k: v for k, v in existing_entities.items() if k not in removed_entity_keys
     }
-    surviving_relationships: List[dict] = [
+    surviving_relationships: list[dict] = [
         r for r in existing_relationships if r.get("source") not in files_to_purge
     ]
 
     # ── Re-extract modified + added files ─────────────────────────────────
-    files_to_extract: List[str] = list(modified_files) + added_files
+    files_to_extract: list[str] = list(modified_files) + added_files
     added_count = 0
     modified_rel_count = 0
 
@@ -1388,10 +1386,8 @@ def incremental_graph_update(
         os.rename(tmp_path, str(graph_path))
     except Exception:
         # Clean up temp file on failure
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp_path)
-        except OSError:
-            pass
         raise
 
     print(
@@ -1466,7 +1462,7 @@ if __name__ == "__main__":
             changed_files = json.loads(args.incremental)
         except json.JSONDecodeError as exc:
             print(f"❌  Invalid JSON for --incremental: {exc}")
-            raise SystemExit(1)
+            raise SystemExit(1) from exc
         if not isinstance(changed_files, dict):
             print("❌  --incremental must be a JSON object")
             raise SystemExit(1)

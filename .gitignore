@@ -1,5 +1,3 @@
-.mimir/
-
 # Python
 __pycache__/
 *.py[cod]
@@ -51,6 +49,9 @@ uv.lock
 .DS_Store
 Thumbs.db
 
+# Jcode (generated)
+.jcode/
+
 # Mimir - Generated/Derived
 .knowledge/
 .ruff_cache/
@@ -62,33 +63,20 @@ Thumbs.db
 target/
 Cargo.lock
 
-# node modules
+# Node modules
 node_modules/
 
-# Blog post (local only)
-BLOG_POST.md
-
 # Temporary/working files
-.opencode/package-lock.json
-.sisyphus/drafts/
-.sisyphus/evidence/
-.sisyphus/notepads/
-.sisyphus/plans/
 .tmp/
-HANDOFF.md
-docs/AI_DOing_hw.md
-docs/done/
-docs/elevator_pitch.md
-docs/future_improvments/
-docs/is_the_internet_working.md
-docs/medium_formatted_file.md
-docs/metrics.html
-docs/mimir-sys-prompt.txt
-docs/openspace_usage.md
-fix_edge_label.py
-package-lock.json
-package.json
-patch_server.py
-skills/mimir-dev/
-test_ui.js
+.sisyphus/
+test_*.py
+fix_*.py
+patch_*.py
 
+# Logs
+*.log
+reindex.log
+
+# Keep docs/ - documentation should be committed for open-source
+# Keep skills/ - skills should be committed
+# Keep package.json and lock files at project root if they exist

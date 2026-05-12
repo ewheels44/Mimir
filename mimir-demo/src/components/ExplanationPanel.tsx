@@ -6,15 +6,16 @@ interface ExplanationPanelProps {
   flowColor: string;
   stepIndex: number;
   totalSteps: number;
+  plainEnglish?: boolean;
 }
 
-export function ExplanationPanel({ step, flowColor, stepIndex, totalSteps }: ExplanationPanelProps) {
+export function ExplanationPanel({ step, flowColor, stepIndex, totalSteps, plainEnglish = false }: ExplanationPanelProps) {
   return (
     <div className="explanation-panel" role="region" aria-label="Step explanation">
       {/* Header with step label */}
       <div className="explanation-header" style={{ borderLeftColor: flowColor }}>
         <div className="explanation-header-content">
-          <h3>{step.label}</h3>
+          <h3>{plainEnglish && step.plainLabel ? step.plainLabel : step.label}</h3>
           {step.sublabel && <span className="explanation-sublabel" style={{ color: flowColor }}>{step.sublabel}</span>}
         </div>
         <div className="explanation-badge" style={{ backgroundColor: `${flowColor}20`, color: flowColor }}>
@@ -30,7 +31,7 @@ export function ExplanationPanel({ step, flowColor, stepIndex, totalSteps }: Exp
           </div>
           <div className="section-content">
             <h4 style={{ color: flowColor }}>What Happens</h4>
-            <p className="explanation-text">{step.explanation}</p>
+            <p className="explanation-text">{plainEnglish && step.plainExplanation ? step.plainExplanation : step.explanation}</p>
           </div>
         </div>
 

@@ -186,13 +186,14 @@ if [ -n "$OPENROUTER_API_KEY" ] && [ -z "$OPENAI_BASE_URL" ]; then
     log "Set OPENAI_BASE_URL: $OPENAI_BASE_URL"
 fi
 
-# Find uv executable
-UV_PATH=$(which uv 2>/dev/null || echo "/opt/homebrew/bin/uv")
-if [ ! -x "$UV_PATH" ]; then
-    log "ERROR: uv not found. Install with: curl -LsSf https://astral.sh/uv/install.sh | sh"
+# Find uv or python executable
+UV_PATH=$(which uv 2>/dev/null || echo "")
+PYTHON_PATH=$(which python3 2>/dev/null || echo "")
+if [ -z "$UV_PATH" ] && [ -z "$PYTHON_PATH" ]; then
+    log "ERROR: Neither uv nor python3 found. Install Python 3.11+ or uv."
     exit 1
 fi
-log "Using uv: $UV_PATH"
+log "Using uv: ${UV_PATH:-not found}, python3: ${PYTHON_PATH:-not found}"
 
 # Set PYTHONPATH to include src directory for mimir imports
 export PYTHONPATH="$SCRIPT_DIR/src:$PYTHONPATH"
@@ -209,4 +210,10 @@ log "Created PID file: $PID_FILE (wrapper PID: $$)"
 
 # Start the MCP server - exec replaces this shell with the Python process
 # The trap handlers will still work because exec preserves signal handlers
-exec env PYTHONPATH="$SCRIPT_DIR/src:$PYTHONPATH" "$UV_PATH" run --python '>=3.11' "$SCRIPT_DIR/mcp_server_llamaindex.py" "$@"
+if [ -n "$UV_PATH" ]; then
+    log "Starting MCP server with uv..."
+    exec env PYTHONPATH="$SCRIPT_DIR/src:$PYTHONPATH" "$UV_PATH" run --python '>=3.11' "$SCRIPT_DIR/mcp_server_llamaindex.py" "$@"
+else
+    log "Starting MCP server with python3..."
+    exec env PYTHONPATH="$SCRIPT_DIR/src:$PYTHONPATH" "$PYTHON_PATH" "$SCRIPT_DIR/mcp_server_llamaindex.py" "$@"
+fi

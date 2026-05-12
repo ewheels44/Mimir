@@ -4,12 +4,12 @@ FDE Handoff Documentation Generator
 Generates comprehensive handoff documentation from the Mimir knowledge base.
 """
 
+import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
-import json
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -200,7 +200,7 @@ class HandoffGenerator:
                 with open(pyproject, "rb") as f:
                     data = tomllib.load(f)
                     if "project" in data:
-                        content += f"\n\n### Python Project\n\n"
+                        content += "\n\n### Python Project\n\n"
                         if "name" in data["project"]:
                             content += f"- **Name:** {data['project']['name']}\n"
                         if "version" in data["project"]:
@@ -400,7 +400,7 @@ This reindexes the documentation to keep the knowledge base current."""
         lines = ["### Mimir Knowledge Base", ""]
 
         if self.config_path.exists():
-            lines.append(f"Configuration: `.mimir/config.json`")
+            lines.append("Configuration: `.mimir/config.json`")
             lines.append("")
 
             try:
@@ -420,7 +420,7 @@ This reindexes the documentation to keep the knowledge base current."""
 
         index_path = self.project_root / ".knowledge" / "llamaindex"
         if index_path.exists():
-            lines.append(f"\nIndex location: `.knowledge/llamaindex/`")
+            lines.append("\nIndex location: `.knowledge/llamaindex/`")
             docstore = index_path / "docstore.json"
             if docstore.exists():
                 try:

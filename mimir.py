@@ -339,7 +339,7 @@ def _list_with_git_comparison(knowledge_dir: Path, project_root: Path) -> int:
 
     # Summary
     print("\n" + "=" * 60)
-    print(f"📊 Summary:")
+    print("📊 Summary:")
     print(f"   Indexed: {len(indexed_files)} files")
     print(f"   Git-tracked: {len(git_files)} files")
     print(f"   Indexed & tracked: {len(indexed_and_tracked)} files")
@@ -390,11 +390,11 @@ def cmd_health(args: argparse.Namespace) -> int:
             print(f"Shared indices: {', '.join(config.shared_indexes.keys())}")
 
         if warnings:
-            print(f"\nWarnings:")
+            print("\nWarnings:")
             for w in warnings:
                 print(f"  ⚠️  {w}")
         else:
-            print(f"\n✅ No warnings")
+            print("\n✅ No warnings")
 
         return 0 if status == "healthy" else 1
 

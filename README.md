@@ -69,11 +69,11 @@ If you prefer to configure things by editing files:
 {
   "servers": {
     "mimir-my-project": {
-      "command": "/usr/bin/python3",
-      "args": ["/Users/ethanwheeler/Documents/Mimir/mcp_server_llamaindex.py"],
+      "command": "python3",
+      "args": ["/path/to/Mimir/mcp_server_llamaindex.py"],
       "env": {
         "PROJECT_ROOT": "/path/to/your/project",
-        "PYTHONPATH": "/Users/ethanwheeler/Documents/Mimir/src"
+        "PYTHONPATH": "/path/to/Mimir/src"
       }
     }
   }

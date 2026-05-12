@@ -76,24 +76,6 @@ def _run_langgraph(args: list[str]) -> int:
     return result.returncode
 
 
-def _run_langgraph(args: list[str]) -> int:
-    """Run a langgraph CLI command."""
-    script_path = MIMIR_ROOT / "langgraph/cli.py"
-    if not script_path.exists():
-        print(f"Error: langgraph/cli.py not found at {script_path}")
-        return 1
-
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(MIMIR_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
-
-    result = subprocess.run(
-        [sys.executable, str(script_path)] + args,
-        cwd=str(Path.cwd()),
-        env=env,
-    )
-    return result.returncode
-
-
 def _run_projects(args: list[str]) -> int:
     """Run a mimir-projects command."""
     return _run_script("mimir-projects.py", args)

@@ -80,3 +80,4 @@ reindex.log
 # Keep docs/ - documentation should be committed for open-source
 # Keep skills/ - skills should be committed
 # Keep package.json and lock files at project root if they exist
+.mimir/index_state.json

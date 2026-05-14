@@ -104,7 +104,7 @@ from llama_index.core import (  # noqa: E402
 )
 from llama_index.embeddings.openai import OpenAIEmbedding  # noqa: E402
 from llama_index.llms.openai import OpenAI as OpenAILike  # noqa: E402
-from mcp.server.fastmcp import FastMCP  # noqa: E402
+from mcp.server.fastmcp import FastMCP, Context  # noqa: E402
 
 from mimir.config import MimirConfig, get_config  # noqa: E402
 from mimir.metrics import get_tracker  # noqa: E402
@@ -479,34 +479,54 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         except TimeoutError:
             return f"Error: Request timed out after {timeout}s. Try a simpler query."
 
+    async def _notify_jcode_usage(ctx: Context, tool_name: str) -> None:
+        """Send a notification to Jcode client when Mimir tools are used."""
+        try:
+            # Get client info if available
+            client_info = ""
+            if hasattr(ctx, 'client_id') and ctx.client_id:
+                client_info = f" from {ctx.client_id}"
+            
+            # Send info notification to client
+            await ctx.info(
+                f"Mimir is being used by Jcode{client_info} - Tool: {tool_name}"
+            )
+        except Exception:
+            # Don't let notification errors break the tool execution
+            pass
+
     @mcp.tool()
-    async def search(query: str, top_k: int = 5) -> str:
+    async def search(query: str, top_k: int = 5, ctx: Context = None) -> str:
         """Search the project knowledge base using semantic similarity."""
+        await _notify_jcode_usage(ctx, "search")
         return await _with_timeout(
             asyncio.to_thread(server.search, query, top_k)
         )
 
     @mcp.tool()
-    async def query(question: str) -> str:
+    async def query(question: str, ctx: Context = None) -> str:
         """Ask a question about the project."""
+        await _notify_jcode_usage(ctx, "query")
         return await _with_timeout(
             asyncio.to_thread(server.query, question)
         )
 
     @mcp.tool()
-    async def reindex() -> str:
+    async def reindex(ctx: Context = None) -> str:
         """Rebuild the knowledge base from the docs directory."""
+        await _notify_jcode_usage(ctx, "reindex")
         return await _with_timeout(
             asyncio.to_thread(server.index_documents), timeout=120
         )
 
     @mcp.tool()
-    async def remove_file(file_path: str) -> str:
+    async def remove_file(file_path: str, ctx: Context = None) -> str:
         """Remove a specific file from the knowledge base index.
 
         Args:
             file_path: Absolute or relative path of the file to remove from the index.
         """
+        await _notify_jcode_usage(ctx, "remove_file")
         path = Path(file_path)
         if not path.is_absolute():
             path = server.project_root / path
@@ -515,12 +535,15 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         )
 
     @mcp.tool()
-    async def stats() -> str:
+    async def stats(ctx: Context = None) -> str:
         """Get statistics about the knowledge base."""
+        await _notify_jcode_usage(ctx, "stats")
         return json.dumps(server.get_stats(), indent=2)
 
     @mcp.tool()
-    async def rag_workflow(query: str) -> str:
+    async def rag_workflow(query: str, ctx: Context = None) -> str:
+        """Structured retrieve→generate pipeline for complex analysis."""
+        await _notify_jcode_usage(ctx, "rag_workflow")
         from langchain_core.messages import HumanMessage
 
         from langgraph.workflows.rag import graph as rag_graph
@@ -535,7 +558,9 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         return await _with_timeout(_run_rag())
 
     @mcp.tool()
-    async def knowledge_agent(question: str) -> str:
+    async def knowledge_agent(question: str, ctx: Context = None) -> str:
+        """Multi-step agentic research for deep exploration."""
+        await _notify_jcode_usage(ctx, "knowledge_agent")
         from langchain_core.messages import HumanMessage
 
         from langgraph.workflows.knowledge_agent import graph as agent_graph
@@ -550,7 +575,7 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         return await _with_timeout(_run_agent())
 
     @mcp.tool()
-    async def enrich_task(task: str, top_k: int = 5) -> str:
+    async def enrich_task(task: str, top_k: int = 5, ctx: Context = None) -> str:
         """Search Mimir for project context relevant to an OpenSpace task.
 
         Call this BEFORE executing tasks to get project-specific context
@@ -560,6 +585,7 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
             task: Task description in natural language.
             top_k: Number of context chunks to retrieve (default: 5).
         """
+        await _notify_jcode_usage(ctx, "enrich_task")
         from src.mimir.openspace_bridge import enrich_task_for_openspace
 
         def _enrich():
@@ -581,12 +607,13 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         return await _with_timeout(asyncio.to_thread(_enrich))
 
     @mcp.tool()
-    async def openspace_health() -> str:
+    async def openspace_health(ctx: Context = None) -> str:
         """Check if the Mimir ↔ OpenSpace bridge is healthy.
 
         Returns bridge status, circuit breaker state, and index availability.
         Call this before depending on enrich_task.
         """
+        await _notify_jcode_usage(ctx, "openspace_health")
         from src.mimir.openspace_bridge import get_bridge
 
         def _health():
@@ -596,7 +623,7 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         return await _with_timeout(asyncio.to_thread(_health))
 
     @mcp.tool()
-    async def sdk_cache_get(library: str, topic: str = "general") -> str:
+    async def sdk_cache_get(library: str, topic: str = "general", ctx: Context = None) -> str:
         """Get SDK documentation from local cache (fetches from Context7 if stale).
 
         Use this to get up-to-date docs for any library/framework without
@@ -606,6 +633,7 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
             library: Library name (e.g., "stripe", "nextjs", "react").
             topic: Specific topic to fetch (e.g., "checkout sessions", "routing").
         """
+        await _notify_jcode_usage(ctx, "sdk_cache_get")
         from src.mimir.sdk_cache import SDKCache
 
         def _get_docs():
@@ -623,11 +651,12 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         return await _with_timeout(asyncio.to_thread(_get_docs))
 
     @mcp.tool()
-    async def sdk_cache_list() -> str:
+    async def sdk_cache_list(ctx: Context = None) -> str:
         """List all cached SDK documentation libraries with freshness info.
 
         Returns a list of cached libraries, their freshness status, and topics.
         """
+        await _notify_jcode_usage(ctx, "sdk_cache_list")
         from src.mimir.sdk_cache import SDKCache
 
         cache = SDKCache(server.project_root)
@@ -635,12 +664,13 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         return json.dumps(cached, indent=2)
 
     @mcp.tool()
-    async def health_check() -> str:
+    async def health_check(ctx: Context = None) -> str:
         """Check Mimir server health and configuration status.
 
         Returns diagnostic information about the server state,
         including index availability, configuration summary, and any warnings.
         """
+        await _notify_jcode_usage(ctx, "health_check")
         config = get_config()
         warnings = config.validate()
 
@@ -719,7 +749,7 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
             )
 
     @mcp.tool()
-    async def graph_query(source: str, target: str) -> str:
+    async def graph_query(source: str, target: str, ctx: Context = None) -> str:
         """Find the shortest weighted path between two modules or entities.
 
         Uses Dijkstra with relationship-type weights:
@@ -733,11 +763,12 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
             source: Source module path or entity name (e.g., "src/auth/middleware").
             target: Target module path or entity name (e.g., "src/rate_limiter/service").
         """
+        await _notify_jcode_usage(ctx, "graph_query")
         return _web_get("/api/graph/path", {"source": source, "target": target})
 
     @mcp.tool()
     async def graph_neighbors(
-        node_id: str, depth: int = 1, relation_type: str | None = None
+        node_id: str, depth: int = 1, relation_type: str | None = None, ctx: Context = None
     ) -> str:
         """Find what modules or entities are connected to a node.
 
@@ -750,18 +781,20 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
             depth: How many hops out to search (1-5, default 1).
             relation_type: Optional filter — only show this relationship type.
         """
+        await _notify_jcode_usage(ctx, "graph_neighbors")
         return _web_get(
             "/api/graph/neighbors",
             {"node_id": node_id, "depth": str(depth), "relation_type": relation_type},
         )
 
     @mcp.tool()
-    async def graph_stats() -> str:
+    async def graph_stats(ctx: Context = None) -> str:
         """Get statistics about the code knowledge graph.
 
         Returns node/edge/entity counts, relationship type breakdown,
         language distribution, and the most connected nodes.
         """
+        await _notify_jcode_usage(ctx, "graph_stats")
         return _web_get("/api/graph/stats")
 
     return mcp

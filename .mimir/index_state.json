@@ -1,6 +1,7 @@
 {
   "file_hashes": {
     "/Users/ethanwheeler/Documents/Mimir/docs/medium_formatted_file.md": "c8e69f685e9e8d8aa64aa3fc1d39cf44b0b933c7bc2d0d63416e6188a2e9e626",
+    "/Users/ethanwheeler/Documents/Mimir/docs/MIMIR_JCODE_NOTIFICATIONS.md": "415ef98dab66d081aed79cf7022be879d929bfa3db446f13bdca3530bc25dfca",
     "/Users/ethanwheeler/Documents/Mimir/docs/is_the_internet_working.md": "319ff7842a7911e35b16195b675616d5ffb32822dd9f79005af760ae2c2e4244",
     "/Users/ethanwheeler/Documents/Mimir/docs/BLOG_POST.md": "ecbc784fe4bbfc4b1ddaa0ac6231d4e8d0067a17add4b142fdac0dde27c5dbc5",
     "/Users/ethanwheeler/Documents/Mimir/docs/mimir-sys-prompt.txt": "215164b99ccac57eb926a96b8b395da8d38a2976b5cd3abb75faf8c06c06e3bd",
@@ -22,7 +23,7 @@
     "/Users/ethanwheeler/Documents/Mimir/langgraph/workflows/session_diff.py": "c245ec10e61206bf31beda241a9899fadbcde568924a14b0fa46f3d7f9c4108a",
     "/Users/ethanwheeler/Documents/Mimir/langgraph/workflows/__init__.py": "2e35897c9f5e79d4804cd972aa1635eb05ade62475ff710f3c081dc2b449a0b0",
     "/Users/ethanwheeler/Documents/Mimir/langgraph/workflows/call_prep.py": "cf0eb26864c17f96fd90049acee5d86214fbdf776b3db8f6e5ae0fca4fe41788",
-    "/Users/ethanwheeler/Documents/Mimir/langgraph/workflows/utils.py": "11b9c15cdbf5f21331c6959a2e1279ed1ccfd709a78c1855d6d221acdbed384c",
+    "/Users/ethanwheeler/Documents/Mimir/langgraph/workflows/utils.py": "163b4923a193347b919c7a68dc18151826a8594f0b627a9b6156807ae730f98c",
     "/Users/ethanwheeler/Documents/Mimir/langgraph/workflows/rag.py": "2cdd1d7e7f9f7f4e18694ab0720b367709c9d4a6c1f8e70aeda551ca2d5ff41a",
     "/Users/ethanwheeler/Documents/Mimir/langgraph/workflows/knowledge_agent.py": "9800a48da0cd92b24475ad1d632c2315acb8cbff1314d871295923ce9ce53c24",
     "/Users/ethanwheeler/Documents/Mimir/src/mimir/metrics.py": "5f0962d0875e12b9769169968e8818a1aafd3bec608043fe85ce7aa35bcda3e3",
@@ -48,14 +49,14 @@
     "/Users/ethanwheeler/Documents/Mimir/tests/test_config.py": "46d951363d5e9dc607b41e9a5f5b8d1fb24b95d960443049681db327b827dfc7",
     "/Users/ethanwheeler/Documents/Mimir/tests/test_sdk_cache.py": "e879d7d9e3490ea3507a9f10416b2a9d5c563614a8d644a76d0f2b6a7e0d4985",
     "/Users/ethanwheeler/Documents/Mimir/scripts/run_openspace_mcp.sh": "a5adc57e5ddd9b41c2bb80fb4c13dd04e43b4cbed7843143b5d58d7ea170812c",
-    "/Users/ethanwheeler/Documents/Mimir/scripts/mimir-projects.py": "a68ae42511d7d5d736502f6a87ddf0efaf090e8ec203f24b9dde6e1cc304540b",
+    "/Users/ethanwheeler/Documents/Mimir/scripts/mimir-projects.py": "06ea5dea71c5b4e2b315f57c8bed5cadf41c99052abea8bbaba60052ca7b8a0a",
     "/Users/ethanwheeler/Documents/Mimir/scripts/run_mcp_server.sh": "77ff6413ec847877630fd8ec1424596eb5b625781ccb0964949c4da3132c7ba1",
     "/Users/ethanwheeler/Documents/Mimir/scripts/mimir-reindex-hook.py": "b4151c893ed126348763444bc0894d5634642820b4479fe5aed0938bd55bbe96",
     "/Users/ethanwheeler/Documents/Mimir/scripts/install.sh": "d0a4f723d99b7d518caf192834ade04f168e0792702b084f324f5fdfd028f13f",
     "/Users/ethanwheeler/Documents/Mimir/scripts/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "/Users/ethanwheeler/Documents/Mimir/scripts/install-git-hooks.sh": "d08d563501100d4a3c98518606b5e0b368036408862ed4f8e144507f5ec2a97b",
     "/Users/ethanwheeler/Documents/Mimir/scripts/sync-to-dev.sh": "decd1624c4c52255afcf893e483c1cb87d14f2d850c303adb2e47bc8d552f6f2",
-    "/Users/ethanwheeler/Documents/Mimir/scripts/mimir-init.py": "990bcd56fb9282d9d922a3f1776358c873920639db8290d1a607a9a167068e5f",
+    "/Users/ethanwheeler/Documents/Mimir/scripts/mimir-init.py": "2040450e5bc29592e6825641fae1a85b1fe8e72b660c94f9f28c092fa175e91a",
     "/Users/ethanwheeler/Documents/Mimir/scripts/full_index.py": "5530e7f7322715a2dadd51daba65819794c44c788ad124bf7554ba887de78216",
     "/Users/ethanwheeler/Documents/Mimir/scripts/git-hooks/post-commit": "352dc27bc1f438a9d980e890f6ca6540c22bc19d181c9a08011b1af192c6004a",
     "/Users/ethanwheeler/Documents/Mimir/scripts/jcode/test_mimir_mcp.py": "97ba117db73fdc405f81f942b8f647d40748d776c8a36778f695ca74d495e45d",
@@ -67,7 +68,7 @@
     "/Users/ethanwheeler/Documents/Mimir/web/server/insights.ts": "f7c504de28421a60cf63047e9c6390d57f9c753c155f9a9467d07595d4bbaf19",
     "/Users/ethanwheeler/Documents/Mimir/web/server/README.md": "3992555a691d49c8ae5b0babd3a0fd18afb9788b513fc86e6578fbc0bd3e3418",
     "/Users/ethanwheeler/Documents/Mimir/web/server/GraphPage.tsx": "aea13d071b8ae3567b29507f67fc0d6a8ac7821208f7e689f057ac2e4e6d9695",
-    "/Users/ethanwheeler/Documents/Mimir/web/sidecar/sidecar.py": "2530042fee3dc084ca56847da92ad96b42e154af17338513d35ce8b7a1ca9fe9",
+    "/Users/ethanwheeler/Documents/Mimir/web/sidecar/sidecar.py": "7626e9ee20abc1ffdbebb4c798ed7849de810fa1ca564ebe2501d9402215cee9",
     "/Users/ethanwheeler/Documents/Mimir/web/client/tsconfig.node.json": "9e2abb169ea87b7190613a1d4da57ca608463a453bd4231fa3aeee5e308370dd",
     "/Users/ethanwheeler/Documents/Mimir/web/client/index.html": "be7487f4f0478a3c63165225960ad1a15fa43626feb85c32e938fca4e1d2eb70",
     "/Users/ethanwheeler/Documents/Mimir/web/client/package.json": "ca0384b85fdf255128ef1568f279da52bd9cbdedae1da2a2a1eb5aeca74a4ce7",
@@ -102,6 +103,6 @@
     "/Users/ethanwheeler/Documents/Mimir/web/client/src/pages/GraphPage.tsx": "2c010d916a441b114d7b0dd081eecd842322a49042244cd5e922730ecb53f0de",
     "/Users/ethanwheeler/Documents/Mimir/web/client/src/pages/MetricsPage.module.css": "68b07bd7e3dd4bd429ff978edae2263d764852af344043c52f1aeb71bac4bfc8"
   },
-  "last_mtime_check": 1778789467.977669,
-  "last_updated": "2026-05-14T15:17:25.535200"
+  "last_mtime_check": 1778793202.2759194,
+  "last_updated": "2026-05-14T16:13:32.610645"
 }

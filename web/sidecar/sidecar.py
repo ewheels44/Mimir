@@ -21,7 +21,8 @@ import uvicorn
 # Bootstrap Mimir imports
 # ---------------------------------------------------------------------------
 
-MIMIR_DIR = Path.home() / "Documents" / "Mimir"
+# Try to detect Mimir root from environment or use default
+MIMIR_DIR = Path(os.environ.get("MIMIR_ROOT", Path.home() / "Documents" / "Mimir"))
 sys.path.insert(0, str(MIMIR_DIR))
 
 try:

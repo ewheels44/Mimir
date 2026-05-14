@@ -52,6 +52,17 @@ def get_mcp_server_path() -> Path:
     return get_config().mimir_root / "mcp_server_llamaindex.py"
 
 
+def get_mcp_server_python_path() -> Path:
+    """Get the Python path for running the MCP server.
+
+    Returns the directory containing mcp_server_llamaindex.py
+    so that imports work correctly.
+    """
+    from src.mimir.config import get_config
+
+    return get_config().mimir_root
+
+
 def get_mcp_env(project_root: Optional[Path] = None) -> dict:
     """Get environment variables for MCP server.
 

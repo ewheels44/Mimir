@@ -9,8 +9,16 @@ import argparse
 import sys
 from pathlib import Path
 
-# Add src to path for imports
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+# Add Mimir src to path for imports
+MIMIR_ROOT = Path(__file__).resolve().parent.parent
+
+# Remove script directory from path if present (Python adds it automatically)
+script_dir = str(Path(__file__).resolve().parent)
+if script_dir in sys.path:
+    sys.path.remove(script_dir)
+
+# Only add src so mimir/ package is found (not mimir.py in root)
+sys.path.insert(0, str(MIMIR_ROOT / "src"))
 
 from mimir.handoff import HandoffGenerator
 from mimir.projects import ProjectManager

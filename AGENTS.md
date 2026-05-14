@@ -48,12 +48,44 @@ Each project gets its own index at `.knowledge/llamaindex/`. The MCP server auto
 ## Project Structure
 
 ```
-.mimir/config.json          # Per-project config (optional, defaults work)
-.knowledge/llamaindex/      # Vector index (auto-created)
-.knowledge/sdk-cache/       # Cached SDK docs
-.knowledge/code_relationships.json  # Knowledge graph
-docs/                       # Indexed documentation
-.opencode/mimir-index.py    # Project indexing script
+Mimir/
+├── mimir.py                    # Main CLI entry point
+├── mcp_server_llamaindex.py    # MCP server (tool definitions, server lifecycle)
+├── src/mimir/                  # Core Python package
+│   ├── config.py               # Unified config — single source of truth
+│   ├── indexing.py             # Document indexing
+│   ├── knowledge_graph.py      # Code relationship extraction
+│   ├── metrics.py              # Cost/token tracking
+│   ├── openspace_bridge.py     # OpenSpace integration
+│   ├── sdk_cache.py           # SDK doc cache
+│   ├── shared_index.py         # Cross-codebase search
+│   ├── watcher.py              # File watcher
+│   └── ...
+├── scripts/                    # Utility scripts
+│   ├── mimir-init.py           # Installer — global setup + per-project init
+│   ├── mimir-projects.py       # Multi-project management
+│   ├── full_index.py           # Full index script
+│   └── jcode/                  # Jcode bridge
+├── langgraph/                  # LangGraph workflows
+│   ├── workflows/
+│   │   ├── rag.py              # RAG workflow
+│   │   ├── knowledge_agent.py  # Knowledge agent
+│   │   └── ...
+│   └── langgraph.json          # LangGraph config
+├── workflows/                  # Workflow examples
+│   └── run_workflow.py
+├── docs/                       # Documentation (indexed)
+├── opencode-config/            # OpenCode configuration
+│   ├── opencode.json
+│   └── agent/                  # Subagent configs
+├── mimir-demo/                 # Demo web app (React + TypeScript)
+├── web/                        # Web components
+│   ├── sidecar/                # Python sidecar server
+│   └── ...
+├── .mimir/                     # Per-project config (optional)
+├── .knowledge/                 # Vector index + SDK cache (auto-created)
+│   ├── llamaindex/
+│   └── sdk-cache/
 ```
 
 ## Configuration
@@ -84,7 +116,7 @@ All fields optional. Defaults work for most projects.
 | `src/mimir/knowledge_graph.py` | Code relationship extraction — AST + tree-sitter |
 | `src/mimir/metrics.py` | Cost/token tracking — per-component breakdown |
 | `src/mimir/watcher.py` | File watcher — auto-reindex on changes |
-| `mimir-init.py` | Installer — global setup + per-project init |
+| `scripts/mimir-init.py` | Installer — global setup + per-project init |
 | `langgraph/workflows/rag.py` | RAG workflow — retrieve → generate |
 | `langgraph/workflows/knowledge_agent.py` | Knowledge agent — multi-step research |
 
@@ -104,7 +136,7 @@ Mimir includes a built-in Jcode bridge (`scripts/jcode/mimir-bridge.py`) that au
 
 ```bash
 # From within a Mimir-enabled project:
-python ~/Documents/Mimir/scripts/jcode/mimir_bridge.py --auto
+python scripts/jcode/mimir_bridge.py --auto
 ```
 
 ### CLI options

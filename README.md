@@ -52,7 +52,7 @@ jcode
 
 # 2. In another terminal, install Mimir and auto-configure Jcode
 cd ~/Projects/YourProject
-python /path/to/Mimir/mimir-init.py --jcode
+python /path/to/Mimir/scripts/mimir-init.py --jcode
 ```
 
 This does three things:
@@ -738,7 +738,7 @@ Here's a complete working setup from a real installation:
 /path/to/Mimir/           # Central installation
 ├── mimir.py                       # Unified CLI (all commands)
 ├── mcp_server_llamaindex.py       # MCP server (used by mimir server)
-├── mimir-init.py                  # Project initializer (used by mimir init)
+├── scripts/mimir-init.py                  # Project initializer (used by mimir init)
 ├── mimir-projects.py              # Multi-project CLI (used by mimir projects)
 ├── scripts/
 │   ├── run_mcp_server.sh         # MCP wrapper script
@@ -808,7 +808,7 @@ Here's a complete working setup from a real installation:
 
 ### Global Config: `~/.config/opencode/opencode.json`
 
-After running `mimir-init.py --install`, your config will include:
+After running `scripts/mimir-init.py --install`, your config will include:
 
 ```json
 {
@@ -981,7 +981,7 @@ Shared indices are configured in `.mimir/config.json` (not env vars):
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Entry Points                                           │
-│  mcp_server_llamaindex.py │ langgraph/cli.py │ mimir-init.py
+│  mcp_server_llamaindex.py │ langgraph/cli.py │ scripts/mimir-init.py
 └──────────────────────┬──────────────────────────────────┘
                        │ all use
                        ▼

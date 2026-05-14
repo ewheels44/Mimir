@@ -78,7 +78,7 @@ def _run_langgraph(args: list[str]) -> int:
 
 def _run_projects(args: list[str]) -> int:
     """Run a mimir-projects command."""
-    return _run_script("mimir-projects.py", args)
+    return _run_script("scripts/mimir-projects.py", args)
 
 
 def _run_cache(args: list[str]) -> int:
@@ -101,7 +101,7 @@ def _run_cache(args: list[str]) -> int:
 
 def _run_init(args: list[str]) -> int:
     """Run mimir-init."""
-    return _run_script("mimir-init.py", args)
+    return _run_script("scripts/mimir-init.py", args)
 
 
 def _run_indexing(args: list[str]) -> int:

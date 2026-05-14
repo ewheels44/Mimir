@@ -5,7 +5,7 @@
     "src",
     "tests",
     "scripts",
-    "examples",
+    "workflows",
     "web"
   ],
   "knowledge_dir": ".knowledge/llamaindex",
@@ -13,9 +13,7 @@
   "files": [
     "AGENTS.md",
     "README.md",
-    "mimir-init.py",
-    "mcp_server_llamaindex.py",
-    "full_index.py"
+    "mcp_server_llamaindex.py"
   ],
   "openspace": {
     "enabled": true,

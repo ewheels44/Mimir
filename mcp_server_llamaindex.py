@@ -232,17 +232,26 @@ class KnowledgeServer:
                     break
         except ImportError:
             # Fallback to vector-only if BM25 unavailable
-            nodes = index.as_retriever(similarity_top_k=top_k).retrieve(query)
+            try:
+                nodes = index.as_retriever(similarity_top_k=top_k).retrieve(query)
+            except Exception as e:
+                return self._format_search_error(e, "vector retriever")
+        except Exception as e:
+            return self._format_search_error(e, "hybrid retriever")
+
         duration_ms = int((time.time() - start_time) * 1000)
 
         # Track metrics - record_query will calculate realistic costs
-        tracker = get_tracker(self.project_root)
-        tracker.record_query(
-            query_type="search",
-            query_text=query,
-            docs_retrieved=len(nodes),
-            duration_ms=duration_ms,
-        )
+        try:
+            tracker = get_tracker(self.project_root)
+            tracker.record_query(
+                query_type="search",
+                query_text=query,
+                docs_retrieved=len(nodes),
+                duration_ms=duration_ms,
+            )
+        except Exception:
+            pass  # Don't let metrics break the search
 
         if not nodes:
             return "No relevant documents found."
@@ -255,6 +264,35 @@ class KnowledgeServer:
             results.append(f"[{i}] {source} (score: {score:.3f})\n{text}")
 
         return "\n\n".join(results)
+
+    def _format_search_error(self, e: Exception, context: str) -> str:
+        """Format search errors with helpful messages."""
+        error_type = type(e).__name__
+        error_msg = str(e)
+
+        # API authentication errors
+        if "AuthenticationError" in error_type or "401" in error_msg:
+            return (
+                "Error: API authentication failed. Please check your API key.\n"
+                "Set OPENROUTER_API_KEY or OPENAI_API_KEY environment variable,\n"
+                "or ensure the MCP server has access to the API key."
+            )
+
+        # NumPy shape errors (malformed embeddings)
+        if "inhomogeneous shape" in error_msg or "array element" in error_msg:
+            return (
+                "Error: Received malformed embeddings from API. This usually means:\n"
+                "1. The API key may be invalid or not set\n"
+                "2. The API returned an error response instead of embeddings\n"
+                "3. There may be a model mismatch (check embedding_model config)\n"
+                "Try reindexing with: python mcp_server_llamaindex.py --reindex"
+            )
+
+        # Rate limiting or API errors
+        if "RateLimitError" in error_type or "429" in error_msg:
+            return "Error: API rate limit exceeded. Please try again later."
+
+        return f"Error during search ({context}): {error_type}: {error_msg}"
 
     def query(self, question: str) -> str:
         start_time = time.time()
@@ -278,7 +316,7 @@ class KnowledgeServer:
 
             return result
         except Exception as e:
-            return f"Error querying knowledge base: {e}. Try using 'search' instead for faster results."
+            return self._format_search_error(e, "query engine")
 
     def index_documents(self, docs_dir: Optional[Path] = None) -> str:
         from mimir.indexing import index_with_progress

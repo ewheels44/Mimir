@@ -18,6 +18,7 @@ from src.mimir.indexing import (
     save_hash_state,
 )
 from src.mimir.knowledge_graph import incremental_graph_update
+from src.mimir.artifacts import invalidate_artifacts_for_file
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,7 @@ class _DebounceHandler(FileSystemEventHandler):
             logger.debug(f"Ignored (excluded): {event.src_path}")
             return
         logger.debug(f"Created: {event.src_path}")
+        self._invalidate_artifacts(event.src_path)
         self._schedule_reindex()
         self._schedule_kg_update()
 
@@ -100,6 +102,7 @@ class _DebounceHandler(FileSystemEventHandler):
             logger.debug(f"Ignored (excluded): {event.src_path}")
             return
         logger.debug(f"Modified: {event.src_path}")
+        self._invalidate_artifacts(event.src_path)
         self._schedule_reindex()
         self._schedule_kg_update()
 
@@ -110,6 +113,7 @@ class _DebounceHandler(FileSystemEventHandler):
             logger.debug(f"Ignored (excluded): {event.src_path}")
             return
         logger.debug(f"Deleted: {event.src_path}")
+        self._invalidate_artifacts(event.src_path)
         self._schedule_reindex()
         self._schedule_kg_update()
 
@@ -122,8 +126,21 @@ class _DebounceHandler(FileSystemEventHandler):
             logger.debug(f"Ignored (excluded): {event.src_path} -> {event.dest_path}")
             return
         logger.debug(f"Moved: {event.src_path} -> {event.dest_path}")
+        # Invalidate artifacts for both source and destination
+        self._invalidate_artifacts(event.src_path)
+        if not dst_excluded:
+            self._invalidate_artifacts(event.dest_path)
         self._schedule_reindex()
         self._schedule_kg_update()
+
+    def _invalidate_artifacts(self, file_path: str) -> None:
+        """Invalidate any artifacts that depend on the changed file."""
+        try:
+            invalidated = invalidate_artifacts_for_file(file_path)
+            if invalidated:
+                logger.info(f"Invalidated artifacts {invalidated} due to change in {file_path}")
+        except Exception as e:
+            logger.warning(f"Error invalidating artifacts for {file_path}: {e}")
 
     def cancel(self) -> None:
         with self._lock:

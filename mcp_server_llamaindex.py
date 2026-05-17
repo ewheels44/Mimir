@@ -108,6 +108,7 @@ from mcp.server.fastmcp import FastMCP, Context  # noqa: E402
 
 from mimir.config import MimirConfig, get_config  # noqa: E402
 from mimir.metrics import get_tracker  # noqa: E402
+from mimir.artifacts import get_artifact, list_artifacts  # noqa: E402
 from mimir.shared_index import (  # noqa: E402
     SharedIndexRegistry,
 )
@@ -177,7 +178,7 @@ class KnowledgeServer:
             return self._index
 
     def _create_index(self) -> VectorStoreIndex:
-        from mimir.indexing import index_with_progress
+        from mimir.indexing import index_with_progress, add_file_to_index
 
         # Get custom exclude patterns from config
         custom_patterns = (
@@ -196,6 +197,22 @@ class KnowledgeServer:
 
         if not success:
             raise ValueError("Failed to create index")
+
+        # Index individual files from config (e.g., mcp_server_llamaindex.py)
+        individual_files = self.config.files
+        if individual_files:
+            print(f"Indexing {len(individual_files)} individual file(s) from config...")
+            for file_path_str in individual_files:
+                file_path = Path(file_path_str)
+                if not file_path.is_absolute():
+                    file_path = self.project_root / file_path
+                if file_path.exists():
+                    add_file_to_index(
+                        file_path, self.knowledge_dir, verbose=False,
+                        project_root=self.project_root
+                    )
+                else:
+                    print(f"  ⚠️  File not found: {file_path}")
 
         storage_context = StorageContext.from_defaults(
             persist_dir=str(self.knowledge_dir)
@@ -533,21 +550,97 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
             # Don't let notification errors break the tool execution
             pass
 
-    @mcp.tool()
-    async def search(query: str, top_k: int = 5, ctx: Context = None) -> str:
-        """Search the project knowledge base using semantic similarity."""
-        await _notify_jcode_usage(ctx, "search")
-        return await _with_timeout(
-            asyncio.to_thread(server.search, query, top_k)
-        )
+    def _check_budget(budget_tokens: int = None, budget_usd: float = None) -> dict:
+        """Check if we have enough budget remaining.
+        
+        Returns: dict with 'ok' (bool), 'warning' (str or None), 'remaining' (dict)
+        """
+        if budget_tokens is None and budget_usd is None:
+            return {"ok": True, "warning": None, "remaining": {}}
+        
+        try:
+            from mimir.metrics import get_tracker
+            tracker = get_tracker()
+            summary = tracker.get_summary(days=1)  # Last 24 hours
+            
+            warnings = []
+            
+            if budget_usd is not None:
+                remaining_usd = budget_usd - summary.get("total_cost", 0)
+                if remaining_usd <= 0:
+                    return {
+                        "ok": False,
+                        "warning": f"Budget exceeded: ${summary.get('total_cost', 0):.4f} / ${budget_usd:.4f}",
+                        "remaining": {"usd": remaining_usd}
+                    }
+                elif remaining_usd < budget_usd * 0.1:  # Less than 10% remaining
+                    warnings.append(f"Budget warning: ${remaining_usd:.4f} remaining ({(remaining_usd/budget_usd)*100:.0f}%)")
+            
+            return {"ok": True, "warning": "; ".join(warnings) if warnings else None, "remaining": {}}
+        except Exception as e:
+            return {"ok": True, "warning": f"Budget check failed: {e}", "remaining": {}}
+
+    def _format_budget_info(budget_tokens: int = None, budget_usd: float = None) -> str:
+        """Format budget info for response."""
+        info = []
+        if budget_tokens:
+            info.append(f"Token budget: {budget_tokens}")
+        if budget_usd:
+            info.append(f"Cost budget: ${budget_usd:.4f}")
+        return " | ".join(info) if info else ""
 
     @mcp.tool()
-    async def query(question: str, ctx: Context = None) -> str:
-        """Ask a question about the project."""
+    async def search(query: str, top_k: int = 5, max_tokens: int = None, max_cost_usd: float = None, ctx: Context = None) -> str:
+        """Search the project knowledge base using semantic similarity.
+        
+        Args:
+            query: Search query
+            top_k: Number of results to return (default: 5)
+            max_tokens: Optional token budget for this request
+            max_cost_usd: Optional cost budget in USD for this request
+        """
+        await _notify_jcode_usage(ctx, "search")
+        
+        # Check budget
+        budget_check = _check_budget(max_tokens, max_cost_usd)
+        if not budget_check["ok"]:
+            return f"Error: {budget_check['warning']}"
+        
+        result = await _with_timeout(
+            asyncio.to_thread(server.search, query, top_k)
+        )
+        
+        # Append budget warning if any
+        if budget_check.get("warning"):
+            result = f"[Budget Warning: {budget_check['warning']}]\n\n{result}"
+        
+        return result
+
+    @mcp.tool()
+    async def query(question: str, max_tokens: int = None, max_cost_usd: float = None, ctx: Context = None) -> str:
+        """Ask a question about the project.
+
+        Args:
+            question: The question to ask.
+            max_tokens: Optional token budget for this request.
+            max_cost_usd: Optional cost budget in USD for this request.
+        """
         await _notify_jcode_usage(ctx, "query")
-        return await _with_timeout(
+
+        # Check budget
+        budget_check = _check_budget(max_tokens, max_cost_usd)
+        if not budget_check["ok"]:
+            return f"Error: {budget_check['warning']}"
+
+        result = await _with_timeout(
             asyncio.to_thread(server.query, question)
         )
+
+        # Append budget warning if any
+        if budget_check.get("warning"):
+            result = f"[Budget Warning: {budget_check['warning']}]\n\n{result}"
+
+        return result
 
     @mcp.tool()
     async def reindex(ctx: Context = None) -> str:
@@ -579,9 +672,23 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         return json.dumps(server.get_stats(), indent=2)
 
     @mcp.tool()
-    async def rag_workflow(query: str, ctx: Context = None) -> str:
-        """Structured retrieve→generate pipeline for complex analysis."""
+    async def rag_workflow(query: str, response_shape: str = None, max_tokens: int = None, max_cost_usd: float = None, ctx: Context = None) -> str:
+        """Structured retrieve→generate pipeline for complex analysis.
+
+        Args:
+            query: The query for the RAG pipeline.
+            response_shape: Optional JSON schema for structured output (KnowQL-inspired).
+                When provided, the LLM will return a JSON object matching this schema.
+            max_tokens: Optional token budget for this request.
+            max_cost_usd: Optional cost budget in USD for this request.
+        """
         await _notify_jcode_usage(ctx, "rag_workflow")
+
+        # Check budget
+        budget_check = _check_budget(max_tokens, max_cost_usd)
+        if not budget_check["ok"]:
+            return f"Error: {budget_check['warning']}"
+
         from langchain_core.messages import HumanMessage
 
         from langgraph.workflows.rag import graph as rag_graph
@@ -589,11 +696,17 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         async def _run_rag():
             config = {"configurable": {"thread_id": "mcp-rag"}}
             result = await rag_graph.ainvoke(
-                {"messages": [HumanMessage(content=query)]}, config
+                {"messages": [HumanMessage(content=query)], "response_shape": response_shape}, config
             )
             return result["messages"][-1].content
 
-        return await _with_timeout(_run_rag())
+        result = await _with_timeout(_run_rag())
+
+        # Append budget warning if any
+        if budget_check.get("warning"):
+            result = f"[Budget Warning: {budget_check['warning']}]\n\n{result}"
+
+        return result
 
     @mcp.tool()
     async def knowledge_agent(question: str, ctx: Context = None) -> str:
@@ -834,6 +947,35 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         """
         await _notify_jcode_usage(ctx, "graph_stats")
         return _web_get("/api/graph/stats")
+
+    @mcp.tool()
+    async def get_artifact(artifact_id: str, ctx: Context = None) -> str:
+        """Get a pre-compiled artifact by ID.
+
+        Pre-compiled artifacts are structured knowledge about the project
+        (e.g., architectural summaries) that are served directly without
+        retrieval, inspired by Pinecone Nexus's approach.
+
+        Args:
+            artifact_id: Artifact identifier (e.g., "rag_architecture").
+        """
+        await _notify_jcode_usage(ctx, "get_artifact")
+        artifact = get_artifact(artifact_id)
+        if artifact:
+            return json.dumps(artifact, indent=2, ensure_ascii=False)
+        return json.dumps({
+            "error": f"Artifact not found: {artifact_id}",
+            "available_artifacts": list(list_artifacts().keys())
+        })
+
+    @mcp.tool()
+    async def list_artifacts(ctx: Context = None) -> str:
+        """List all available pre-compiled artifacts.
+
+        Returns artifact IDs, versions, staleness status, and dependency counts.
+        """
+        await _notify_jcode_usage(ctx, "list_artifacts")
+        return json.dumps(list_artifacts(), indent=2, ensure_ascii=False)
 
     return mcp
 

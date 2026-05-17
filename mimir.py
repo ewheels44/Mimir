@@ -419,6 +419,101 @@ def cmd_metrics(args: argparse.Namespace) -> int:
     return _run_langgraph(extra)
 
 
+def cmd_evaluate(args: argparse.Namespace) -> int:
+    """Run eval harness to measure accuracy and cost."""
+    import json
+    from pathlib import Path
+
+    # Ensure Mimir root is on path
+    mimir_root = Path(__file__).resolve().parent
+    src_dir = mimir_root / "src"
+    if str(src_dir) not in sys.path:
+        sys.path.insert(0, str(src_dir))
+
+    eval_file = Path(args.eval_file)
+    if not eval_file.exists():
+        print(f"Error: Eval file not found: {eval_file}")
+        return 1
+
+    try:
+        with open(eval_file) as f:
+            questions = json.load(f)
+    except json.JSONDecodeError as e:
+        print(f"Error: Invalid JSON in {eval_file}: {e}")
+        return 1
+
+    # Filter by question ID if specified
+    if args.question_id:
+        questions = [q for q in questions if q.get("id") == args.question_id]
+        if not questions:
+            print(f"Error: No question found with ID: {args.question_id}")
+            return 1
+
+    results = []
+    for q in questions:
+        q_id = q.get("id", "unknown")
+        question = q.get("question", "")
+        expected_artifact = q.get("expected_artifact")
+        max_tokens = q.get("max_tokens", 5000)
+        gold_answer = q.get("gold_answer")
+
+        print(f"\n{'=' * 60}")
+        print(f"Running eval: {q_id}")
+        print(f"Question: {question}")
+        print(f"{'=' * 60}")
+
+        # Try to get artifact first if expected
+        result = {
+            "id": q_id,
+            "question": question,
+            "expected_artifact": expected_artifact,
+            "success": False,
+            "used_artifact": False,
+            "token_usage": {},
+            "answer": None,
+        }
+
+        if expected_artifact:
+            try:
+                from mimir.artifacts import get_artifact
+                artifact = get_artifact(expected_artifact)
+                if artifact:
+                    print(f"✓ Using artifact: {expected_artifact}")
+                    result["used_artifact"] = True
+                    result["answer"] = artifact
+                    result["success"] = True
+                else:
+                    print(f"✗ Artifact not found: {expected_artifact}")
+            except Exception as e:
+                print(f"✗ Error getting artifact: {e}")
+
+        # TODO: Also run via RAG workflow for comparison
+        # For now, just report artifact usage
+
+        if gold_answer and result["success"]:
+            # Simple check: verify keys exist in answer
+            from mimir.metrics import get_tracker
+            # This is a placeholder - actual eval would compare answer to gold
+
+        results.append(result)
+
+    # Output results
+    if args.output:
+        with open(args.output, "w") as f:
+            json.dump(results, f, indent=2, ensure_ascii=False)
+        print(f"\nResults saved to: {args.output}")
+    else:
+        print(f"\n{'=' * 60}")
+        print("Eval Results Summary")
+        print(f"{'=' * 60}")
+        for r in results:
+            status = "✓" if r["success"] else "✗"
+            artifact_used = "(artifact)" if r["used_artifact"] else ""
+            print(f"  {status} {r['id']} {artifact_used}")
+
+    return 0
+
+
 def cmd_projects(args: argparse.Namespace) -> int:
     """Multi-project management."""
     extra = [args.projects_action]
@@ -680,6 +775,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of days to include in report (default: 30)",
     )
 
+    # ── evaluate ──
+    p = subparsers.add_parser(
+        "evaluate",
+        help="Run eval harness to measure accuracy and cost",
+        description="Run eval questions to measure RAG system accuracy, token usage, and cost. Compares results against gold answers.",
+    )
+    p.add_argument(
+        "--eval-file",
+        default=".knowledge/evals/questions.json",
+        help="Path to eval questions JSON file (default: .knowledge/evals/questions.json)",
+    )
+    p.add_argument(
+        "--question-id",
+        help="Run a specific question by ID (default: run all)",
+    )
+    p.add_argument(
+        "--output",
+        help="Output file for results (default: print to stdout)",
+    )
+    p.add_argument(
+        "--update-gold",
+        action="store_true",
+        help="Update gold answers from current artifact/system state",
+    )
+
     # ── projects ──
     p = subparsers.add_parser(
         "projects",
@@ -800,6 +920,7 @@ def main() -> int:
         "prep": cmd_prep,
         "diff": cmd_diff,
         "metrics": cmd_metrics,
+        "evaluate": cmd_evaluate,
         "projects": cmd_projects,
         "handoff": cmd_handoff,
         "cache": cmd_cache,

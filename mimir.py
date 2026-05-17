@@ -783,8 +783,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--eval-file",
-        default=".knowledge/evals/questions.json",
-        help="Path to eval questions JSON file (default: .knowledge/evals/questions.json)",
+        default="evals/questions.json",
+        help="Path to eval questions JSON file (default: evals/questions.json)",
     )
     p.add_argument(
         "--question-id",

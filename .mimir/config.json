@@ -13,7 +13,8 @@
   "files": [
     "AGENTS.md",
     "README.md",
-    "mcp_server_llamaindex.py"
+    "mcp_server_llamaindex.py",
+    "mimir.py"
   ],
   "openspace": {
     "enabled": true,

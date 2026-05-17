@@ -108,7 +108,7 @@ from mcp.server.fastmcp import FastMCP, Context  # noqa: E402
 
 from mimir.config import MimirConfig, get_config  # noqa: E402
 from mimir.metrics import get_tracker  # noqa: E402
-from mimir.artifacts import get_artifact, list_artifacts  # noqa: E402
+from mimir.artifacts import get_artifact as artifacts_get_artifact, list_artifacts as artifacts_list_artifacts, load_manifest  # noqa: E402
 from mimir.shared_index import (  # noqa: E402
     SharedIndexRegistry,
 )
@@ -358,6 +358,28 @@ class KnowledgeServer:
                 verbose=True,
                 custom_exclude_patterns=custom_patterns,
             )
+
+            # Index individual files from config (e.g., mimir.py, mcp_server_llamaindex.py)
+            individual_files = self.config.files
+            if individual_files:
+                from mimir.indexing import add_file_to_index
+
+                print(
+                    f"  Indexing {len(individual_files)} individual file(s) from config..."
+                )
+                for file_path_str in individual_files:
+                    file_path = Path(file_path_str)
+                    if not file_path.is_absolute():
+                        file_path = self.project_root / file_path
+                    if file_path.exists():
+                        add_file_to_index(
+                            file_path,
+                            self.knowledge_dir,
+                            verbose=False,
+                            project_root=self.project_root,
+                        )
+                    else:
+                        print(f"    ⚠️  File not found: {file_path}")
 
             if success:
                 self._index = None
@@ -960,12 +982,12 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
             artifact_id: Artifact identifier (e.g., "rag_architecture").
         """
         await _notify_jcode_usage(ctx, "get_artifact")
-        artifact = get_artifact(artifact_id)
+        artifact = artifacts_get_artifact(artifact_id, server.project_root)
         if artifact:
             return json.dumps(artifact, indent=2, ensure_ascii=False)
         return json.dumps({
             "error": f"Artifact not found: {artifact_id}",
-            "available_artifacts": list(list_artifacts().keys())
+            "available_artifacts": list(artifacts_list_artifacts(server.project_root).keys())
         })
 
     @mcp.tool()
@@ -975,7 +997,7 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         Returns artifact IDs, versions, staleness status, and dependency counts.
         """
         await _notify_jcode_usage(ctx, "list_artifacts")
-        return json.dumps(list_artifacts(), indent=2, ensure_ascii=False)
+        return json.dumps(artifacts_list_artifacts(server.project_root), indent=2, ensure_ascii=False)
 
     return mcp
 

@@ -422,61 +422,70 @@ def cmd_metrics(args: argparse.Namespace) -> int:
 def cmd_evaluate(args: argparse.Namespace) -> int:
     """Run eval harness to measure accuracy and cost."""
     import json
+    import re
     from pathlib import Path
-
+    
     # Ensure Mimir root is on path
     mimir_root = Path(__file__).resolve().parent
     src_dir = mimir_root / "src"
     if str(src_dir) not in sys.path:
         sys.path.insert(0, str(src_dir))
-
+    
     eval_file = Path(args.eval_file)
     if not eval_file.exists():
-        print(f"Error: Eval file not found: {eval_file}")
-        return 1
-
+        # Try relative to project root
+        eval_file = mimir_root / args.eval_file
+        if not eval_file.exists():
+            print(f"Error: Eval file not found: {args.eval_file}")
+            return 1
+    
     try:
         with open(eval_file) as f:
             questions = json.load(f)
     except json.JSONDecodeError as e:
         print(f"Error: Invalid JSON in {eval_file}: {e}")
         return 1
-
+    
     # Filter by question ID if specified
     if args.question_id:
         questions = [q for q in questions if q.get("id") == args.question_id]
         if not questions:
             print(f"Error: No question found with ID: {args.question_id}")
             return 1
-
+    
     results = []
+    total_tokens = {"prompt": 0, "completion": 0, "total": 0}
+    
     for q in questions:
         q_id = q.get("id", "unknown")
         question = q.get("question", "")
         expected_artifact = q.get("expected_artifact")
         max_tokens = q.get("max_tokens", 5000)
         gold_answer = q.get("gold_answer")
-
+        response_shape = q.get("response_shape")
+        
         print(f"\n{'=' * 60}")
         print(f"Running eval: {q_id}")
         print(f"Question: {question}")
         print(f"{'=' * 60}")
-
-        # Try to get artifact first if expected
+        
         result = {
             "id": q_id,
             "question": question,
             "expected_artifact": expected_artifact,
             "success": False,
             "used_artifact": False,
+            "used_rag": False,
             "token_usage": {},
             "answer": None,
+            "gold_match": None,
         }
-
+        
+        # Try to get artifact first if expected
         if expected_artifact:
             try:
                 from mimir.artifacts import get_artifact
-                artifact = get_artifact(expected_artifact)
+                artifact = get_artifact(expected_artifact, mimir_root)
                 if artifact:
                     print(f"✓ Using artifact: {expected_artifact}")
                     result["used_artifact"] = True
@@ -484,34 +493,198 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
                     result["success"] = True
                 else:
                     print(f"✗ Artifact not found: {expected_artifact}")
+                    # Fall through to RAG workflow
             except Exception as e:
                 print(f"✗ Error getting artifact: {e}")
+                # Fall through to RAG workflow
+        
+        # If no artifact used, try RAG workflow
+        if not result["used_artifact"]:
+            print("→ Running RAG workflow...")
+            try:
+                # Check if langchain is available
+                try:
+                    from langchain_core.messages import HumanMessage
+                    from langgraph.workflows.rag import graph as rag_graph
+                except ImportError as import_err:
+                    print(f"✗ RAG workflow unavailable: {import_err}")
+                    print("  (langchain/langgraph may not be installed)")
+                    results.append(result)
+                    continue
+                
+                from src.mimir.metrics import get_tracker
+                import asyncio
+                import concurrent.futures
 
-        # TODO: Also run via RAG workflow for comparison
-        # For now, just report artifact usage
+                # Run RAG workflow (async nodes require ainvoke)
+                config = {"configurable": {"thread_id": f"eval-{q_id}"}}
 
-        if gold_answer and result["success"]:
-            # Simple check: verify keys exist in answer
-            from mimir.metrics import get_tracker
-            # This is a placeholder - actual eval would compare answer to gold
+                def run_async_graph():
+                    """Run the async RAG graph and return results."""
+                    return asyncio.run(
+                        rag_graph.ainvoke(
+                            {
+                                "messages": [HumanMessage(content=question)],
+                                "response_shape": response_shape,
+                                "query_text": question,
+                            },
+                            config
+                        )
+                    )
 
+                # Handle both sync and async contexts
+                try:
+                    # Try asyncio.run() first (works in sync context)
+                    rag_result = run_async_graph()
+                except RuntimeError as e:
+                    if "already running" in str(e).lower():
+                        # Already in async context, run in a separate thread
+                        with concurrent.futures.ThreadPoolExecutor() as pool:
+                            rag_result = pool.submit(run_async_graph).result()
+                    else:
+                        raise
+                
+                answer = rag_result["messages"][-1].content
+                result["used_rag"] = True
+                result["answer"] = answer
+                result["success"] = True
+                
+                # Extract token usage
+                token_usage = rag_result.get("token_usage", {})
+                if token_usage:
+                    result["token_usage"] = {
+                        "prompt_tokens": token_usage.get("prompt_tokens", 0),
+                        "completion_tokens": token_usage.get("completion_tokens", 0),
+                        "total_tokens": token_usage.get("total_tokens", 0),
+                    }
+                    # Accumulate totals
+                    for key in ["prompt", "completion", "total"]:
+                        total_key = key + "_tokens"
+                        total_tokens[key] += token_usage.get(total_key, 0)
+                
+                print(f"✓ RAG workflow completed")
+                if result["token_usage"]:
+                    print(f"  Tokens: {result['token_usage']['total_tokens']} (prompt: {result['token_usage']['prompt_tokens']}, completion: {result['token_usage']['completion_tokens']})")
+                
+            except Exception as e:
+                print(f"✗ RAG workflow failed: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # Compare with gold answer if provided
+        if gold_answer and result["success"] and result["answer"]:
+            match_result = _compare_with_gold(result["answer"], gold_answer)
+            result["gold_match"] = match_result
+            status = "✓" if match_result["matches"] else "✗"
+            print(f"{status} Gold answer comparison: {match_result['summary']}")
+        
         results.append(result)
-
+    
+    # Calculate success rate
+    total = len(results)
+    success_count = sum(1 for r in results if r["success"])
+    artifact_count = sum(1 for r in results if r["used_artifact"])
+    rag_count = sum(1 for r in results if r["used_rag"])
+    
     # Output results
     if args.output:
         with open(args.output, "w") as f:
-            json.dump(results, f, indent=2, ensure_ascii=False)
+            json.dump(results, f, indent=2, ensure_ascii=False, default=str)
         print(f"\nResults saved to: {args.output}")
-    else:
-        print(f"\n{'=' * 60}")
-        print("Eval Results Summary")
-        print(f"{'=' * 60}")
-        for r in results:
-            status = "✓" if r["success"] else "✗"
-            artifact_used = "(artifact)" if r["used_artifact"] else ""
-            print(f"  {status} {r['id']} {artifact_used}")
-
+    
+    # Print summary
+    print(f"\n{'=' * 60}")
+    print("Eval Results Summary")
+    print(f"{'=' * 60}")
+    print(f"Total questions: {total}")
+    print(f"Successful: {success_count} ({success_count/total*100:.0f}%)" if total > 0 else "N/A")
+    print(f"  - Via artifact: {artifact_count}")
+    print(f"  - Via RAG: {rag_count}")
+    
+    if total_tokens["total"] > 0:
+        print(f"\nTotal token usage:")
+        print(f"  Prompt: {total_tokens['prompt']}")
+        print(f"  Completion: {total_tokens['completion']}")
+        print(f"  Total: {total_tokens['total']}")
+    
+    print(f"\n{'=' * 60}")
+    for r in results:
+        status = "✓" if r["success"] else "✗"
+        method = "(artifact)" if r["used_artifact"] else "(rag)" if r["used_rag"] else ""
+        gold = f" [gold: {'✓' if r.get('gold_match', {}).get('matches') else '✗'}]" if r.get("gold_match") else ""
+        print(f"  {status} {r['id']} {method}{gold}")
+    
     return 0
+
+
+def _compare_with_gold(answer: dict | str, gold_answer: dict) -> dict:
+    """Compare an answer against gold answer using dot-notation key matching.
+    
+    Args:
+        answer: The answer to check (dict or JSON string)
+        gold_answer: Dict with keys in dot notation (e.g., "retrieval.type")
+    
+    Returns:
+        Dict with 'matches' (bool) and 'summary' (str)
+    """
+    # Parse answer if it's a JSON string
+    if isinstance(answer, str):
+        try:
+            answer = json.loads(answer)
+        except json.JSONDecodeError:
+            return {
+                "matches": False,
+                "summary": "Answer is not valid JSON, cannot compare",
+                "details": []
+            }
+    
+    if not isinstance(answer, dict):
+        return {
+            "matches": False,
+            "summary": f"Answer is not a dict (type: {type(answer).__name__})",
+            "details": []
+        }
+    
+    details = []
+    all_match = True
+    
+    for gold_key, gold_value in gold_answer.items():
+        # Navigate nested dict using dot notation
+        parts = gold_key.split(".")
+        current = answer
+        found = True
+        
+        for part in parts:
+            if isinstance(current, dict) and part in current:
+                current = current[part]
+            else:
+                found = False
+                break
+        
+        if found:
+            # Compare values (stringify both for comparison)
+            answer_str = json.dumps(current, sort_keys=True) if not isinstance(current, str) else current
+            gold_str = json.dumps(gold_value, sort_keys=True) if not isinstance(gold_value, str) else gold_value
+            
+            # Try exact match first, then substring match
+            if answer_str == gold_str:
+                details.append(f"✓ {gold_key}: exact match")
+            elif gold_str in answer_str:
+                details.append(f"✓ {gold_key}: substring match (expected {gold_value})")
+            else:
+                details.append(f"✗ {gold_key}: expected {gold_value}, got {current}")
+                all_match = False
+        else:
+            details.append(f"✗ {gold_key}: key not found in answer")
+            all_match = False
+    
+    summary = f"{sum(1 for d in details if '✓' in d)}/{len(details)} fields match" if details else "No gold fields to compare"
+    
+    return {
+        "matches": all_match,
+        "summary": summary,
+        "details": details,
+    }
 
 
 def cmd_projects(args: argparse.Namespace) -> int:

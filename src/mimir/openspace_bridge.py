@@ -74,6 +74,8 @@ class BridgeConfig:
     max_context_tokens: int = 2500
     top_k: int = 5
     freshness_decay_hours: float = 168.0
+    classification_model: str = "gpt-3.5-turbo"  # Fast model for query classification
+    classification_enabled: bool = True
 
     @classmethod
     def from_env(cls) -> BridgeConfig:
@@ -91,6 +93,8 @@ class BridgeConfig:
             max_context_tokens=config.bridge_max_context_tokens,
             top_k=config.bridge_top_k,
             freshness_decay_hours=config.bridge_freshness_decay_hours,
+            classification_model=config.bridge_classification_model,
+            classification_enabled=config.bridge_classification_enabled,
         )
 
 
@@ -327,6 +331,107 @@ def _resolve_api_key_from_env() -> tuple[str, Optional[str]]:
     return cfg.api_key, cfg.api_base
 
 
+# ─── Query Classification ─────────────────────────────────────────────────
+
+# Classification prompt template
+_CLASSIFICATION_PROMPT = """Classify this query as exactly one of:
+- "structural": Questions about relationships, connections, dependencies, paths between components
+- "semantic": Questions about meaning, usage, concepts, how things work
+
+Key indicators for STRUCTURAL:
+- Mentions connections, relationships, dependencies
+- Asks "how does X connect to Y" or "path from A to B"
+- References multiple components and their relationship
+- Uses words: connect, link, depend, call, import, path, relationship
+
+Key indicators for SEMANTIC:
+- Asks how something works conceptually
+- Requests examples or usage patterns
+- Asks about meaning or purpose
+- Uses words: how does it work, what is, explain, example
+
+Query: {query}
+
+Answer with exactly one word (structural or semantic):"""
+
+# Structural query indicators for quick pre-check
+_STRUCTURAL_KEYWORDS = [
+    "connect", "connection", "link", "linked", "relate", "relationship",
+    "depend", "depends", "dependency", "path", "between", "from", "to",
+    "import", "call", "invoke", "structure of", "graph",
+    "how does", "how do",
+]
+
+
+def _quick_structural_check(query: str) -> Optional[str]:
+    """Fast keyword-based pre-classification. Returns None if uncertain."""
+    query_lower = query.lower()
+    keyword_hits = sum(1 for kw in _STRUCTURAL_KEYWORDS if kw in query_lower)
+    
+    # Strong structural signal: 2+ keywords OR specific structural phrases
+    # BUT exclude "how do I..." (semantic question)
+    has_structural_phrase = any(
+        phrase in query_lower 
+        for phrase in ["connect to", "path from", "depends on", "how does"]
+    )
+    
+    # "how do" is structural only if followed by structural keywords
+    is_how_do_structural = "how do" in query_lower and any(
+        kw in query_lower for kw in ["connect", "link", "relate", "depend", "call"]
+    )
+    
+    if keyword_hits >= 2 or has_structural_phrase or is_how_do_structural:
+        return "structural"
+    if keyword_hits == 0:
+        return "semantic"
+    return None  # Uncertain, let LLM decide
+
+
+# ─── Graph Search Helper ─────────────────────────────────────────────────
+
+def _parse_graph_response(response_text: str) -> Optional[dict]:
+    """Parse graph tool JSON response."""
+    try:
+        # Graph tools return JSON directly
+        return json.loads(response_text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _format_graph_result(graph_data: dict) -> str:
+    """Format graph query result into context string."""
+    if not graph_data:
+        return ""
+    
+    # Handle graph_query response (path finding)
+    if "steps" in graph_data:
+        steps = graph_data.get("steps", [])
+        if not steps:
+            return "No path found between the specified components."
+        
+        lines = ["[Graph Path]"]
+        for i, step in enumerate(steps, 1):
+            source = step.get("source", "?")
+            target = step.get("target", "?")
+            edge = step.get("edge_type", "related")
+            lines.append(f"  {i}. {source} --{edge}--> {target}")
+        return "\n".join(lines)
+    
+    # Handle graph_neighbors response
+    if "neighbors" in graph_data:
+        neighbors = graph_data.get("neighbors", [])
+        center = graph_data.get("center", "?")
+        lines = [f"[Graph Neighbors of {center}]"]
+        for nb in neighbors[:10]:  # Limit output
+            label = nb.get("label", "?")
+            edge = nb.get("edge_type", "related")
+            direction = nb.get("direction", "")
+            lines.append(f"  - {label} ({edge}, {direction})")
+        return "\n".join(lines)
+    
+    return str(graph_data)
+
+
 # ─── Main Bridge ─────────────────────────────────────────────────────────────
 
 
@@ -492,16 +597,134 @@ class MimirOpenSpaceBridge:
             logger.info("[BRIDGE] _search_raw - %d results", len(results))
             return results
 
+    def _classify_query(self, query: str) -> str:
+        """Use LLM to classify query as 'structural' or 'semantic'.
+        
+        Uses fast model (gpt-3.5-turbo by default) for quick classification.
+        Falls back to keyword-based classification on error.
+        """
+        if not self._config.classification_enabled:
+            return "semantic"  # Default to semantic
+        
+        # Quick pre-check to avoid LLM call for obvious cases
+        quick_result = _quick_structural_check(query)
+        if quick_result:
+            logger.debug("[CLASSIFY] Quick classification: %s", quick_result)
+            return quick_result
+        
+        # Use LLM for ambiguous cases
+        try:
+            from llama_index.llms.openai import OpenAI as OpenAILike
+            
+            api_key, api_base = self._resolve_api_key()
+            llm_kwargs = {"model": self._config.classification_model}
+            if api_key:
+                llm_kwargs["api_key"] = api_key
+                if api_base:
+                    llm_kwargs["api_base"] = api_base
+            
+            llm = OpenAILike(**llm_kwargs)
+            prompt = _CLASSIFICATION_PROMPT.format(query=query)
+            
+            with _timed("_classify_query.llm_call"):
+                response = llm.complete(prompt).text.strip().lower()
+            
+            # Parse response
+            if "structural" in response:
+                logger.info("[CLASSIFY] LLM classified as: structural")
+                return "structural"
+            elif "semantic" in response:
+                logger.info("[CLASSIFY] LLM classified as: semantic")
+                return "semantic"
+            else:
+                logger.warning("[CLASSIFY] LLM returned unclear response: %s", response)
+                return "semantic"  # Safe default
+                
+        except Exception as e:
+            logger.warning("[CLASSIFY] LLM classification failed: %s. Using keyword fallback.", e)
+            # Fallback to keyword check
+            return _quick_structural_check(query) or "semantic"
+
+
+    def _search_graph(self, query: str) -> Optional[str]:
+        """Search using graph tools for structural queries.
+        
+        Attempts to extract source/target nodes from query and use graph_query.
+        Falls back to graph_neighbors if path query fails.
+        """
+        # Simple extraction - look for "between X and Y" or "X to Y" patterns
+        import re
+        
+        # Pattern: "between X and Y" or "from X to Y"
+        patterns = [
+            r"between\s+(\S+)\s+and\s+(\S+)",
+            r"from\s+(\S+)\s+to\s+(\S+)",
+            r"(\S+)\s+to\s+(\S+)",
+            r"(\S+)\s+and\s+(\S+)",
+        ]
+        
+        source = target = None
+        for pattern in patterns:
+            match = re.search(pattern, query.lower())
+            if match:
+                source, target = match.group(1), match.group(2)
+                break
+        
+        if source and target:
+            # Try graph_query for path
+            try:
+                from urllib.request import urlopen
+                from urllib.parse import urlencode
+                
+                # Call graph API via localhost (assuming web server is running)
+                port = os.environ.get("MIMIR_WEB_PORT", "8000")
+                params = urlencode({"source": source, "target": target})
+                url = f"http://localhost:{port}/api/graph/path?{params}"
+                
+                with _timed("_search_graph.query"):
+                    with urlopen(url, timeout=10) as resp:
+                        result = json.loads(resp.read().decode())
+                
+                if result.get("found"):
+                    logger.info("[GRAPH] Found path from %s to %s", source, target)
+                    return _format_graph_result(result)
+            except Exception as e:
+                logger.warning("[GRAPH] graph_query failed: %s", e)
+        
+        # Fallback: try to extract a single node and use graph_neighbors
+        node_match = re.search(r"(?:of|for|about)\s+(\S+)", query.lower())
+        if node_match:
+            node = node_match.group(1)
+            try:
+                port = os.environ.get("MIMIR_WEB_PORT", "8000")
+                params = urlencode({"node_id": node, "depth": "2"})
+                url = f"http://localhost:{port}/api/graph/neighbors?{params}"
+                
+                with _timed("_search_graph.neighbors"):
+                    with urlopen(url, timeout=10) as resp:
+                        result = json.loads(resp.read().decode())
+                
+                logger.info("[GRAPH] Found neighbors for %s", node)
+                return _format_graph_result(result)
+            except Exception as e:
+                logger.warning("[GRAPH] graph_neighbors failed: %s", e)
+        
+        return None
+
     def enrich_task(self, task: str, top_k: Optional[int] = None) -> EnrichmentResult:
         """Enrich an OpenSpace task description with Mimir context.
-
+        
         This is the main entry point. OpenSpace calls this before skill
         selection to get project-specific context.
-
+        
+        Now with LLM-based query classification:
+        - Structural queries → graph tools
+        - Semantic queries → vector search
+        
         Args:
             task: The task description from OpenSpace.
             top_k: Number of results to retrieve. Defaults to config.
-
+        
         Returns:
             EnrichmentResult with context string ready for prompt injection.
         """
@@ -537,7 +760,30 @@ class MimirOpenSpaceBridge:
                 logger.info("[BRIDGE] enrich_task - CACHE HIT")
                 return cached
 
-            # Execute search
+            # Classify query and route appropriately
+            query_type = self._classify_query(task)
+            logger.info("[BRIDGE] enrich_task - Query classified as: %s", query_type)
+            
+            if query_type == "structural":
+                # Try graph search first
+                graph_context = self._search_graph(task)
+                if graph_context:
+                    elapsed = int((time.time() - start) * 1000)
+                    result = EnrichmentResult(
+                        success=True,
+                        context=graph_context,
+                        results=(),
+                        elapsed_ms=elapsed,
+                        status="ok",
+                    )
+                    self._circuit.record_success()
+                    self._cache.put(task, k, result)
+                    logger.info("[BRIDGE] enrich_task - GRAPH SUCCESS (%dms)", elapsed)
+                    return result
+                else:
+                    logger.info("[BRIDGE] enrich_task - Graph search failed, falling back to vector")
+
+            # Execute vector search (for semantic queries or graph fallback)
             try:
                 with _timed("enrich_task.search_raw"):
                     results = self._search_raw(task, k)

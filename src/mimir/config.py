@@ -110,6 +110,9 @@ class MimirConfig:
     # Custom exclude patterns (in addition to defaults)
     exclude_patterns: tuple[str, ...] = ()
 
+    # Individual files to index (in addition to directories)
+    files: tuple[str, ...] = ()
+
     # SDK cache
     sdk_cache_ttl_days: int = 7
 
@@ -123,6 +126,8 @@ class MimirConfig:
     bridge_max_context_tokens: int = 2500
     bridge_top_k: int = 5
     bridge_freshness_decay_hours: float = 168.0
+    bridge_classification_model: str = "gpt-3.5-turbo"
+    bridge_classification_enabled: bool = True
 
     # Metadata
     _config_source: str = ""  # For debugging: where did config come from?
@@ -176,6 +181,10 @@ class MimirConfig:
             tuple(custom_patterns) if isinstance(custom_patterns, list) else ()
         )
 
+        # Individual files to index
+        files_list = file_config.get("files", [])
+        files = tuple(files_list) if isinstance(files_list, list) else ()
+
         # Shared indexes
         raw_shared = file_config.get("shared_indexes", {})
         shared_indexes = {}
@@ -215,6 +224,7 @@ class MimirConfig:
             knowledge_dir=knowledge_dir,
             code_dirs=tuple(code_dirs),
             exclude_patterns=exclude_patterns,
+            files=files,
             shared_indexes=shared_indexes,
             sdk_cache_ttl_days=sdk_cache_ttl,
             bridge_enabled=_env_bool(
@@ -264,6 +274,14 @@ class MimirConfig:
                     "freshness_decay_hours", DEFAULTS["bridge_freshness_decay_hours"]
                 )
             ),
+            bridge_classification_model=(
+                os.environ.get("MIMIR_BRIDGE_CLASSIFY_MODEL")
+                or bridge.get("classification_model", DEFAULTS.get("bridge_classification_model", "gpt-3.5-turbo"))
+            ),
+            bridge_classification_enabled=_env_bool(
+                "MIMIR_BRIDGE_CLASSIFY_ENABLED",
+                bridge.get("classification_enabled", True)
+            ),
             _config_source=_describe_sources(file_config),
         )
 
@@ -280,6 +298,7 @@ class MimirConfig:
             "knowledge_dir": str(self.knowledge_dir),
             "code_dirs": [str(d) for d in self.code_dirs],
             "exclude_patterns": list(self.exclude_patterns),
+            "files": list(self.files),
             "shared_indexes": {k: str(v) for k, v in self.shared_indexes.items()},
             "sdk_cache_ttl_days": self.sdk_cache_ttl_days,
             "bridge_enabled": self.bridge_enabled,

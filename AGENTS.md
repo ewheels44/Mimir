@@ -12,6 +12,18 @@ LlamaIndex (vector search) ← MCP (tool bridge) ← LangGraph (workflows)
 
 Each project gets its own index at `.knowledge/llamaindex/`. The MCP server auto-detects which project you're in.
 
+### Pre-compiled Artifacts (Pinecone Nexus-Inspired)
+
+Mimir can serve pre-compiled knowledge artifacts instead of running retrieval every time:
+
+```
+.artifacts/rag_architecture.json     # RAG system architecture
+.artifacts/indexing_architecture.json # Indexing system architecture
+.artifacts/manifest.json               # Dependency tracking
+```
+
+Artifacts track which source files they depend on, and auto-invalidate when those files change (via the file watcher).
+
 ## MCP Tools
 
 | Tool | What it does | When to use |
@@ -23,6 +35,8 @@ Each project gets its own index at `.knowledge/llamaindex/`. The MCP server auto
 | `mimir-knowledge_sdk_cache_list` | List cached SDK docs | Check what's available |
 | `mimir-knowledge_rag_workflow` | Structured retrieve → generate | Complex analysis |
 | `mimir-knowledge_knowledge_agent` | Multi-step agentic research | Deep exploration |
+| `mimir-knowledge_get_artifact` | Get pre-compiled artifact | Quick answers from cached knowledge |
+| `mimir-knowledge_list_artifacts` | List available artifacts | Check what artifacts exist |
 | `mimir-knowledge_reindex` | Rebuild the full index | After major changes |
 | `mimir-knowledge_health_check` | Check server status | Debugging |
 | `mimir-knowledge_stats` | Index statistics | Check what's indexed |
@@ -36,13 +50,14 @@ Each project gets its own index at `.knowledge/llamaindex/`. The MCP server auto
 
 ```
 1. enrich_task     → project memory (always first)
-2. sdk_cache_get   → library docs (before guessing)
-3. graph_query     → structural paths ("how does X reach Y?")
-4. graph_neighbors → dependency exploration ("what calls this?")
-5. search          → semantic similarity
-6. query           → synthesized understanding
-7. rag_workflow    → structured analysis
-8. knowledge_agent → deep research
+2. get_artifact    → pre-compiled knowledge (fast, no retrieval)
+3. sdk_cache_get   → library docs (before guessing)
+4. graph_query     → structural paths ("how does X reach Y?")
+5. graph_neighbors → dependency exploration ("what calls this?")
+6. search          → semantic similarity
+7. query           → synthesized understanding
+8. rag_workflow    → structured analysis (supports response_shape)
+9. knowledge_agent → deep research
 ```
 
 ## Project Structure
@@ -54,6 +69,7 @@ Mimir/
 ├── src/mimir/                  # Core Python package
 │   ├── config.py               # Unified config — single source of truth
 │   ├── indexing.py             # Document indexing
+│   ├── artifacts.py            # Pre-compiled artifact system
 │   ├── knowledge_graph.py      # Code relationship extraction
 │   ├── metrics.py              # Cost/token tracking
 │   ├── openspace_bridge.py     # OpenSpace integration
@@ -64,11 +80,12 @@ Mimir/
 ├── scripts/                    # Utility scripts
 │   ├── mimir-init.py           # Installer — global setup + per-project init
 │   ├── mimir-projects.py       # Multi-project management
+│   ├── generate_artifacts.py   # Artifact generator
 │   ├── full_index.py           # Full index script
 │   └── jcode/                  # Jcode bridge
 ├── langgraph/                  # LangGraph workflows
 │   ├── workflows/
-│   │   ├── rag.py              # RAG workflow
+│   │   ├── rag.py              # RAG workflow (supports response_shape)
 │   │   ├── knowledge_agent.py  # Knowledge agent
 │   │   └── ...
 │   └── langgraph.json          # LangGraph config
@@ -85,7 +102,12 @@ Mimir/
 ├── .mimir/                     # Per-project config (optional)
 ├── .knowledge/                 # Vector index + SDK cache (auto-created)
 │   ├── llamaindex/
-│   └── sdk-cache/
+│   ├── sdk-cache/
+│   ├── artifacts/              # Pre-compiled artifacts
+│   │   ├── manifest.json      # Artifact dependency tracking
+│   │   └── *.json            # Individual artifacts
+│   └── evals/                  # Eval harness questions
+│       └── questions.json
 ```
 
 ## Configuration
@@ -110,14 +132,16 @@ All fields optional. Defaults work for most projects.
 | `mcp_server_llamaindex.py` | MCP server — tool definitions, server lifecycle |
 | `src/mimir/config.py` | Unified config — single source of truth |
 | `src/mimir/indexing.py` | Document indexing — full, incremental, file-level |
+| `src/mimir/artifacts.py` | Pre-compiled artifacts — dependency tracking, staleness |
 | `src/mimir/openspace_bridge.py` | OpenSpace integration — circuit breaker, cache, content filter |
 | `src/mimir/sdk_cache.py` | SDK doc cache — Context7 API, TTL, local storage |
 | `src/mimir/shared_index.py` | Cross-codebase search — shared index composition |
 | `src/mimir/knowledge_graph.py` | Code relationship extraction — AST + tree-sitter |
 | `src/mimir/metrics.py` | Cost/token tracking — per-component breakdown |
-| `src/mimir/watcher.py` | File watcher — auto-reindex on changes |
+| `src/mimir/watcher.py` | File watcher — auto-reindex on changes, invalidates artifacts |
+| `scripts/generate_artifacts.py` | Artifact generator — creates pre-compiled knowledge |
 | `scripts/mimir-init.py` | Installer — global setup + per-project init |
-| `langgraph/workflows/rag.py` | RAG workflow — retrieve → generate |
+| `langgraph/workflows/rag.py` | RAG workflow — retrieve → generate, supports response_shape |
 | `langgraph/workflows/knowledge_agent.py` | Knowledge agent — multi-step research |
 
 ## Jcode Bridge
@@ -147,6 +171,89 @@ python scripts/jcode/mimir_bridge.py --inject-prompt     # Inject system prompt 
 python scripts/jcode/mimir_bridge.py --check             # Check current status
 python scripts/jcode/mimir_bridge.py --unregister        # Remove all Mimir config
 ```
+
+---
+
+## Budget Controls
+
+Mimir MCP tools support budget limits to control token usage and costs:
+
+```python
+# In MCP tools: search, query, rag_workflow
+max_tokens: int = None       # Token budget for this request
+max_cost_usd: float = None  # Cost budget in USD
+
+# Example: Limit to $0.10 per request
+rag_workflow(
+    query="...",
+    max_tokens=500,
+    max_cost_usd=0.10
+)
+```
+
+Budget checking uses `metrics.py` to track usage over the last 24 hours. Warnings are issued when <10% budget remains.
+
+---
+
+## Declarative Query Shape (KnowQL-Inspired)
+
+The `rag_workflow` tool supports a `response_shape` parameter for structured outputs:
+
+```python
+response_shape = json.dumps({
+    "components": [{"name": "...", "purpose": "..."}],
+    "data_flow": "...",
+    "key_files": ["..."]
+})
+
+# Returns JSON matching the schema instead of prose
+rag_workflow(query="...", response_shape=response_shape)
+```
+
+**Benefits:**
+- Reduces token usage (JSON vs prose)
+- Machine-readable outputs for programmatic use
+- Inspired by KnowQL's declarative query approach
+
+---
+
+## Eval Harness
+
+Measure RAG system accuracy, token usage, and cost:
+
+```bash
+# Run all evals
+mimir evaluate --eval-file .knowledge/evals/questions.json --output results.json
+
+# Run specific question
+mimir evaluate --question-id rag_architecture
+
+# Update gold answers from current system state
+mimir evaluate --update-gold
+```
+
+### Eval Question Format
+
+```json
+[
+  {
+    "id": "rag_architecture",
+    "question": "What type of RAG system does Mimir have?",
+    "expected_artifact": "rag_architecture",
+    "max_tokens": 5000,
+    "response_shape": "{\"key\": \"...\"}",
+    "gold_answer": {
+      "structure.retrieval.type": "hybrid"
+    }
+  }
+]
+```
+
+**Features:**
+- Tries `get_artifact` first (if `expected_artifact` set)
+- Falls back to `rag_workflow` (if langchain/langgraph available)
+- Compares answers to `gold_answer` using dot-notation key matching
+- Tracks token usage in results
 
 ---
 

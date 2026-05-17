@@ -1,0 +1,27 @@
+[
+  {
+    "id": "indexing_system",
+    "question": "How does Mimir's indexing system work? Explain the components, data flow, and key files involved.",
+    "expected_artifact": null,
+    "max_tokens": 500,
+    "response_shape": {
+      "components": [{"name": "...", "purpose": "..."}],
+      "data_flow": "...",
+      "key_files": ["..."]
+    }
+  },
+  {
+    "id": "rag_architecture",
+    "question": "What is the RAG architecture in Mimir? Describe the retrieval and orchestration layers.",
+    "expected_artifact": "rag_architecture",
+    "max_tokens": 500,
+    "response_shape": null
+  },
+  {
+    "id": "knowledge_graph",
+    "question": "How does the knowledge graph work in Mimir? What relationship types are extracted?",
+    "expected_artifact": null,
+    "max_tokens": 500,
+    "response_shape": null
+  }
+]

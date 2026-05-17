@@ -21,33 +21,61 @@ from mimir.indexing import compute_file_hash
 
 logger = logging.getLogger(__name__)
 
-ARTIFACT_DIR = Path(".knowledge/artifacts")
-MANIFEST_PATH = ARTIFACT_DIR / "manifest.json"
+# Default artifact directory relative to project root
+DEFAULT_ARTIFACT_DIR = Path(".knowledge/artifacts")
+MANIFEST_PATH = DEFAULT_ARTIFACT_DIR / "manifest.json"
 
 DEFAULT_TTL_SECONDS = 3600  # 1 hour
 
 
-def _ensure_artifact_dir():
+def _get_artifact_dir(project_root: Optional[Path] = None) -> Path:
+    """Get the artifact directory path, resolving relative to project root if needed."""
+    if project_root is None:
+        # Auto-detect project root by looking for marker files
+        current = Path.cwd()
+        for parent in [current] + list(current.parents):
+            if (parent / ".git").exists() or (parent / "mcp_server_llamaindex.py").exists():
+                project_root = parent
+                break
+        if project_root is None:
+            project_root = current
+    
+    artifact_dir = DEFAULT_ARTIFACT_DIR
+    if not artifact_dir.is_absolute():
+        artifact_dir = project_root / artifact_dir
+    
+    return artifact_dir
+
+
+def _get_manifest_path(project_root: Optional[Path] = None) -> Path:
+    """Get the manifest file path."""
+    return _get_artifact_dir(project_root) / "manifest.json"
+
+
+def _ensure_artifact_dir(project_root: Optional[Path] = None):
     """Ensure artifact directory exists."""
-    ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+    artifact_dir = _get_artifact_dir(project_root)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
 
 
-def load_manifest() -> dict:
+def load_manifest(project_root: Optional[Path] = None) -> dict:
     """Load artifact manifest. Returns empty structure if not found."""
-    if MANIFEST_PATH.exists():
+    manifest_path = _get_manifest_path(project_root)
+    if manifest_path.exists():
         try:
-            with open(MANIFEST_PATH) as f:
+            with open(manifest_path) as f:
                 return json.load(f)
         except (OSError, json.JSONDecodeError):
             pass
     return {"artifacts": {}, "schema_version": "1.0"}
 
 
-def save_manifest(manifest: dict) -> None:
+def save_manifest(manifest: dict, project_root: Optional[Path] = None) -> None:
     """Save artifact manifest."""
-    _ensure_artifact_dir()
+    _ensure_artifact_dir(project_root)
     manifest["last_updated"] = datetime.now().isoformat()
-    with open(MANIFEST_PATH, "w") as f:
+    manifest_path = _get_manifest_path(project_root)
+    with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
 
 
@@ -89,7 +117,7 @@ def create_artifact(
     source_hashes = compute_source_hashes(depends_on)
 
     artifact_info = {
-        "path": str(ARTIFACT_DIR / f"{artifact_id}.json"),
+        "path": str(_get_artifact_dir() / f"{artifact_id}.json"),
         "version": "1.0.0",
         "depends_on": depends_on,
         "source_hashes": source_hashes,
@@ -112,12 +140,12 @@ def create_artifact(
     return artifact_info
 
 
-def get_artifact(artifact_id: str) -> Optional[dict]:
+def get_artifact(artifact_id: str, project_root: Optional[Path] = None) -> Optional[dict]:
     """Retrieve an artifact by ID. Returns None if not found.
 
     Also checks staleness and adds staleness warnings to the result.
     """
-    manifest = load_manifest()
+    manifest = load_manifest(project_root)
     artifact_info = manifest["artifacts"].get(artifact_id)
 
     if not artifact_info:
@@ -126,7 +154,11 @@ def get_artifact(artifact_id: str) -> Optional[dict]:
     # Check if stale due to source file changes
     is_stale = _check_staleness(artifact_info)
 
+    # Resolve artifact path relative to project root if needed
     artifact_path = Path(artifact_info["path"])
+    if not artifact_path.is_absolute() and project_root:
+        artifact_path = project_root / artifact_path
+    
     if not artifact_path.exists():
         logger.warning(f"Artifact '{artifact_id}' manifest exists but file missing")
         return None
@@ -266,9 +298,9 @@ def rebuild_artifact(artifact_id: str, project_root: Optional[Path] = None) -> b
     return True
 
 
-def list_artifacts() -> dict:
+def list_artifacts(project_root: Optional[Path] = None) -> dict:
     """List all artifacts with their status."""
-    manifest = load_manifest()
+    manifest = load_manifest(project_root)
     result = {}
 
     for artifact_id, info in manifest["artifacts"].items():

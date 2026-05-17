@@ -185,9 +185,35 @@ def generate_indexing_architecture_artifact() -> dict:
     }
 
 
+def generate_artifact_system_artifact() -> dict:
+    """Generate artifact: Artifact dependency tracking system."""
+    return {
+        "artifact_type": "architectural_summary",
+        "component": "artifact_system",
+        "description": "Mimir's pre-compiled artifact system with dependency tracking",
+        "structure": {
+            "storage": {
+                "manifest": ".knowledge/artifacts/manifest.json",
+                "artifacts": ".knowledge/artifacts/*.json",
+            },
+            "staleness_checks": ["source_file_changes", "TTL_expiry"],
+            "ttl_seconds": 3600,
+            "invalidation_trigger": "file_watcher",
+            "rebuild_strategy": "lazy_rebuild_on_query",
+            "eager_rebuild": False,
+        },
+        "source_files": [
+            "src/mimir/artifacts.py",
+            "mcp_server_llamaindex.py"
+        ],
+        "generated_at": "2026-05-17T02:16:00Z"
+    }
+
+
 ARTIFACT_GENERATORS = {
     "rag_architecture": generate_rag_architecture_artifact,
     "indexing_architecture": generate_indexing_architecture_artifact,
+    "artifact_system": generate_artifact_system_artifact,
 }
 
 

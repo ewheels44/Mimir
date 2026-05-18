@@ -40,6 +40,102 @@ python /path/to/Mimir/mimir.py init --code-dirs=src,tests
 
 ---
 
+## Core Architecture
+
+Mimir combines three layers to give AI agents persistent, intelligent context:
+
+### Hybrid RAG (Retrieval-Augmented Generation)
+
+Mimir uses **hybrid retrieval** (vector + sparse) with LangGraph orchestration:
+
+```
+Query: "How does auth work?"
+    │
+    ▼
+┌─────────────────────────────────────────────────────────┐
+│                 Hybrid Retrieval                         │
+│  ┌──────────────────┐    ┌──────────────────────────┐  │
+│  │ Vector Search    │    │ Sparse Search (BM25)     │  │
+│  │ Semantic match   │    │ Keyword match            │  │
+│  └──────────────────┘    └──────────────────────────┘  │
+│                   │                                     │
+│                   ▼                                     │
+│          Merge & Deduplicate (prefer vector)            │
+└──────────────────────┬──────────────────────────────────┘
+                       │ feeds into
+                       ▼
+┌─────────────────────────────────────────────────────────┐
+│              LangGraph Orchestration                     │
+│  • rag_workflow: retrieve → generate (2-step)           │
+│  • knowledge_agent: multi-step agentic research         │
+└──────────────────────┬──────────────────────────────────┘
+                       │ uses
+                       ▼
+              LLM (OpenRouter) + Token Tracking
+```
+
+**Key components:**
+- **Vector search**: LlamaIndex with `text-embedding-3-small` (configurable)
+- **Sparse search**: BM25Retriever for keyword matching
+- **LangGraph workflows**: `rag_workflow` (simple 2-step) or `knowledge_agent` (multi-step agentic)
+- **Budget controls**: Limit tokens/costs per request via `max_tokens` and `max_cost_usd`
+
+### Pre-Compiled Artifacts
+
+For frequently-asked architectural questions, Mimir serves **pre-compiled knowledge** (inspired by Pinecone Nexus) instead of running retrieval every time:
+
+```python
+# Tries artifact first (instant, zero token cost)
+get_artifact("rag_architecture")
+
+# Falls back to rag_workflow if artifact missing/stale
+rag_workflow(query="...")
+```
+
+**How artifacts work:**
+1. **Generate**: Python functions in `scripts/generate_artifacts.py` create structured JSON summaries
+2. **Store**: `.knowledge/artifacts/*.json` with `manifest.json` for dependency tracking
+3. **Track dependencies**: Each artifact knows which source files it depends on
+4. **Invalidate**: TTL (1 hour) + file watcher detects dependency changes
+5. **Rebuild**: Lazy strategy — rebuilt on next query (not eager)
+
+**Available artifacts:**
+| Artifact ID | Content |
+|-------------|---------|
+| `rag_architecture` | RAG system design and components |
+| `indexing_architecture` | Indexing system design |
+| `artifact_system` | Artifact system itself |
+
+**Benefits:** ⚡ Instant answers • 💰 Zero token cost • 🔄 Auto-invalidation when source changes
+
+### Knowledge Graph
+
+For structural questions ("How does X connect to Y?"), Mimir extracts code relationships using AST + tree-sitter:
+
+```
+Code → AST + tree-sitter → Relationships → Rust Graph Server (Weighted Dijkstra)
+```
+
+**Tools:** `graph_query(source, target)` • `graph_neighbors(node)` • `graph_stats()`
+
+**Relationship weights** (stronger coupling = lower weight):
+| Relationship | Weight | Meaning |
+|-------------|--------|---------|
+| `calls` / `has_method` | 1.0 | Direct function/method call |
+| `inherits_from` | 1.5 | Class inheritance |
+| `imports_from` | 2.0 | Specific symbol import |
+| `imports_module` | 3.0 | Whole-module import |
+
+---
+
+**In summary, Mimir gives agents:**
+- **Semantic search** → "What does auth do?" (vector + BM25 hybrid)
+- **Structured answers** → "Explain the RAG architecture" (artifacts or rag_workflow)
+- **Structural understanding** → "How does auth reach the database?" (graph query with Dijkstra)
+- **External docs** → "How do I use Stripe checkout?" (SDK cache with 7-day TTL)
+
+---
+
 ## Jcode Integration
 
 Mimir includes a built-in Jcode bridge for seamless integration with the [Jcode](https://github.com/1jehuang/jcode) agent server.

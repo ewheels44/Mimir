@@ -112,6 +112,16 @@ from mimir.artifacts import get_artifact as artifacts_get_artifact, list_artifac
 from mimir.shared_index import (  # noqa: E402
     SharedIndexRegistry,
 )
+from mimir.query_cache import QueryCache  # noqa: E402
+
+QUERY_CACHE = None
+
+def get_query_cache(project_root: Path) -> Optional[QueryCache]:
+    """Get or create query cache instance."""
+    global QUERY_CACHE
+    if QUERY_CACHE is None:
+        QUERY_CACHE = QueryCache(project_root)
+    return QUERY_CACHE
 
 
 def create_server_config() -> MimirConfig:
@@ -280,7 +290,52 @@ class KnowledgeServer:
             text = node.text[:500] + "..." if len(node.text) > 500 else node.text
             results.append(f"[{i}] {source} (score: {score:.3f})\n{text}")
 
+        # Enhance with knowledge graph context if available
+        try:
+            from mimir.knowledge_graph import load_knowledge_graph
+            import json
+
+            kg = load_knowledge_graph(self.project_root)
+            if kg and kg.get("relationships"):
+                # Extract potential entity names from query
+                query_terms = [q.strip() for q in query.split() if len(q.strip()) > 3]
+
+                # Find nodes matching query terms
+                matching_nodes = []
+                for node in kg.get("nodes", []):
+                    node_name = node.get("id", "")
+                    if any(term.lower() in node_name.lower() for term in query_terms):
+                        matching_nodes.append(node_name)
+
+                if matching_nodes:
+                    # Get neighbors for top matching node
+                    top_node = matching_nodes[0]
+                    neighbors = self._get_graph_neighbors(kg, top_node, depth=1)
+
+                    if neighbors:
+                        results.append(f"\n\n[Knowledge Graph Context]")
+                        results.append(f"Node '{top_node}' is connected to:")
+                        for neighbor in neighbors[:5]:  # Limit to 5 neighbors
+                            results.append(f"  - {neighbor}")
+        except Exception:
+            pass  # Don't let graph enhancement break search
+
         return "\n\n".join(results)
+
+    def _get_graph_neighbors(self, kg: dict, node_id: str, depth: int = 1) -> list[str]:
+        """Get neighbor node IDs for a given node."""
+        neighbors = []
+        relationships = kg.get("relationships", [])
+
+        for rel in relationships:
+            source = rel.get("source", "")
+            target = rel.get("target", "")
+            if source == node_id:
+                neighbors.append(f"{target} ({rel.get('type', 'connected')})")
+            elif target == node_id:
+                neighbors.append(f"{source} ({rel.get('type', 'connected')})")
+
+        return neighbors[:10]  # Limit results
 
     def _format_search_error(self, e: Exception, context: str) -> str:
         """Format search errors with helpful messages."""
@@ -692,6 +747,35 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
         """Get statistics about the knowledge base."""
         await _notify_jcode_usage(ctx, "stats")
         return json.dumps(server.get_stats(), indent=2)
+
+    @mcp.tool()
+    async def cache_stats(ctx: Context = None) -> str:
+        """Get query cache statistics."""
+        await _notify_jcode_usage(ctx, "cache_stats")
+        cache = get_query_cache(server.project_root)
+        if cache is None:
+            return json.dumps({"error": "Query cache not available"})
+        return json.dumps(cache.stats(), indent=2)
+
+    @mcp.tool()
+    async def cache_clear(ctx: Context = None) -> str:
+        """Clear all cached query results."""
+        await _notify_jcode_usage(ctx, "cache_clear")
+        cache = get_query_cache(server.project_root)
+        if cache is None:
+            return "Query cache not available"
+        count = cache.invalidate()
+        return f"Cleared {count} cached entries"
+
+    @mcp.tool()
+    async def cache_cleanup(ctx: Context = None) -> str:
+        """Remove expired cache entries."""
+        await _notify_jcode_usage(ctx, "cache_cleanup")
+        cache = get_query_cache(server.project_root)
+        if cache is None:
+            return "Query cache not available"
+        count = cache.cleanup()
+        return f"Cleaned up {count} expired cache entries"
 
     @mcp.tool()
     async def rag_workflow(query: str, response_shape: str = None, max_tokens: int = None, max_cost_usd: float = None, ctx: Context = None) -> str:

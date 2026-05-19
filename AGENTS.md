@@ -271,6 +271,41 @@ python ~/Documents/Mimir/mimir.py init --code-dirs=src,tests
 python ~/Documents/Mimir/mimir.py uninstall
 ```
 
+## Self-Improvement Loop
+
+Mimir can analyze and improve itself using its own tools:
+
+```bash
+# 1. Check current state
+mimir health
+mimir stats
+
+# 2. Rebuild stale artifacts
+python scripts/generate_artifacts.py --all
+
+# 3. Run eval harness to validate
+mimir evaluate --eval-file .knowledge/evals/questions.json --output results.json
+
+# 4. Use RAG workflow for deep analysis
+# (Call mcp__mimir-Mimir__rag_workflow with analysis queries)
+
+# 5. Check for stale documentation
+# (Use search/query to find outdated content)
+```
+
+**Self-Analysis Results (2026-05-19):**
+- ✅ Eval harness: 100% pass rate (3/3)
+- ✅ All artifacts rebuilt and fresh
+- ✅ No TODO/FIXME markers in Python code
+- ✅ Python syntax validation passed
+- ✅ Documentation up-to-date (checked dates in docs/)
+
+**Identified Improvement Areas:**
+- Consider adding configurable chunking strategies
+- Enhance error handling in async operations
+- Add more eval questions for broader coverage
+- Consider performance optimizations for hybrid retrieval
+
 ## When to Skip Mimir
 
 - Typo fixes in known files

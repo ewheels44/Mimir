@@ -101,8 +101,12 @@
     "/Users/ethanwheeler/Documents/Mimir/web/client/src/pages/MetricsPage.tsx": "298d8b2ffc27718599592c6f34e34c5656e9a15746344892f71ba6257b6a1d3a",
     "/Users/ethanwheeler/Documents/Mimir/web/client/src/pages/GraphPage.module.css": "aaf26f54f06dbd232cb78253c787021b2b179fce920c3bd2d0a48c91e34a945c",
     "/Users/ethanwheeler/Documents/Mimir/web/client/src/pages/GraphPage.tsx": "2c010d916a441b114d7b0dd081eecd842322a49042244cd5e922730ecb53f0de",
-    "/Users/ethanwheeler/Documents/Mimir/web/client/src/pages/MetricsPage.module.css": "68b07bd7e3dd4bd429ff978edae2263d764852af344043c52f1aeb71bac4bfc8"
+    "/Users/ethanwheeler/Documents/Mimir/web/client/src/pages/MetricsPage.module.css": "68b07bd7e3dd4bd429ff978edae2263d764852af344043c52f1aeb71bac4bfc8",
+    "/Users/ethanwheeler/Documents/Mimir/AGENTS.md": "2686c7a034af2a2c17d6de5090572ec9c8486d66d488ab1f33772ff1a22846b1",
+    "/Users/ethanwheeler/Documents/Mimir/README.md": "f49b5980ec8d8c7d41c08b0077c7f79d9f1a874922ee74c7e59459772c15a886",
+    "/Users/ethanwheeler/Documents/Mimir/mcp_server_llamaindex.py": "e379463fc87ea2d4be12d1349df507022ea355a7673b2567601b23e5002611ec",
+    "/Users/ethanwheeler/Documents/Mimir/mimir.py": "5181ca12ba7cccc5e05c8d20ae3bc728d78a4ef5e9d8e33142ef6021378f68a5"
   },
   "last_mtime_check": 1778793202.2759194,
-  "last_updated": "2026-05-14T16:13:32.610645"
+  "last_updated": "2026-05-18T20:10:47.798143"
 }

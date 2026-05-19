@@ -1,0 +1,38 @@
+{
+  "neural_calls": 5,
+  "llm_calls": 0,
+  "keyword_calls": 0,
+  "total_saved_usd": 0.007495000000000001,
+  "queries": [
+    {
+      "query": "How does auth connect to db?",
+      "method": "neural",
+      "confidence": 0.95,
+      "timestamp": "2026-05-19 11:28:25.746175"
+    },
+    {
+      "query": "What is the purpose of config?",
+      "method": "neural",
+      "confidence": 0.95,
+      "timestamp": "2026-05-19 11:28:25.746628"
+    },
+    {
+      "query": "Show path from src to utils",
+      "method": "neural",
+      "confidence": 0.95,
+      "timestamp": "2026-05-19 11:28:25.746723"
+    },
+    {
+      "query": "How does RAG work?",
+      "method": "neural",
+      "confidence": 0.95,
+      "timestamp": "2026-05-19 11:28:25.746802"
+    },
+    {
+      "query": "What does the embedding model do?",
+      "method": "neural",
+      "confidence": 0.95,
+      "timestamp": "2026-05-19 11:28:25.746876"
+    }
+  ]
+}

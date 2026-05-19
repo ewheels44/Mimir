@@ -598,21 +598,40 @@ class MimirOpenSpaceBridge:
             return results
 
     def _classify_query(self, query: str) -> str:
-        """Use LLM to classify query as 'structural' or 'semantic'.
+        """Classify query as 'structural' or 'semantic'.
         
-        Uses fast model (gpt-3.5-turbo by default) for quick classification.
-        Falls back to keyword-based classification on error.
+        Uses neural classifier (Phase 1) for fast, cheap classification.
+        Falls back to LLM if classifier is uncertain or unavailable.
+        Final fallback to keyword-based classification.
         """
         if not self._config.classification_enabled:
             return "semantic"  # Default to semantic
         
-        # Quick pre-check to avoid LLM call for obvious cases
+        # Quick pre-check to avoid unnecessary calls
         quick_result = _quick_structural_check(query)
         if quick_result:
             logger.debug("[CLASSIFY] Quick classification: %s", quick_result)
             return quick_result
         
-        # Use LLM for ambiguous cases
+        # Try neural classifier first (fast, cheap ~$0.000001 per query)
+        try:
+            from src.mimir.query_classifier import load_model, track_classification
+            
+            classifier = load_model()
+            if classifier is not None:
+                label, confidence = classifier.predict_with_confidence(query)
+                
+                # If confident, return neural classification
+                if confidence >= 0.6:
+                    logger.info("[CLASSIFY] Neural classified as: %s (confidence: %.2f)", label, confidence)
+                    track_classification("neural", query, confidence)
+                    return label
+                else:
+                    logger.debug("[CLASSIFY] Neural uncertain (%.2f), trying LLM", confidence)
+        except Exception as e:
+            logger.debug("[CLASSIFY] Neural classifier unavailable: %s", e)
+        
+        # Fallback to LLM for ambiguous cases (~$0.0015 per query)
         try:
             from llama_index.llms.openai import OpenAI as OpenAILike
             
@@ -632,9 +651,13 @@ class MimirOpenSpaceBridge:
             # Parse response
             if "structural" in response:
                 logger.info("[CLASSIFY] LLM classified as: structural")
+                from src.mimir.query_classifier import track_classification
+                track_classification("llm", query, confidence=None)
                 return "structural"
             elif "semantic" in response:
                 logger.info("[CLASSIFY] LLM classified as: semantic")
+                from src.mimir.query_classifier import track_classification
+                track_classification("llm", query, confidence=None)
                 return "semantic"
             else:
                 logger.warning("[CLASSIFY] LLM returned unclear response: %s", response)
@@ -642,8 +665,11 @@ class MimirOpenSpaceBridge:
                 
         except Exception as e:
             logger.warning("[CLASSIFY] LLM classification failed: %s. Using keyword fallback.", e)
-            # Fallback to keyword check
-            return _quick_structural_check(query) or "semantic"
+            # Final fallback to keyword check
+            from src.mimir.query_classifier import track_classification
+            result = _quick_structural_check(query) or "semantic"
+            track_classification("keyword", query, confidence=None)
+            return result
 
 
     def _search_graph(self, query: str) -> Optional[str]:

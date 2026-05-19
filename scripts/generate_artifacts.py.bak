@@ -194,13 +194,13 @@ def generate_artifact_system_artifact() -> dict:
         "structure": {
             "storage": {
                 "manifest": ".knowledge/artifacts/manifest.json",
-                "artifacts": ".knowledge/artifacts/*.json"
+                "artifacts": ".knowledge/artifacts/*.json",
             },
             "staleness_checks": ["source_file_changes", "TTL_expiry"],
             "ttl_seconds": 3600,
             "invalidation_trigger": "file_watcher",
             "rebuild_strategy": "lazy_rebuild_on_query",
-            "eager_rebuild": False
+            "eager_rebuild": False,
         },
         "source_files": [
             "src/mimir/artifacts.py",
@@ -210,82 +210,13 @@ def generate_artifact_system_artifact() -> dict:
     }
 
 
-def generate_code_chunking_artifact() -> dict:
-    """Generate artifact: Code chunking strategies."""
-    return {
-        "artifact_type": "implementation_summary",
-        "component": "chunking_system",
-        "description": "Mimir's AST-aware code chunking for better retrieval",
-        "chunking_strategy": "AST-aware",
-        "python_chunking": "PythonASTChunker",
-        "multilang_chunking": "TreeSitterChunker",
-        "chunker_router": "IntelligentChunker",
-        "features": [
-            "Functions/methods as separate chunks",
-            "Classes split into header + methods",
-            "Syntax-aware boundaries (no mid-function splits)",
-            "Fallback to plain text for unknown types"
-        ],
-        "source_files": [
-            "src/mimir/chunking.py"
-        ]
-    }
-
-
-def generate_knowledge_graph_integration_artifact() -> dict:
-    """Generate artifact: Knowledge graph integration with search."""
-    return {
-        "artifact_type": "integration_summary",
-        "component": "search_plus_graph",
-        "description": "How search tool uses knowledge graph for enhanced context",
-        "kg_in_search": "enhanced with graph context",
-        "relationship_types": ["imports_from", "calls", "inherits_from", "has_method"],
-        "integration": {
-            "trigger": "query terms match node names",
-            "action": "append neighbor nodes to search results",
-            "max_neighbors_shown": 5,
-            "depth": 1
-        },
-        "source_files": [
-            "mcp_server_llamaindex.py",
-            "src/mimir/knowledge_graph.py"
-        ]
-    }
-
-
-def generate_query_caching_artifact() -> dict:
-    """Generate artifact: Query caching system."""
-    return {
-        "artifact_type": "caching_summary",
-        "component": "query_cache",
-        "description": "Query result caching to reduce redundant API calls",
-        "query_cache": "QueryCache with TTL",
-        "cache_location": ".knowledge/query_cache/",
-        "ttl_search": 3600,
-        "ttl_query": 7200,
-        "ttl_artifact": 86400,
-        "features": [
-            "Content-addressable (SHA-256 hash)",
-            "TTL-based expiration",
-            "Persistent storage",
-            "Automatic cleanup of expired entries"
-        ],
-        "cache_tools": ["cache_stats", "cache_clear", "cache_cleanup"],
-        "source_files": [
-            "src/mimir/query_cache.py",
-            "mcp_server_llamaindex.py"
-        ]
-    }
-
-
-# Registry of artifact generators
 ARTIFACT_GENERATORS = {
-    "rag_architecture": generate_rag_architecture_artifact,
-    "indexing_architecture": generate_indexing_architecture_artifact,
-    "artifact_system": generate_artifact_system_artifact,
     "code_chunking": generate_code_chunking_artifact,
     "knowledge_graph_integration": generate_knowledge_graph_integration_artifact,
     "query_caching": generate_query_caching_artifact,
+    "rag_architecture": generate_rag_architecture_artifact,
+    "indexing_architecture": generate_indexing_architecture_artifact,
+    "artifact_system": generate_artifact_system_artifact,
 }
 
 
@@ -295,25 +226,8 @@ def generate_and_store(artifact_id: str) -> bool:
         print(f"Unknown artifact: {artifact_id}")
         return False
 
-    generator = ARTIFACT_GENERATORS[artifact_id]
-    content = generator()
-
-    # Determine dependencies from the artifact content
-    depends_on = content.get("source_files", [])
-
-    # Make paths absolute (relative to project root)
-    project_root = Path.cwd()
-    depends_on_abs = []
-    for f in depends_on:
-        path = project_root / f
-        if path.exists():
-            depends_on_abs.append(str(path))
-        else:
-            print(f"Warning: Source file not found: {path}")
-
-    create_artifact(
-        artifact_id=artifact_id,
-        content=content,
+def generate_code_chunking_artifact() -> dict:
+    """Generate artifact: Code chunking strategies."""
         depends_on=depends_on_abs,
         ttl_seconds=3600,  # 1 hour TTL
         eager_rebuild=False,
@@ -336,9 +250,17 @@ def list_all():
         print("No artifacts found.")
         return
 
-    print("Available artifacts:")
-    for aid, info in artifacts.items():
-        print(f"  - {aid} (v{info.get('version', '?')}, stale={info.get('stale', '?')})")
+    print(f"\n{'=' * 60}")
+    print("Mimir Artifacts")
+    print(f"{'=' * 60}\n")
+
+    for artifact_id, info in artifacts.items():
+        stale_marker = " [STALE]" if info.get("stale") else ""
+        print(f"  {artifact_id}{stale_marker}")
+        print(f"    Version:    {info.get('version', '1.0.0')}")
+        print(f"    Dependencies: {info.get('dependency_count', 0)} files")
+        print(f"    Last built: {info.get('last_built', 'unknown')}")
+        print()
 
 
 def main():
@@ -371,3 +293,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+

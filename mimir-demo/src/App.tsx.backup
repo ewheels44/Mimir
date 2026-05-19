@@ -7,7 +7,6 @@ import { ArchitectureExplainer } from './components/ArchitectureExplainer';
 import { NeuralEvolution } from './components/NeuralEvolution';
 import { allFlows } from './data/flows';
 import './styles/index.css';
-import './styles/neural.css';
 
 type Theme = 'dark' | 'light';
 
@@ -184,8 +183,6 @@ function App() {
           renderArchitectureDiagram()
         ) : showExplainer ? (
           <ArchitectureExplainer plainEnglish={plainEnglish} />
-        ) : showNeural ? (
-          <NeuralEvolution plainEnglish={plainEnglish} />
         ) : (
           <>
             {/* Flow Header */}

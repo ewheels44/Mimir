@@ -366,6 +366,24 @@ def _detect_project_root(
                 return current
         current = current.parent
 
+    # If not found, try using the location of the MCP server script to find the project
+    # This handles the case where the MCP server is started from a different directory
+    # but the script is in the Mimir project
+    try:
+        # Get the path of the running script
+        import sys
+        if sys.argv[0]:
+            script_path = Path(sys.argv[0]).resolve()
+            # Walk up from the script location looking for project markers
+            current = script_path.parent
+            while current != current.parent:
+                for marker in _PROJECT_MARKERS:
+                    if (current / marker).exists():
+                        return current
+                current = current.parent
+    except Exception:
+        pass
+
     return start
 
 

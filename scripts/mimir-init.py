@@ -6,6 +6,16 @@ Two modes:
   1. Global install (run once): Sets up MCP server and system rules
   2. Per-project init (run in each project): Creates directories and indexes
 
+Per-project setup creates:
+  - .mimir/config.json     - Project-specific Mimir settings
+  - .jcode/mcp.json       - Project-local MCP server config with unique server name
+  - .opencode/mimir-index.py - Delegates to central Mimir install
+  - .mimir/AGENTS.md      - Mimir usage documentation
+
+The .jcode/mcp.json uses a unique server name (mimir-{project-name}) to avoid
+conflicts when working on multiple projects. It also sets PROJECT_ROOT so the
+MCP server knows which project it's serving.
+
 Usage:
     # Global install (run once after cloning Mimir)
     python ~/Documents/Mimir/mimir.py install
@@ -426,6 +436,46 @@ def create_mimir_config(project_root: Path, code_dirs: list[str] = None) -> Path
     return config_path
 
 
+def create_jcode_mcp_config(project_root: Path, mimir_root: Path) -> Path:
+    """Create .jcode/mcp.json for project-local Mimir MCP server.
+    
+    Creates a unique server name per project to avoid conflicts when
+    working on multiple projects. Sets PROJECT_ROOT so the MCP server
+    knows which project it's serving.
+    
+    Note: Jcode may need to reload/restart to pick up changes to .jcode/mcp.json.
+    Use 'mcp' tool with action='reload' or restart Jcode.
+    """
+    jcode_dir = project_root / ".jcode"
+    jcode_dir.mkdir(exist_ok=True)
+
+    # Use the project's venv python if available, otherwise use current python
+    venv_python = project_root / ".venv" / "bin" / "python"
+    python_cmd = str(venv_python) if venv_python.exists() else sys.executable
+
+    # Create unique server name based on project directory name
+    # This avoids conflicts when working on multiple projects
+    project_name = project_root.name
+    server_name = f"mimir-{project_name}"
+
+    config = {
+        "servers": {
+            server_name: {
+                "command": python_cmd,
+                "args": [str(mimir_root / "mcp_server_llamaindex.py")],
+                "env": {
+                    "PYTHONPATH": str(mimir_root / "src"),
+                    "PROJECT_ROOT": str(project_root),
+                },
+            }
+        }
+    }
+
+    config_path = jcode_dir / "mcp.json"
+    config_path.write_text(json.dumps(config, indent=2) + "\n")
+    return config_path
+
+
 def create_project_setup_script(project_root: Path, mimir_root: Path) -> Path:
     """Create .opencode/mimir-index.py that delegates to central install."""
     opencode_dir = project_root / ".opencode"
@@ -572,6 +622,14 @@ def init_project(project_root: Path, mimir_root: Path, args) -> bool:
         print("   ✓ Installed git post-commit hook (auto-reindex on commit)")
     else:
         print("   ⏭️  Skipped git hook (not a git repo or hook already installed)")
+
+    # Jcode MCP config (project-local)
+    jcode_mcp_path = project_root / ".jcode" / "mcp.json"
+    if not jcode_mcp_path.exists() or args.force:
+        create_jcode_mcp_config(project_root, mimir_root)
+        print(f"   ✓ Created: {jcode_mcp_path}")
+    else:
+        print(f"   ⏭️  Skipped: {jcode_mcp_path} (exists)")
 
     # Jcode bridge integration
     if getattr(args, 'jcode', False):
@@ -750,8 +808,8 @@ def main():
         if skill_file.exists():
             print(f"     → {skill_file}")
 
-        # Check MCP config
-        mcp_config_file = Path.home() / ".jcode" / "mcp.json"
+        # Check MCP config (project-level .jcode/mcp.json)
+        mcp_config_file = project_root / ".jcode" / "mcp.json"
         if mcp_config_file.exists():
             config = json.loads(mcp_config_file.read_text())
             server_name = f"mimir-{project_root.name}"
@@ -760,7 +818,7 @@ def main():
             if has_server:
                 print(f"     → {mcp_config_file}")
         else:
-            print("   MCP config: 🔴 No ~/.jcode/mcp.json found")
+            print(f"   MCP config: 🔴 No {project_root}/.jcode/mcp.json found")
 
         # Check prompt file
         prompt_file = Path.home() / ".jcode" / "prompts" / f"mimir-{project_root.name}.md"

@@ -67,61 +67,99 @@ def is_jcode_running() -> bool:
 
 # ── MCP Server management ────────────────────────────────────────────────────
 
-def read_mcp_config() -> dict:
-    """Read the Jcode MCP config file (~/.jcode/mcp.json)."""
-    config_dir = Path.home() / ".jcode"
-    config_file = config_dir / "mcp.json"
+def read_mcp_config(config_file: Path) -> dict:
+    """Read a Jcode MCP config file."""
     if config_file.exists():
         return json.loads(config_file.read_text())
     return {}
 
 
-def write_mcp_config(data: dict) -> None:
-    """Write the Jcode MCP config file (~/.jcode/mcp.json)."""
-    config_dir = Path.home() / ".jcode"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    config_file = config_dir / "mcp.json"
+def write_mcp_config(data: dict, config_file: Path) -> None:
+    """Write a Jcode MCP config file."""
+    config_file.parent.mkdir(parents=True, exist_ok=True)
     config_file.write_text(json.dumps(data, indent=2))
 
 
-def register_mcp_server(project_root: Path, mimir_root: Path) -> str:
-    """Register Mimir's MCP server in Jcode's config (~/.jcode/mcp.json)."""
-    mcp_path = str(mimir_root / "mcp_server_llamaindex.py")
-    server_name = f"mimir-{project_root.name}"
+def get_config_file(local: bool, project_root: Path) -> tuple[Path, str]:
+    """Get MCP config file path and description.
+    
+    Args:
+        local: If True, use project-local .jcode/mcp.json. If False, use global.
+        project_root: Project root for local config.
+        
+    Returns:
+        (config_file_path, server_name_prefix)
+    """
+    if local:
+        config_file = project_root / ".jcode" / "mcp.json"
+        # For local configs, use simple "mimir" name since it's project-local anyway
+        server_name = "mimir"
+    else:
+        config_file = Path.home() / ".jcode" / "mcp.json"
+        server_name = f"mimir-{project_root.name}"
+    return config_file, server_name
 
-    config = read_mcp_config()
+
+def register_mcp_server(
+    project_root: Path,
+    mimir_root: Path,
+    local: bool = True,
+) -> str:
+    """Register Mimir's MCP server in Jcode's config.
+    
+    Args:
+        project_root: Root of the project to register.
+        mimir_root: Root of the Mimir installation.
+        local: If True, use project-local .jcode/mcp.json (recommended).
+               If False, use global ~/.jcode/mcp.json.
+    """
+    mcp_path = str(mimir_root / "mcp_server_llamaindex.py")
+    config_file, server_name = get_config_file(local, project_root)
+
+    config = read_mcp_config(config_file)
 
     if "servers" not in config:
         config["servers"] = {}
 
     if server_name in config["servers"]:
-        return f"ℹ️  Mimir server '{server_name}' already registered"
+        mode = "local" if local else "global"
+        return f"ℹ️  Mimir server '{server_name}' already registered ({mode})"
 
     config["servers"][server_name] = {
         "command": sys.executable,
         "args": [mcp_path],
         "env": {
-            "PROJECT_ROOT": str(project_root),
+            # NOTE: PROJECT_ROOT not needed - MCP server auto-detects from CWD
+            # This is the key benefit of project-local config!
             "PYTHONPATH": str(mimir_root / "src"),
         },
     }
 
-    write_mcp_config(config)
+    write_mcp_config(config, config_file)
+    mode = "local" if local else "global"
     return (
         f"✅ Registered Mimir MCP server '{server_name}' "
-        f"for project {project_root.name} → {Path.home() / '.jcode' / 'mcp.json'}"
+        f"for project {project_root.name} ({mode}) → {config_file}"
     )
 
 
-def unregister_mcp_server(project_name: str) -> str:
-    """Remove a Mimir MCP server from Jcode config."""
-    config = read_mcp_config()
-    server_name = f"mimir-{project_name}"
+def unregister_mcp_server(project_name: str, local: bool = True) -> str:
+    """Remove a Mimir MCP server from Jcode config.
+    
+    Args:
+        project_name: Name of the project to unregister.
+        local: If True, use project-local .jcode/mcp.json.
+    """
+    project_root = find_project_root() or Path.cwd()
+    config_file, server_name = get_config_file(local, project_root)
+
+    config = read_mcp_config(config_file)
 
     if "servers" in config and server_name in config["servers"]:
         del config["servers"][server_name]
-        write_mcp_config(config)
-        return f"✅ Removed Mimir server '{server_name}' from config"
+        write_mcp_config(config, config_file)
+        mode = "local" if local else "global"
+        return f"✅ Removed Mimir server '{server_name}' from config ({mode})"
     return f"ℹ️  Server '{server_name}' not found in config"
 
 
@@ -339,10 +377,9 @@ def main():
         help="Check current integration status",
     )
     parser.add_argument(
-        "--port",
-        type=int,
-        default=None,
-        help="Port for the MCP server (auto-detected if not specified)",
+        "--use-global",
+        action="store_true",
+        help="Use global ~/.jcode/mcp.json instead of project-local",
     )
     parser.add_argument(
         "--auto",
@@ -369,6 +406,9 @@ def main():
         print("❌ Could not find Mimir installation.")
         sys.exit(1)
 
+    # Determine local vs global mode (local is default)
+    use_local = not args.use_global
+
     if args.check:
         print(f"📍 Project: {project_root}")
         print(f"📦 Mimir:   {mimir_root}")
@@ -385,15 +425,20 @@ def main():
         skill_file = skills_dir / f"mimir-{project_root.name}.json"
         print(f"🗂️  Skill:   {'Registered' if skill_file.exists() else 'Not registered'}")
 
-        config = read_mcp_config()
-        server_name = f"mimir-{project_root.name}"
-        has_server = "servers" in config and server_name in config["servers"]
-        print(f"🔗 MCP:     {'Configured' if has_server else 'Not configured'}")
+        # Check both local and global MCP configs
+        local_config_file = project_root / ".jcode" / "mcp.json"
+        global_config_file = Path.home() / ".jcode" / "mcp.json"
+        local_config = read_mcp_config(local_config_file)
+        global_config = read_mcp_config(global_config_file)
+        local_has = "servers" in local_config and "mimir" in local_config["servers"]
+        global_has = "servers" in global_config and f"mimir-{project_root.name}" in global_config["servers"]
+        print(f"🔗 MCP:     {'Local ✅' if local_has else 'Local ❌'} / {'Global ✅' if global_has else 'Global ❌'}")
         return
 
     if args.unregister:
         project_name = project_root.name
-        msg1 = unregister_mcp_server(project_name)
+        msg1 = unregister_mcp_server(project_name, local=use_local)
+        # Also remove skill file
         skill_file = Path.home() / ".jcode" / "skills" / f"mimir-{project_name}.json"
         if skill_file.exists():
             skill_file.unlink()
@@ -414,17 +459,21 @@ def main():
     if args.inject_prompt or args.auto:
         results.append(inject_mimir_prompt(project_root))
 
-    # Register MCP server
+    # Register MCP server (local by default)
     if args.auto:
-        results.append(register_mcp_server(project_root, mimir_root))
+        results.append(register_mcp_server(project_root, mimir_root, local=use_local))
 
     if not args.quiet or not results:
         print(f"\n📍 Project: {project_root}")
         print(f"📦 Mimir:   {mimir_root}")
+        print(f"📋 Mode:    {'Project-local' if use_local else 'Global'} .jcode/mcp.json")
         print()
         for r in results:
             print(f"  {r}")
         print()
+        if use_local:
+            print("💡 Project-local config - MCP server auto-detects project from CWD.")
+            print("   No hardcoded PROJECT_ROOT needed. Works across all projects!")
         print("💡 Start Jcode to use Mimir tools. If Jcode is already running,")
         print("   run `/mcp reload` in the Jcode TUI to pick up the new server.")
 

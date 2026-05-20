@@ -67,8 +67,8 @@ _PROJECT_MARKERS = [
     ".opencode",
     ".git",
     "pyproject.toml",
-    "package.json",
     "Cargo.toml",
+    # NOTE: package.json excluded - many projects have subdirs with their own package.json
 ]
 
 # Auth file locations to check (in order)

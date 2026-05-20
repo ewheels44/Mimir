@@ -72,7 +72,9 @@ Mimir/
 │   ├── artifacts.py            # Pre-compiled artifact system
 │   ├── knowledge_graph.py      # Code relationship extraction
 │   ├── metrics.py              # Cost/token tracking
-│   ├── openspace_bridge.py     # OpenSpace integration
+│   ├── openspace_bridge.py     # OpenSpace integration + **neural classifier**
+│   ├── query_classifier.py     # **Phase 1 Neural Query Classifier** (10→8→2 network)
+│   ├── query_classifier_model.pkl # Trained model (1.1KB)
 │   ├── sdk_cache.py           # SDK doc cache
 │   ├── shared_index.py         # Cross-codebase search
 │   ├── watcher.py              # File watcher
@@ -91,11 +93,26 @@ Mimir/
 │   └── langgraph.json          # LangGraph config
 ├── workflows/                  # Workflow examples
 │   └── run_workflow.py
+├── experiments/                 # Experiment scripts (NOT integrated)
+│   ├── gnn_experiment.py        # GNN experiment (rejected — 58% accuracy)
+│   ├── gnn_meaningful_experiment.py  # Improved GNN (still rejected)
+│   └── RESULTS_SUMMARY.md     # GNN experiment conclusions
 ├── docs/                       # Documentation (indexed)
 ├── opencode-config/            # OpenCode configuration
 │   ├── opencode.json
 │   └── agent/                  # Subagent configs
 ├── mimir-demo/                 # Demo web app (React + TypeScript)
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── NeuralEvolution.tsx  # **Phase 1 Demo** — animations, cost calc
+│   │   │   └── ...
+│   │   ├── data/
+│   │   │   ├── neural_evolution.ts   # Phase 1 data (CodeExample patterns)
+│   │   │   └── ...
+│   │   └── styles/
+│   │       ├── index.css
+│   │       └── neural.css         # Phase 1 styles
+│   └── ...
 ├── web/                        # Web components
 │   ├── sidecar/                # Python sidecar server
 │   └── ...
@@ -108,6 +125,9 @@ Mimir/
 │   │   └── *.json            # Individual artifacts
 │   └── evals/                  # Eval harness questions
 │       └── questions.json
+├── PHASE1_COMPLETE.md           # Phase 1 summary
+├── FUTURE_PHASES.md             # Roadmap for Phases 2-4
+└── AGENTS.md                    # This file
 ```
 
 ## Configuration
@@ -133,7 +153,8 @@ All fields optional. Defaults work for most projects.
 | `src/mimir/config.py` | Unified config — single source of truth |
 | `src/mimir/indexing.py` | Document indexing — full, incremental, file-level |
 | `src/mimir/artifacts.py` | Pre-compiled artifacts — dependency tracking, staleness |
-| `src/mimir/openspace_bridge.py` | OpenSpace integration — circuit breaker, cache, content filter |
+| `src/mimir/openspace_bridge.py` | OpenSpace integration — circuit breaker, cache, content filter, **neural classifier integration** |
+| `src/mimir/query_classifier.py` | **Phase 1 Neural Query Classifier** — 10→8→2 network, 99.9% cost reduction |
 | `src/mimir/sdk_cache.py` | SDK doc cache — Context7 API, TTL, local storage |
 | `src/mimir/shared_index.py` | Cross-codebase search — shared index composition |
 | `src/mimir/knowledge_graph.py` | Code relationship extraction — AST + tree-sitter |

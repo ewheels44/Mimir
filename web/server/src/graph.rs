@@ -249,42 +249,74 @@ pub fn build_graph(knowledge_dir: &Path) -> Result<GraphCache> {
     let mut ext_nodes: Vec<GraphNode> = Vec::new();
 
     for rel in &rel_file.relationships {
-        let Some(source_id) = lookup_suffix(&rel.source, &suffix_idx) else {
-            continue;
+        // Resolve source: try suffix lookup first, then entity file path
+        let source_id = match lookup_suffix(&rel.source, &suffix_idx) {
+            Some(id) => id,
+            None => {
+                // Try extracting file path from entity key (e.g., "src/mimir/config.py::MimirConfig" → file path)
+                let source_path = if rel.source.contains("::") {
+                    rel.source.split("::").next().unwrap_or(&rel.source).to_string()
+                } else {
+                    rel.source.clone()
+                };
+                // Try to find the file path in the suffix index
+                if let Some(id) = lookup_suffix(&source_path, &suffix_idx) {
+                    id
+                } else if !rel.source.starts_with("external:") {
+                    // Create an external node for internal entity that has no docstore entry
+                    let ext_id = format!("entity:{}", rel.source.replace("::", "."));
+                    if !existing_ids.contains(&ext_id) && ext_ids.insert(ext_id.clone()) {
+                        let label = rel.source.split("::").last().unwrap_or(&rel.source).to_string();
+                        ext_nodes.push(GraphNode {
+                            id: ext_id.clone(),
+                            label,
+                            node_type: if rel.source.contains("::class") { "class".to_string() } else { "entity".to_string() },
+                            metadata: NodeMetadata {
+                                module_path: Some(rel.source.clone()),
+                                external: Some(false),
+                                ..Default::default()
+                            },
+                            position: None,
+                        });
+                    }
+                    ext_id
+                } else {
+                    continue; // Skip if we can't resolve and it's marked as external
+                }
+            }
         };
 
+        // Resolve target similarly
         let target_id = match lookup_suffix(&rel.target, &suffix_idx) {
             Some(id) => id,
             None => {
-                // External module not in the index
-
-                let ext_id = format!("external:{}", rel.target);
-                if !existing_ids.contains(&ext_id) && ext_ids.insert(ext_id.clone()) {
-                    let ext_label = if rel.target.contains('/') || rel.target.contains('\\') {
-                        Path::new(&rel.target)
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| rel.target.clone())
-                    } else {
-                        rel.target
-                            .split('.')
-                            .last()
-                            .unwrap_or(&rel.target)
-                            .to_string()
-                    };
-                    ext_nodes.push(GraphNode {
-                        id: ext_id.clone(),
-                        label: ext_label,
-                        node_type: "module".to_string(),
-                        metadata: NodeMetadata {
-                            module_path: Some(rel.target.clone()),
-                            external: Some(true),
-                            ..Default::default()
-                        },
-                        position: None,
-                    });
+                let target_path = if rel.target.contains("::") {
+                    rel.target.split("::").next().unwrap_or(&rel.target).to_string()
+                } else {
+                    rel.target.clone()
+                };
+                if let Some(id) = lookup_suffix(&target_path, &suffix_idx) {
+                    id
+                } else if !rel.target.starts_with("external:") {
+                    let ext_id = format!("entity:{}", rel.target.replace("::", "."));
+                    if !existing_ids.contains(&ext_id) && ext_ids.insert(ext_id.clone()) {
+                        let label = rel.target.split("::").last().unwrap_or(&rel.target).to_string();
+                        ext_nodes.push(GraphNode {
+                            id: ext_id.clone(),
+                            label,
+                            node_type: if rel.target.contains("::class") { "class".to_string() } else { "entity".to_string() },
+                            metadata: NodeMetadata {
+                                module_path: Some(rel.target.clone()),
+                                external: Some(false),
+                                ..Default::default()
+                            },
+                            position: None,
+                        });
+                    }
+                    ext_id
+                } else {
+                    continue;
                 }
-                ext_id
             }
         };
 
@@ -509,7 +541,7 @@ pub fn find_path(source: &str, target: &str, cache: &GraphCache) -> PathResult {
         ));
     }
 
-    // Resolve source/target: try exact match, then suffix match
+    // Resolve source/target: try exact match, then suffix match, then entity resolution
     let resolve = |query: &str| -> Option<String> {
         // Exact match on node id
         if adj.contains_key(query) {
@@ -533,6 +565,68 @@ pub fn find_path(source: &str, target: &str, cache: &GraphCache) -> PathResult {
         for key in adj.keys() {
             if key.ends_with(query) || query.ends_with(*key) {
                 return Some(key.to_string());
+            }
+        }
+        // Entity resolution: extract file path from entity key (e.g., "src/mimir/config.py::MimirConfig" → docstore ID)
+        if query.contains("::") {
+            let file_path = query.split("::").next().unwrap_or(query);
+            // Try exact file path
+            if let Some(id) = cache.file_path_to_id.get(file_path) {
+                if adj.contains_key(id.as_str()) {
+                    return Some(id.clone());
+                }
+            }
+            // Try suffix match on the file path
+            for (fp, id) in &cache.file_path_to_id {
+                if fp.ends_with(file_path) || file_path.ends_with(fp.as_str()) {
+                    if adj.contains_key(id.as_str()) {
+                        return Some(id.clone());
+                    }
+                }
+            }
+            // Try the file path stem (without extension)
+            let stem = Path::new(file_path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(file_path);
+            for (fp, id) in &cache.file_path_to_id {
+                let fp_path = Path::new(fp.as_str());
+                let fp_stem = fp_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                if fp.contains(stem) || stem.contains(&fp_stem) {
+                    if adj.contains_key(id.as_str()) {
+                        return Some(id.clone());
+                    }
+                }
+            }
+            // Try to find an entity: node that matches this entity key
+            // Normalize: replace :: with . to convert entity format, but preserve file path slashes
+            // Input: "src/mimir/config.py::MimirConfig"
+            // Expected entity ID: "entity:src/mimir/config.py.MimirConfig"
+            let normalized_query = query.replace("::", ".");
+            let entity_id = format!("entity:{}", normalized_query);
+            if adj.contains_key(entity_id.as_str()) {
+                return Some(entity_id);
+            }
+            // For class-level queries (e.g., "src/mimir/config.py::MimirConfig"),
+            // also try the file-level entity node as fallback
+            if query.contains("::") {
+                let file_path = query.split("::").next().unwrap_or(query);
+                let file_entity = format!("entity:{}", file_path);
+                if adj.contains_key(file_entity.as_str()) {
+                    return Some(file_entity);
+                }
+            }
+            // Check if query matches any edge source/target directly
+            if adj.contains_key(&query) {
+                return Some(query.to_string());
+            }
+            // Also check normalized edge sources/targets
+            let normalized_query_dots = query.replace("::", ".").replace("/", ".");
+            for key in adj.keys() {
+                let normalized_key = key.replace("/", ".").replace("::", ".");
+                if normalized_key == normalized_query_dots {
+                    return Some(key.to_string());
+                }
             }
         }
         None
@@ -689,6 +783,13 @@ pub fn find_neighbors(
             }
         }
         if cache.entities.contains_key(query) {
+            // Entity keys in relationships use :: format (e.g., "src/mimir/config.py::MimirConfig")
+            // But edges use entity: prefix with :: replaced by . (e.g., "entity:src/mimir/config.py.MimirConfig")
+            let entity_id = format!("entity:{}", query.replace("::", "."));
+            return Some(entity_id);
+        }
+        // Check for entity: prefix (internal entity nodes created during graph build)
+        if query.starts_with("entity:") && cache.edges.iter().any(|e| e.source == query || e.target == query) {
             return Some(query.to_string());
         }
         // File path lookup (exact)
@@ -708,6 +809,88 @@ pub fn find_neighbors(
             }
             if edge.target.ends_with(query) {
                 return Some(edge.target.clone());
+            }
+        }
+        // Entity resolution: extract file path from entity key (e.g., "src/mimir/config.py::MimirConfig" → "src/mimir/config.py")
+        if query.contains("::") {
+            let file_path = query.split("::").next().unwrap_or(query);
+            // Try exact file path
+            if let Some(id) = cache.file_path_to_id.get(file_path) {
+                return Some(id.clone());
+            }
+            // Try suffix match on the file path
+            for (fp, id) in &cache.file_path_to_id {
+                if fp.ends_with(file_path) || file_path.ends_with(fp.as_str()) {
+                    return Some(id.clone());
+                }
+            }
+            // Try the file path stem (without extension)
+            let stem = Path::new(file_path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(file_path);
+            for (fp, id) in &cache.file_path_to_id {
+                let fp_path = Path::new(fp.as_str());
+                let fp_stem = fp_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                if fp.contains(stem) || stem.contains(&fp_stem) {
+                    return Some(id.clone());
+                }
+            }
+            // Try to find an entity: node that matches this entity key
+            // Normalize: replace :: with . to convert entity format, but preserve file path slashes
+            // Input: "src/mimir/config.py::MimirConfig"
+            // Expected entity ID: "entity:src/mimir/config.py.MimirConfig"
+            let normalized_query = query.replace("::", ".");
+            let entity_id = format!("entity:{}", normalized_query);
+            if cache.edges.iter().any(|e| e.source == entity_id || e.target == entity_id) {
+                return Some(entity_id);
+            }
+            // Try with file path format (entity:src/mimir/config.py) - keep slashes
+            if query.contains("::") {
+                let entity_id_fp = format!("entity:{}", query.split("::").next().unwrap_or(query));
+                if cache.edges.iter().any(|e| e.source == entity_id_fp || e.target == entity_id_fp) {
+                    return Some(entity_id_fp);
+                }
+                // For class-level queries (e.g., "src/mimir/config.py::MimirConfig"),
+                // fall back to the file-level entity node (entity:src/mimir/config.py)
+                // This allows traversing the file's connections
+                let file_path = query.split("::").next().unwrap_or(query);
+                let file_entity = format!("entity:{}", file_path);
+                if cache.edges.iter().any(|e| e.source == file_entity || e.target == file_entity) {
+                    return Some(file_entity);
+                }
+            }
+            // Check if query matches any edge source/target and return it directly
+            for edge in &cache.edges {
+                // Direct match first
+                if edge.source == query {
+                    return Some(edge.source.clone());
+                }
+                if edge.target == query {
+                    return Some(edge.target.clone());
+                }
+                // Try prefix match - for class queries, match file paths
+                if query.contains("::") {
+                    let prefix = query.split("::").next().unwrap_or("");
+                    // Normalize prefix to dots for matching entity:src.mimir.config.MimirConfig style
+                    let normalized_prefix = prefix.replace("/", ".");
+                    // Check if edge source starts with either original or normalized prefix
+                    if edge.source.starts_with(prefix) || edge.source.replace("/", ".").starts_with(&normalized_prefix) {
+                        return Some(edge.source.clone());
+                    }
+                }
+            }
+            // Also check normalized forms as fallback
+            let normalized_query = query.replace("::", ".").replace("/", ".");
+            for edge in &cache.edges {
+                let normalized_src = edge.source.replace("/", ".").replace("::", ".");
+                let normalized_tgt = edge.target.replace("/", ".").replace("::", ".");
+                if normalized_src == normalized_query {
+                    return Some(edge.source.clone());
+                }
+                if normalized_tgt == normalized_query {
+                    return Some(edge.target.clone());
+                }
             }
         }
         None
@@ -738,9 +921,37 @@ pub fn find_neighbors(
     for _ in 0..depth {
         let mut next_frontier = Vec::new();
         for current in &frontier {
+            // Normalize current for edge matching
+            let current_normalized = current.replace("/", ".").replace("::", ".");
+            // Strip entity: prefix for raw version
+            let current_raw = if current.starts_with("entity:") {
+                current[7..].to_string()
+            } else {
+                current.clone()
+            };
             for edge in &cache.edges {
+                // Strip entity: prefix from edge sources/targets for comparison
+                let edge_src_stripped = if edge.source.starts_with("entity:") {
+                    &edge.source[7..]
+                } else {
+                    &edge.source[..]
+                };
+                let edge_tgt_stripped = if edge.target.starts_with("entity:") {
+                    &edge.target[7..]
+                } else {
+                    &edge.target[..]
+                };
+                // Normalize stripped versions
+                let edge_src_norm = edge_src_stripped.replace("/", ".").replace("::", ".");
+                let edge_tgt_norm = edge_tgt_stripped.replace("/", ".").replace("::", ".");
+                
                 // Outgoing: current → target
-                if edge.source == *current && !visited.contains(&edge.target) {
+                // Check if edge.source matches current (any format)
+                let src_matches = edge.source == *current 
+                    || edge_src_norm == current_normalized
+                    || edge_src_stripped == current_raw
+                    || edge_src_norm == current_raw.replace("/", ".");
+                if src_matches && !visited.contains(&edge.target) {
                     if matches_type(&edge.edge_type) {
                         let (label, fp) = node_info(&edge.target, cache);
                         all_neighbors.push(NeighborEntry {
@@ -755,7 +966,12 @@ pub fn find_neighbors(
                     next_frontier.push(edge.target.clone());
                 }
                 // Incoming: source → current
-                if edge.target == *current && !visited.contains(&edge.source) {
+                // Check if edge.target matches current (any format)
+                let tgt_matches = edge.target == *current
+                    || edge_tgt_norm == current_normalized
+                    || edge_tgt_stripped == current_raw
+                    || edge_tgt_norm == current_raw.replace("/", ".");
+                if tgt_matches && !visited.contains(&edge.source) {
                     if matches_type(&edge.edge_type) {
                         let (label, fp) = node_info(&edge.source, cache);
                         all_neighbors.push(NeighborEntry {

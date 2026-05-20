@@ -151,6 +151,13 @@ class KnowledgeServer:
 
     def _setup_llama_index(self) -> None:
         """Configure LlamaIndex with models from config."""
+        # Set OPENAI_API_KEY env var so LlamaIndex's internal validation passes.
+        # This is needed because LlamaIndex checks os.environ.get("OPENAI_API_KEY")
+        # even when we pass api_key explicitly.
+        os.environ["OPENAI_API_KEY"] = self.config.api_key
+        if self.config.api_base:
+            os.environ["OPENAI_BASE_URL"] = self.config.api_base
+
         embed_kwargs = {
             "model": self.config.embedding_model,
             "api_key": self.config.api_key,
@@ -1329,19 +1336,37 @@ def main():
         print(
             f"[Knowledge Server] MCP server starting (transport: {args.transport})...",
             file=sys.stderr,
+            flush=True,
         )
-        mcp.run(transport=args.transport)
+        import traceback
+        try:
+            mcp.run(transport=args.transport)
+        except SystemExit as e:
+            print(f"[Knowledge Server] SystemExit: {e}", file=sys.stderr, flush=True)
+            raise
+        except Exception as e:
+            print(f"[Knowledge Server] MCP server error: {e}", file=sys.stderr, flush=True)
+            traceback.print_exc()
+            raise
     except Exception as e:
-        print(f"[Knowledge Server] MCP server error: {e}", file=sys.stderr)
+        print(f"[Knowledge Server] Outer error: {e}", file=sys.stderr, flush=True)
+        traceback.print_exc()
         raise
 
 
 if __name__ == "__main__":
     try:
         main()
+    except SystemExit as e:
+        import traceback
+        print(f"[Knowledge Server] SystemExit in __main__: {e}", file=sys.stderr, flush=True)
+        traceback.print_exc()
+        sys.exit(e.code if e.code is not None else 0)
     except KeyboardInterrupt:
         print("\n[Knowledge Server] Shutting down...", file=sys.stderr)
         sys.exit(0)
     except Exception as e:
-        print(f"[Knowledge Server] Fatal error: {e}", file=sys.stderr)
+        import traceback
+        print(f"[Knowledge Server] Fatal error in __main__: {e}", file=sys.stderr, flush=True)
+        traceback.print_exc()
         sys.exit(1)

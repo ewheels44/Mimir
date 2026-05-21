@@ -108,6 +108,36 @@ rag_workflow(query="...")
 
 **Benefits:** ⚡ Instant answers • 💰 Zero token cost • 🔄 Auto-invalidation when source changes
 
+### Query Router (Standalone)
+
+The **query router** (`src/mimir/query_router`) is the new standalone routing layer that replaced the OpenSpace bridge. It classifies and routes every `enrich_task` call:
+
+```
+User task
+    │
+    ▼
+_classify_query()  ──→  structural?  ──→  Knowledge Graph (Dijkstra)
+    │                         │
+    │  (keyword → neural →    │  (no path found)
+    │   keyword fallback)     ▼
+    │                   Vector Search (LlamaIndex)
+    │
+    └──→ semantic ────────→  Vector Search (LlamaIndex)
+```
+
+**Decision chain:**
+1. **Keyword pre-check** (free) — 2+ structural keywords → instant routing
+2. **Neural classifier** (10→8→2 NN, ~$0.000001) — handles uncertain cases
+3. **Keyword fallback** (free) — final deterministic check
+
+**Guardrails (all self-contained, zero external deps):**
+- Circuit breaker: 3 failures → 60s cooldown
+- LRU cache: 128 entries, 10min TTL
+- Content filter: blocks sensitive data (API keys, IPs, private keys)
+- Freshness scoring: exponential decay over 168h
+
+📖 Full architecture: [docs/query-routing-architecture.md](docs/query-routing-architecture.md)
+
 ### Knowledge Graph
 
 For structural questions ("How does X connect to Y?"), Mimir extracts code relationships using AST + tree-sitter:
@@ -776,8 +806,8 @@ Agent: [Calls mimir-knowledge/rag_workflow] → Structured analysis with sources
 | `reindex` | Rebuild index | After major changes |
 | `sdk_cache_get` | Get SDK docs | Fetching library documentation |
 | `sdk_cache_list` | List cached SDKs | Checking what's cached |
-| `enrich_task` | Project context for tasks | Before executing OpenSpace tasks |
-| `openspace_health` | Check Mimir-OpenSpace bridge | Before depending on enrich_task |
+| `enrich_task` | Project context for tasks | Before executing any task |
+| `task_health` | Check query router + config | Before depending on enrich_task |
 | `health_check` | Server health + config diagnostics | Debugging setup issues |
 
 ### Subagent Context (Critical)
@@ -849,7 +879,8 @@ Here's a complete working setup from a real installation:
 │   ├── shared_index.py           # Shared index composition
 │   ├── sdk_cache.py              # SDK doc caching
 │   ├── knowledge_graph.py        # Code relationship extraction
-│   ├── openspace_bridge.py       # OpenSpace integration (circuit breaker, caching)
+│   ├── query_router.py           # Query router (standalone, zero OpenSpace deps)
+│   ├── openspace_bridge.py       # DEPRECATED: backward-compat shim (delegates to query_router)
 │   ├── handoff.py                # Handoff document generator
 │   ├── projects.py               # Multi-project management
 │   ├── metrics.py                # Cost tracking
@@ -1077,7 +1108,7 @@ Shared indices are configured in `.mimir/config.json` (not env vars):
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Entry Points                                           │
-│  mcp_server_llamaindex.py │ langgraph/cli.py │ scripts/mimir-init.py
+│  mcp_server_llamaindex.py │ langgraph/cli.py │ mimir.py│
 └──────────────────────┬──────────────────────────────────┘
                        │ all use
                        ▼
@@ -1090,9 +1121,9 @@ Shared indices are configured in `.mimir/config.json` (not env vars):
            ┌───────────┼───────────┐
            ▼           ▼           ▼
     ┌────────────┐ ┌────────┐ ┌──────────┐
-    │ MCP Server │ │ Bridge │ │ LangGraph│
-    │ (search,   │ │(OpenSp)│ │(RAG,     │
-    │  query,    │ │        │ │ agent)   │
+    │ MCP Server │ │Query   │ │ LangGraph│
+    │ (search,   │ │Router  │ │(RAG,     │
+    │  query,    │ │(standalone)│ │ agent)   │
     │  graph_*)  │ │        │ │          │
     └─────┬──────┘ └───┬────┘ └────┬─────┘
           │            │           │
@@ -1114,8 +1145,8 @@ Shared indices are configured in `.mimir/config.json` (not env vars):
 **Key Components**:
 - **MimirConfig**: Unified configuration — one class, all settings, all entry points
 - **MCP Server**: Tool discovery and transport (search, query, graph_query, health_check, etc.)
+- **Query Router** (`src/mimir/query_router.py`): Standalone routing — classification, graph/vector search, circuit breaker, caching, content filtering. Zero OpenSpace dependencies.
 - **Rust Web Server**: Graph query engine with weighted Dijkstra path-finding, serves the React UI
-- **OpenSpace Bridge**: Integration with self-evolving skill engine (circuit breaker, caching, content filtering)
 - **LlamaIndex**: Document ingestion, chunking, embeddings, vector storage
 - **LangGraph**: Advanced RAG workflows and agentic exploration
 
@@ -1357,6 +1388,7 @@ Notable changes in the current version:
 | **LangGraph token tracking** | `TokenUsageCallbackHandler` captures actual token usage from API calls in all workflows |
 | **Subagent tool permissions** | ContextScout, CoderAgent, TaskManager have built-in Mimir tool permissions — no `load_skills` needed |
 | **Production installer** | `mimir.py install` backs up config, sets up MCP server, and injects system context rules |
+| **OpenSpace bridge → Query Router** | Routing is now standalone (`src/mimir/query_router.py`) with inlined guardrails, neural classifier, and zero OpenSpace dependencies |
 | **OpenSpace bridge hardening** | Circuit breaker (3 failures → 60s cooldown), caching (128 entries, 10min TTL), timeout (30s) |
 | **Weighted Dijkstra graph queries** | `graph_query` finds strongest-coupling paths between modules, not just shortest |
 | **Demo app redesign** | Animated architecture diagram, theme toggle, flow diagram, state inspector |

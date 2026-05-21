@@ -22,7 +22,6 @@ When exploring code, answering questions about SDKs, or onboarding to libraries,
 ### For SDK/Library Questions
 1. `sdk_cache_get(library, topic)` — Get current API docs (cached, fast)
 2. `mimir-knowledge_search(query)` — Find existing usage in the codebase
-3. `openspace_search_skills(query)` — Check for evolved skills
 
 ### For Project Questions
 1. `mimir-knowledge_enrich_task(task)` — Get project-specific context before executing

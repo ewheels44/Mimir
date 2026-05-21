@@ -840,49 +840,68 @@ def create_mcp_server(server: KnowledgeServer) -> FastMCP:
 
     @mcp.tool()
     async def enrich_task(task: str, top_k: int = 5, ctx: Context = None) -> str:
-        """Search Mimir for project context relevant to an OpenSpace task.
+        """Search Mimir for project context relevant to a task.
 
         Call this BEFORE executing tasks to get project-specific context
         (conventions, APIs, patterns) that generic skills lack.
+
+        Uses a standalone query router (no OpenSpace dependency) that
+        classifies queries as structural or semantic and routes to the
+        most appropriate backend (knowledge graph or vector search).
 
         Args:
             task: Task description in natural language.
             top_k: Number of context chunks to retrieve (default: 5).
         """
         await _notify_jcode_usage(ctx, "enrich_task")
-        from src.mimir.openspace_bridge import enrich_task_for_openspace
+        from src.mimir.query_router import route_task
 
         def _enrich():
-            result = enrich_task_for_openspace(task, server.project_root)
+            result = route_task(task, project_root=server.project_root, top_k=top_k)
+            d = result.to_dict()
 
             # Add status field to distinguish empty results from errors
-            if not result.get("success", False):
-                result["status"] = "error"
-            elif result.get("result_count", 0) == 0:
-                result["status"] = "no_results"
-                result["suggestion"] = (
+            if not d.get("success", False):
+                d["status"] = "error"
+            elif d.get("result_count", 0) == 0:
+                d["status"] = "no_results"
+                d["suggestion"] = (
                     "Try a broader query or check if the index has been built"
                 )
             else:
-                result["status"] = "ok"
+                d["status"] = "ok"
 
-            return json.dumps(result, ensure_ascii=False, indent=2)
+            return json.dumps(d, ensure_ascii=False, indent=2)
 
         return await _with_timeout(asyncio.to_thread(_enrich))
 
     @mcp.tool()
-    async def openspace_health(ctx: Context = None) -> str:
-        """Check if the Mimir ↔ OpenSpace bridge is healthy.
+    async def task_health(ctx: Context = None) -> str:
+        """Check the standalone query router health.
 
-        Returns bridge status, circuit breaker state, and index availability.
-        Call this before depending on enrich_task.
+        Returns router status, circuit breaker state, and index availability.
+        No OpenSpace dependency — uses the local src.mimir.query_router.
         """
-        await _notify_jcode_usage(ctx, "openspace_health")
-        from src.mimir.openspace_bridge import get_bridge
+        await _notify_jcode_usage(ctx, "task_health")
+        from src.mimir.query_router import route_task, RouterConfig
+        from src.mimir.config import get_config
 
         def _health():
-            bridge = get_bridge(server.project_root)
-            return json.dumps(bridge.health_check(), indent=2)
+            cfg = get_config()
+            rc = RouterConfig.from_mimir_config(cfg)
+            knowledge_dir = cfg.knowledge_dir
+            has_index = (knowledge_dir / "index_store.json").exists()
+
+            return json.dumps({
+                "enabled": rc.enabled,
+                "has_index": has_index,
+                "project_root": str(cfg.project_root),
+                "top_k": rc.top_k,
+                "cache_maxsize": rc.cache_maxsize,
+                "circuit_breaker_threshold": rc.circuit_breaker_threshold,
+                "neural_classifier_enabled": rc.neural_classifier_enabled,
+                "classification_model": rc.classification_model,
+            }, indent=2)
 
         return await _with_timeout(asyncio.to_thread(_health))
 

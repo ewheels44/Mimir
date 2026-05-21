@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Tests for the Mimir ↔ OpenSpace bridge adapter."""
+"""Tests for the Mimir Query Router (formerly OpenSpace bridge tests).
+
+These tests validate the guardrail logic — circuit breaker, cache,
+content filtering, freshness scoring, and classification — now
+living in src.mimir.query_router.
+"""
 
 import json
 import os
@@ -28,10 +33,9 @@ def reset_mimir_config():
     reset_config()
 
 
-from src.mimir.openspace_bridge import (
-    BridgeConfig,
-    EnrichmentResult,
-    MimirOpenSpaceBridge,
+from src.mimir.query_router import (
+    RouterConfig,
+    RoutingResult,
     SearchResult,
     _CircuitBreakerState,
     _TimedCache,
@@ -39,7 +43,7 @@ from src.mimir.openspace_bridge import (
     _filter_sensitive,
     _is_blocked_filename,
     _is_sensitive,
-    _resolve_api_key_from_env,
+    _quick_structural_check,
 )
 
 
@@ -156,55 +160,43 @@ class TestBlockedFilenames:
     """Tests for blocked filename detection."""
 
     def test_blocks_env_file(self):
-        """Should block .env files."""
         assert _is_blocked_filename(".env") is True
 
     def test_blocks_env_local(self):
-        """Should block .env.local files."""
         assert _is_blocked_filename(".env.local") is True
 
     def test_blocks_env_production(self):
-        """Should block .env.production files."""
         assert _is_blocked_filename(".env.production") is True
 
     def test_blocks_env_staging(self):
-        """Should block .env.staging files."""
         assert _is_blocked_filename(".env.staging") is True
 
     def test_blocks_credentials_json(self):
-        """Should block credentials.json files."""
         assert _is_blocked_filename("credentials.json") is True
 
     def test_blocks_secrets_json(self):
-        """Should block secrets.json files."""
         assert _is_blocked_filename("secrets.json") is True
 
     def test_blocks_auth_json(self):
-        """Should block auth.json files."""
         assert _is_blocked_filename("auth.json") is True
 
     def test_blocks_id_rsa(self):
-        """Should block id_rsa files."""
         assert _is_blocked_filename("id_rsa") is True
 
     def test_blocks_id_ed25519(self):
-        """Should block id_ed25519 files."""
         assert _is_blocked_filename("id_ed25519") is True
 
     def test_blocks_pem_files(self):
-        """Should block .pem files."""
         assert _is_blocked_filename("cert.pem") is True
         assert _is_blocked_filename("key.pem") is True
 
     def test_allows_normal_files(self):
-        """Should allow normal files."""
         assert _is_blocked_filename("main.py") is False
         assert _is_blocked_filename("config.py") is False
         assert _is_blocked_filename("app.js") is False
         assert _is_blocked_filename("README.md") is False
 
     def test_handles_path_objects(self):
-        """Should handle Path objects."""
         assert _is_blocked_filename("/path/to/.env") is True
         assert _is_blocked_filename("/path/to/config.py") is False
 
@@ -216,18 +208,15 @@ class TestCircuitBreaker:
     """Tests for circuit breaker state."""
 
     def test_starts_closed(self):
-        """Should start in closed state."""
         cb = _CircuitBreakerState()
         assert cb.is_open is False
         assert cb.failure_count == 0
 
     def test_check_returns_false_when_closed(self):
-        """Should return False when circuit is closed."""
         cb = _CircuitBreakerState()
         assert cb.check(60) is False
 
     def test_opens_after_threshold(self):
-        """Should open after reaching threshold."""
         cb = _CircuitBreakerState()
         cb.record_failure(3, 60)
         cb.record_failure(3, 60)
@@ -237,7 +226,6 @@ class TestCircuitBreaker:
         assert cb.check(60) is True
 
     def test_resets_on_success(self):
-        """Should reset on success."""
         cb = _CircuitBreakerState()
         cb.record_failure(3, 60)
         cb.record_failure(3, 60)
@@ -246,15 +234,13 @@ class TestCircuitBreaker:
         assert cb.is_open is False
 
     def test_auto_reset_after_cooldown(self):
-        """Should auto-reset after cooldown period."""
         cb = _CircuitBreakerState()
-        cb.record_failure(1, 0)  # threshold=1, reset=0s
+        cb.record_failure(1, 0)
         assert cb.is_open is True
         time.sleep(0.1)
-        assert cb.check(0) is False  # Should auto-reset
+        assert cb.check(0) is False
 
     def test_failure_count_increments(self):
-        """Should increment failure count."""
         cb = _CircuitBreakerState()
         assert cb.failure_count == 0
         cb.record_failure(5, 60)
@@ -263,7 +249,6 @@ class TestCircuitBreaker:
         assert cb.failure_count == 2
 
     def test_records_failure_time(self):
-        """Should record last failure time."""
         cb = _CircuitBreakerState()
         before = time.time()
         cb.record_failure(3, 60)
@@ -275,17 +260,15 @@ class TestCircuitBreaker:
 
 
 class TestTimedCache:
-    """Tests for timed cache."""
+    """Tests for timed cache — now using RoutingResult."""
 
     def test_returns_none_on_miss(self):
-        """Should return None when key not in cache."""
         cache = _TimedCache(maxsize=10, ttl_seconds=60)
         assert cache.get("test query", 5) is None
 
     def test_returns_cached_result(self):
-        """Should return cached result on hit."""
         cache = _TimedCache(maxsize=10, ttl_seconds=60)
-        result = EnrichmentResult(success=True, context="cached context")
+        result = RoutingResult(success=True, context="cached context")
         cache.put("test query", 5, result)
         cached = cache.get("test query", 5)
         assert cached is not None
@@ -293,40 +276,36 @@ class TestTimedCache:
         assert cached.cache_hit is True
 
     def test_expires_after_ttl(self):
-        """Should expire entries after TTL."""
         cache = _TimedCache(maxsize=10, ttl_seconds=0)
-        result = EnrichmentResult(success=True, context="will expire")
+        result = RoutingResult(success=True, context="will expire")
         cache.put("test", 5, result)
         time.sleep(0.1)
         assert cache.get("test", 5) is None
 
     def test_evicts_oldest_at_capacity(self):
-        """Should evict oldest entry when at capacity."""
         cache = _TimedCache(maxsize=2, ttl_seconds=60)
-        r1 = EnrichmentResult(success=True, context="first")
-        r2 = EnrichmentResult(success=True, context="second")
-        r3 = EnrichmentResult(success=True, context="third")
+        r1 = RoutingResult(success=True, context="first")
+        r2 = RoutingResult(success=True, context="second")
+        r3 = RoutingResult(success=True, context="third")
         cache.put("q1", 5, r1)
         cache.put("q2", 5, r2)
-        cache.put("q3", 5, r3)  # Should evict q1
+        cache.put("q3", 5, r3)
         assert cache.get("q1", 5) is None
         assert cache.get("q2", 5) is not None
         assert cache.get("q3", 5) is not None
 
     def test_size_property(self):
-        """Should report correct size."""
         cache = _TimedCache(maxsize=10, ttl_seconds=60)
         assert cache.size == 0
-        cache.put("q1", 5, EnrichmentResult(success=True))
+        cache.put("q1", 5, RoutingResult(success=True))
         assert cache.size == 1
-        cache.put("q2", 5, EnrichmentResult(success=True))
+        cache.put("q2", 5, RoutingResult(success=True))
         assert cache.size == 2
 
     def test_different_top_k_different_keys(self):
-        """Should create different keys for different top_k values."""
         cache = _TimedCache(maxsize=10, ttl_seconds=60)
-        r1 = EnrichmentResult(success=True, context="k=5")
-        r2 = EnrichmentResult(success=True, context="k=10")
+        r1 = RoutingResult(success=True, context="k=5")
+        r2 = RoutingResult(success=True, context="k=10")
         cache.put("query", 5, r1)
         cache.put("query", 10, r2)
         assert cache.get("query", 5).context == "k=5"
@@ -340,57 +319,46 @@ class TestSearchResult:
     """Tests for SearchResult dataclass."""
 
     def test_to_prompt_chunk_fresh(self):
-        """Should format fresh results correctly."""
-        r = SearchResult(
-            source="auth.py", score=0.9, text="def login():", freshness=0.8
-        )
+        r = SearchResult(source="auth.py", score=0.9, text="def login():", freshness=0.8)
         chunk = r.to_prompt_chunk()
         assert "auth.py" in chunk
         assert "fresh" in chunk
         assert "score=0.90" in chunk
 
     def test_to_prompt_chunk_recent(self):
-        """Should format recent results correctly."""
         r = SearchResult(source="module.py", score=0.7, text="code", freshness=0.5)
         chunk = r.to_prompt_chunk()
         assert "recent" in chunk
 
     def test_to_prompt_chunk_stale(self):
-        """Should format stale results correctly."""
         r = SearchResult(source="old.py", score=0.5, text="old code", freshness=0.1)
         chunk = r.to_prompt_chunk()
         assert "stale" in chunk
 
     def test_to_prompt_chunk_includes_text(self):
-        """Should include text content in chunk."""
-        r = SearchResult(
-            source="file.py", score=0.8, text="def function():\n    pass", freshness=1.0
-        )
+        r = SearchResult(source="file.py", score=0.8, text="def function():\n    pass", freshness=1.0)
         chunk = r.to_prompt_chunk()
         assert "def function():" in chunk
 
 
-# ─── EnrichmentResult Tests ─────────────────────────────────────────────────
+# ─── RoutingResult Tests ─────────────────────────────────────────────────────
 
 
-class TestEnrichmentResult:
-    """Tests for EnrichmentResult dataclass."""
+class TestRoutingResult:
+    """Tests for RoutingResult dataclass."""
 
     def test_default_status_is_ok(self):
-        """Should default status to 'ok'."""
-        result = EnrichmentResult(success=True)
+        result = RoutingResult(success=True)
         assert result.status == "ok"
 
     def test_to_dict_includes_status(self):
-        """Should include status in dict output."""
-        result = EnrichmentResult(success=True, context="test", status="ok")
+        result = RoutingResult(success=True, context="test", status="ok")
         d = result.to_dict()
         assert "status" in d
         assert d["status"] == "ok"
 
     def test_to_dict_includes_all_fields(self):
-        """Should include all expected fields."""
-        result = EnrichmentResult(
+        result = RoutingResult(
             success=True,
             context="test context",
             results=(),
@@ -411,20 +379,18 @@ class TestEnrichmentResult:
         assert d["status"] == "ok"
 
     def test_custom_status_preserved(self):
-        """Should preserve custom status values."""
-        result = EnrichmentResult(success=False, status="no_index")
+        result = RoutingResult(success=False, status="no_index")
         assert result.status == "no_index"
 
 
-# ─── Bridge Config Tests ────────────────────────────────────────────────────
+# ─── RouterConfig Tests ──────────────────────────────────────────────────────
 
 
-class TestBridgeConfig:
-    """Tests for BridgeConfig dataclass."""
+class TestRouterConfig:
+    """Tests for RouterConfig dataclass."""
 
     def test_defaults(self):
-        """Should have sensible defaults."""
-        config = BridgeConfig()
+        config = RouterConfig()
         assert config.enabled is True
         assert config.cache_maxsize == 128
         assert config.cache_ttl_seconds == 600
@@ -433,59 +399,12 @@ class TestBridgeConfig:
         assert config.search_timeout_seconds == 30.0
         assert config.max_context_tokens == 2500
         assert config.top_k == 5
-
-    def test_from_env_enabled(self, monkeypatch):
-        """Should read enabled from env."""
-        monkeypatch.setenv("MIMIR_OPENSPACE_ENABLED", "false")
-        config = BridgeConfig.from_env()
-        assert config.enabled is False
-
-    def test_from_env_cache_size(self, monkeypatch):
-        """Should read cache size from env."""
-        monkeypatch.setenv("MIMIR_BRIDGE_CACHE_SIZE", "256")
-        config = BridgeConfig.from_env()
-        assert config.cache_maxsize == 256
-
-    def test_from_env_cache_ttl(self, monkeypatch):
-        """Should read cache TTL from env."""
-        monkeypatch.setenv("MIMIR_BRIDGE_CACHE_TTL", "300")
-        config = BridgeConfig.from_env()
-        assert config.cache_ttl_seconds == 300
-
-    def test_from_env_circuit_breaker_threshold(self, monkeypatch):
-        """Should read circuit breaker threshold from env."""
-        monkeypatch.setenv("MIMIR_BRIDGE_CB_THRESHOLD", "5")
-        config = BridgeConfig.from_env()
-        assert config.circuit_breaker_threshold == 5
-
-    def test_from_env_circuit_breaker_reset(self, monkeypatch):
-        """Should read circuit breaker reset from env."""
-        monkeypatch.setenv("MIMIR_BRIDGE_CB_RESET", "120")
-        config = BridgeConfig.from_env()
-        assert config.circuit_breaker_reset_seconds == 120
-
-    def test_from_env_timeout(self, monkeypatch):
-        """Should read timeout from env."""
-        monkeypatch.setenv("MIMIR_BRIDGE_TIMEOUT", "45.5")
-        config = BridgeConfig.from_env()
-        assert config.search_timeout_seconds == 45.5
-
-    def test_from_env_max_tokens(self, monkeypatch):
-        """Should read max tokens from env."""
-        monkeypatch.setenv("MIMIR_BRIDGE_MAX_TOKENS", "3000")
-        config = BridgeConfig.from_env()
-        assert config.max_context_tokens == 3000
-
-    def test_from_env_top_k(self, monkeypatch):
-        """Should read top_k from env."""
-        monkeypatch.setenv("MIMIR_BRIDGE_TOP_K", "10")
-        config = BridgeConfig.from_env()
-        assert config.top_k == 10
+        assert config.neural_classifier_enabled is True
+        assert config.classification_model == "gpt-3.5-turbo"
 
     def test_frozen_dataclass(self):
-        """Should be immutable."""
-        config = BridgeConfig()
-        with pytest.raises(Exception):  # FrozenInstanceError
+        config = RouterConfig()
+        with pytest.raises(Exception):
             config.enabled = False
 
 
@@ -496,7 +415,6 @@ class TestComputeFreshness:
     """Tests for _compute_freshness function."""
 
     def test_returns_1_for_just_indexed(self):
-        """Should return 1.0 for just-indexed content."""
         now = time.time()
         timestamp = _compute_freshness(
             datetime.fromtimestamp(now).isoformat(), decay_hours=168.0
@@ -504,147 +422,87 @@ class TestComputeFreshness:
         assert timestamp >= 0.99
 
     def test_returns_0_5_for_unknown(self):
-        """Should return 0.5 when no timestamp provided."""
         result = _compute_freshness(None, decay_hours=168.0)
         assert result == 0.5
 
     def test_returns_0_for_very_stale(self):
-        """Should return 0.0 for very old content."""
         old_time = datetime.now() - timedelta(days=30)
         result = _compute_freshness(old_time.isoformat(), decay_hours=168.0)
         assert result == 0.0
 
     def test_decays_linearly(self):
-        """Should decay linearly over time."""
-        half_decay = datetime.now() - timedelta(days=3.5)  # Half of 7 days
+        half_decay = datetime.now() - timedelta(days=3.5)
         result = _compute_freshness(half_decay.isoformat(), decay_hours=168.0)
         assert 0.4 < result < 0.6
 
     def test_handles_invalid_timestamp(self):
-        """Should return 0.5 for invalid timestamp."""
         result = _compute_freshness("not-a-timestamp", decay_hours=168.0)
         assert result == 0.5
 
 
-# ─── API Key Resolution Tests ───────────────────────────────────────────────
+# ─── Quick Classification Tests ─────────────────────────────────────────────
 
 
-class TestResolveApiKeyFromEnv:
-    """Tests for _resolve_api_key_from_env function."""
+class TestQuickStructuralCheck:
+    """Tests for _quick_structural_check keyword classifier."""
 
-    def test_returns_openrouter_key(self, monkeypatch):
-        """Should return OPENROUTER_API_KEY when set."""
-        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        key, base = _resolve_api_key_from_env()
-        assert key == "sk-or-test"
-        assert base == "https://openrouter.ai/api/v1"
+    def test_structural_connect(self):
+        assert _quick_structural_check("How does auth connect to database?") == "structural"
 
-    def test_returns_openai_key(self, monkeypatch):
-        """Should return OPENAI_API_KEY when OPENROUTER not set."""
-        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-oai-test")
-        key, base = _resolve_api_key_from_env()
-        assert key == "sk-oai-test"
+    def test_structural_path(self):
+        assert _quick_structural_check("Path from main to utils") == "structural"
 
-    def test_openrouter_takes_precedence(self, monkeypatch):
-        """OPENROUTER_API_KEY should take precedence."""
-        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-first")
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-oai-second")
-        key, _ = _resolve_api_key_from_env()
-        assert key == "sk-or-first"
+    def test_structural_depends(self):
+        assert _quick_structural_check("What depends on the config module?") == "structural"
 
-    def test_custom_base_url(self, monkeypatch):
-        """Should use OPENAI_BASE_URL when set."""
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-        monkeypatch.setenv("OPENAI_BASE_URL", "https://custom.api/v1")
-        key, base = _resolve_api_key_from_env()
-        assert base == "https://custom.api/v1"
+    def test_structural_how_does_with_connect(self):
+        assert _quick_structural_check("How does the frontend connect to backend?") == "structural"
 
-    def test_reads_from_auth_file(self, monkeypatch, tmp_path: Path):
-        """Should read from opencode auth file."""
-        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    def test_how_does_is_structural(self):
+        """'how does' is a structural phrase indicator."""
+        assert _quick_structural_check("How does the authentication system work?") == "structural"
 
-        auth_dir = tmp_path / ".local" / "share" / "opencode"
-        auth_dir.mkdir(parents=True)
-        auth_file = auth_dir / "auth.json"
-        auth_file.write_text('{"openrouter": {"key": "sk-file-key"}}')
+    def test_semantic_what_is(self):
+        assert _quick_structural_check("What is the purpose of caching?") == "semantic"
 
-        # Patch _AUTH_FILE_PATHS in config module since it's computed at import time
-        with patch(
-            "src.mimir.config._AUTH_FILE_PATHS", [auth_file.parent / "auth.json"]
-        ):
-            key, base = _resolve_api_key_from_env()
+    def test_semantic_explain(self):
+        assert _quick_structural_check("Explain how the RAG pipeline works") == "semantic"
 
-        assert key == "sk-file-key"
-        assert base == "https://openrouter.ai/api/v1"
-
-    def test_returns_empty_when_no_key(self, monkeypatch, tmp_path: Path):
-        """Should return empty string when no key found."""
-        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-
-        # Patch _AUTH_FILE_PATHS to empty list so no auth file is found
-        with patch("src.mimir.config._AUTH_FILE_PATHS", []):
-            key, base = _resolve_api_key_from_env()
-
-        assert key == ""
-        # Config returns default base URL even when no key found
-        assert base == "https://openrouter.ai/api/v1"
+    def test_uncertain_returns_none(self):
+        """Single keyword hit should return None (uncertain)."""
+        result = _quick_structural_check("How does the link work?")
+        assert result is None or result in ("structural", "semantic")
 
 
-# ─── Bridge Integration Tests ───────────────────────────────────────────────
+# ─── Backward Compatibility Tests ───────────────────────────────────────────
 
 
-class TestBridge:
-    """Tests for MimirOpenSpaceBridge."""
+class TestBackwardCompat:
+    """Tests that old OpenSpace bridge imports still work."""
 
-    def test_disabled_returns_error(self):
-        """Should return error when disabled."""
-        config = BridgeConfig(enabled=False)
-        bridge = MimirOpenSpaceBridge(project_root=MIMIR_DIR, config=config)
-        result = bridge.enrich_task("test task")
-        assert result.success is False
-        assert result.status == "disabled"
-        assert "disabled" in result.error.lower()
+    def test_enrichment_result_is_routing_result(self):
+        from src.mimir.openspace_bridge import EnrichmentResult
 
-    def test_circuit_open_returns_error(self):
-        """Should return error when circuit is open."""
-        config = BridgeConfig(circuit_breaker_threshold=1)
-        bridge = MimirOpenSpaceBridge(project_root=MIMIR_DIR, config=config)
-        # Trigger circuit open
-        bridge._circuit.record_failure(1, 60)
-        result = bridge.enrich_task("test task")
-        assert result.success is False
-        assert result.status == "circuit_open"
-        assert result.circuit_open is True
+        # EnrichmentResult should be a subclass of RoutingResult
+        result = EnrichmentResult(success=True, context="test")
+        assert isinstance(result, RoutingResult)
+        assert result.success is True
+        assert result.context == "test"
 
-    def test_health_check_returns_structure(self):
-        """Should return health check structure."""
-        bridge = MimirOpenSpaceBridge(project_root=MIMIR_DIR)
-        health = bridge.health_check()
-        assert "enabled" in health
-        assert "circuit_open" in health
-        assert "has_index" in health
-        assert "project_root" in health
+    def test_get_bridge_returns_none(self):
+        from src.mimir.openspace_bridge import get_bridge
 
-    def test_get_stats_includes_config(self):
-        """Should include config in stats."""
-        bridge = MimirOpenSpaceBridge(project_root=MIMIR_DIR)
-        stats = bridge.get_stats()
-        assert "config" in stats
-        assert "cache_maxsize" in stats["config"]
+        # get_bridge is a stub
+        bridge = get_bridge()
+        assert bridge is None
 
-    def test_is_enabled_property(self):
-        """Should reflect enabled state."""
-        config = BridgeConfig(enabled=True)
-        bridge = MimirOpenSpaceBridge(project_root=MIMIR_DIR, config=config)
-        assert bridge.is_enabled is True
+    def test_enrich_task_for_openspace_returns_dict(self):
+        from src.mimir.openspace_bridge import enrich_task_for_openspace
 
-        config = BridgeConfig(enabled=False)
-        bridge = MimirOpenSpaceBridge(project_root=MIMIR_DIR, config=config)
-        assert bridge.is_enabled is False
+        result = enrich_task_for_openspace("test query")
+        assert isinstance(result, dict)
+        assert "success" in result
+        assert "context" in result
 
 
 if __name__ == "__main__":

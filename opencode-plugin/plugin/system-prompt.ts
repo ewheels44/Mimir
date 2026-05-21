@@ -6,7 +6,7 @@ import { homedir } from "os"
 const ENABLED = true
 const PROMPT_FILE = `${homedir()}/.config/opencode-openagents/prompts/system-context.md`
 const REMINDER_INTERVAL = 6
-const MIMIR_REMINDER_TEXT = `[System Reminder - Message #{{count}}]: **Mimir Tools**: For SDK questions use sdk_cache_get(). For project context use mimir-knowledge_enrich_task() or search(). For complex analysis use rag_workflow() or knowledge_agent(). Load skill "unified-query" for automatic multi-layer search.`
+const MIMIR_REMINDER_TEXT = `[System Reminder - Message #{{count}}]: **Mimir Tools**: For SDK questions use sdk_cache_get(). For project context use mimir-knowledge_enrich_task() or search(). For complex analysis use rag_workflow() or knowledge_agent(). Load skill "unified-query" for automatic multi-layer search. Skill "openspace_search_skills" has been removed.`
 
 interface SessionState {
   messageCount: number

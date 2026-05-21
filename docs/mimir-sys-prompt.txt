@@ -4,3 +4,7 @@ Reference is in AGENTS.md (project-specific, read when needed).
 
 ## Recursive Development
 When working on Mimir itself, call `mimir-knowledge_enrich_task()` before every task. This is the core validation loop.
+
+## Deprecated
+The `openspace_search_skills` and `openspace_health` tools have been removed.
+Use `mimir-knowledge_enrich_task()` (routed via query_router) instead.

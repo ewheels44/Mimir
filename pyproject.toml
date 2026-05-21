@@ -1,23 +1,57 @@
-[tool.ruff]
-# Line length (black compatible)
-line-length = 88
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
 
-# Target Python version
-target-version = "py311"
+[project]
+name = "mimir"
+version = "0.1.0"
+description = "Persistent knowledge base for AI agents"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "mcp>=1.0.0",
+    "llama-index>=0.11.0",
+    "llama-index-embeddings-openai>=0.2.0",
+    "langgraph>=0.2.0",
+    "langchain>=0.3.0",
+    "langchain-openai>=0.2.0",
+    "openai>=1.0.0",
+    "python-dotenv>=1.0.0",
+    "tqdm>=4.65.0",
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "jinja2>=3.1.0",
+    "watchdog>=3.0.0",
+]
 
-[tool.ruff.format]
-# Use spaces for indentation
-indent-style = "space"
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
 
-# Compatible with black
-quote-style = "double"
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["mimir*"]
+exclude = ["experiments*"]
 
-[tool.ruff.lint]
-# Enable flake8 and other rule sets
-select = ["E", "F", "W", "I", "UP", "B", "SIM", "TCH"]
+[tool.setuptools.package-dir]
+"" = "src"
 
-# Ignore some rules that might be too strict for now
-ignore = ["E501", "B008", "UP045"]
+[project.scripts]
+mimir = "mimir:main"
 
-# Allow fixes for these rules
-fixable = ["ALL"]
+[project.entry-points."console_scripts"]
+mimir-server = "mcp_server_llamaindex:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.mimir]
+# Default configuration
+default_embedding_model = "text-embedding-3-large"
+default_llm_model = "o3-mini"
+default_docs_dir = "docs"
+default_knowledge_dir = ".knowledge/llamaindex"
+default_code_dirs = ["langgraph", "src", "tests", "scripts", "workflows", "web"]

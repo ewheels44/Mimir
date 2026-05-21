@@ -17,12 +17,29 @@ Each project gets its own index at `.knowledge/llamaindex/`. The MCP server auto
 Mimir can serve pre-compiled knowledge artifacts instead of running retrieval every time:
 
 ```
-.artifacts/rag_architecture.json     # RAG system architecture
-.artifacts/indexing_architecture.json # Indexing system architecture
-.artifacts/manifest.json               # Dependency tracking
+.artifacts/rag_architecture.json      # RAG system architecture
+.artifacts/indexing_architecture.json  # Indexing system architecture
+.artifacts/code_chunking.json          # Code chunking strategy
+.artifacts/artifact_system.json        # Artifact dependency tracking
+.artifacts/knowledge_graph_integration.json # KG + search integration
+.artifacts/query_caching.json          # Query caching mechanisms
+.artifacts/manifest.json               # Artifact dependency tracking
 ```
 
 Artifacts track which source files they depend on, and auto-invalidate when those files change (via the file watcher).
+
+### Knowledge Graph Structure
+
+The knowledge graph is stored at `.knowledge/code_relationships.json` with this structure:
+
+```json
+{
+  "relationships": [...],  // Edges: {source, target, relation_type, metadata}
+  "entities": [...]        // Nodes: {file, type, name, ...}
+}
+```
+
+Not the typical `nodes`/`edges` format — Mimir uses `entities` and `relationships`.
 
 ## MCP Tools
 
@@ -40,9 +57,9 @@ Artifacts track which source files they depend on, and auto-invalidate when thos
 | `mimir-knowledge_reindex` | Rebuild the full index | After major changes |
 | `mimir-knowledge_health_check` | Check server status | Debugging |
 | `mimir-knowledge_stats` | Index statistics | Check what's indexed |
-| `mimir-knowledge_graph_query` | Weighted Dijkstra path between two nodes | "How does X connect to Y?" |
-| `mimir-knowledge_graph_neighbors` | BFS neighbors with depth/type filter | "What depends on this?" |
-| `mimir-knowledge_graph_stats` | Graph overview (nodes, edges, top connected) | "What's the most connected module?" |
+| `mimir-knowledge_graph_query` | Query code relationships (edges between files) | "How does X connect to Y?" |
+| `mimir-knowledge_graph_neighbors` | Get related files for a path | "What depends on this?" |
+| `mimir-knowledge_graph_stats` | Graph overview (entities, relationships) | "What's the most connected module?" |
 | `openspace_search_skills` | Find evolved skills | Before executing |
 | `openspace_execute_task` | Run a task with skill guidance | Skill-guided execution |
 
@@ -150,16 +167,16 @@ All fields optional. Defaults work for most projects.
 | File | Purpose |
 |------|---------|
 | `mcp_server_llamaindex.py` | MCP server — tool definitions, server lifecycle |
-| `src/mimir/config.py` | Unified config — single source of truth |
+| `src/mimir/config.py` | Unified config — `MimirConfig` class, `get_config()` |
 | `src/mimir/indexing.py` | Document indexing — full, incremental, file-level |
-| `src/mimir/artifacts.py` | Pre-compiled artifacts — dependency tracking, staleness |
-| `src/mimir/openspace_bridge.py` | OpenSpace integration — circuit breaker, cache, content filter, **neural classifier integration** |
-| `src/mimir/query_classifier.py` | **Phase 1 Neural Query Classifier** — 10→8→2 network, 99.9% cost reduction |
+| `src/mimir/artifacts.py` | Pre-compiled artifacts — `create_artifact()`, `get_artifact()`, manifest |
+| `src/mimir/openspace_bridge.py` | OpenSpace integration — `MimirOpenSpaceBridge`, `enrich_task_for_openspace()` |
+| `src/mimir/query_classifier.py` | **Phase 1 Neural Query Classifier** — `SimpleQueryClassifier`, `classify_query()` |
 | `src/mimir/sdk_cache.py` | SDK doc cache — Context7 API, TTL, local storage |
-| `src/mimir/shared_index.py` | Cross-codebase search — shared index composition |
-| `src/mimir/knowledge_graph.py` | Code relationship extraction — AST + tree-sitter |
-| `src/mimir/metrics.py` | Cost/token tracking — per-component breakdown |
-| `src/mimir/watcher.py` | File watcher — auto-reindex on changes, invalidates artifacts |
+| `src/mimir/shared_index.py` | Cross-codebase search — `SharedIndexRegistry`, `merge_results()` |
+| `src/mimir/knowledge_graph.py` | Code relationship extraction — `CombinedExtractor`, `extract_code_relationships()` |
+| `src/mimir/metrics.py` | Cost/token tracking — `TokenTracker`, `MetricsTracker`, `QueryMetrics` |
+| `src/mimir/watcher.py` | File watcher — `MimirFileWatcher`, `detect_changed_files()` |
 | `scripts/generate_artifacts.py` | Artifact generator — creates pre-compiled knowledge |
 | `scripts/mimir-init.py` | Installer — global setup + per-project init |
 | `langgraph/workflows/rag.py` | RAG workflow — retrieve → generate, supports response_shape |
@@ -212,7 +229,7 @@ rag_workflow(
 )
 ```
 
-Budget checking uses `metrics.py` to track usage over the last 24 hours. Warnings are issued when <10% budget remains.
+Budget checking uses `metrics.py` (`QueryMetrics`, `TokenTracker`) to track usage over the last 24 hours. Warnings are issued when <10% budget remains.
 
 ---
 
@@ -266,6 +283,16 @@ mimir evaluate --update-gold
     "gold_answer": {
       "structure.retrieval.type": "hybrid"
     }
+  },
+  {
+    "id": "indexing_architecture",
+    "question": "How does Mimir's incremental indexing work?",
+    "expected_artifact": "indexing_architecture"
+  },
+  {
+    "id": "artifact_system",
+    "question": "How does the artifact dependency tracking system work?",
+    "expected_artifact": "artifact_system"
   }
 ]
 ```

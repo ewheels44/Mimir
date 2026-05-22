@@ -12,7 +12,6 @@ import pytest
 
 MIMIR_DIR = Path("/Users/ethanwheeler/Documents/Mimir")
 sys.path.insert(0, str(MIMIR_DIR))
-sys.path.insert(0, str(MIMIR_DIR / "langgraph" / "workflows"))
 
 # Skip entire module if langchain_core is not installed
 pytest.importorskip("langchain_core")
@@ -22,7 +21,7 @@ pytest.importorskip("langchain_core")
 async def test_rag_workflow():
     """Test RAG workflow executes without error."""
     from langchain_core.messages import HumanMessage
-    from rag import graph as rag_graph
+    from langgraph.workflows.rag import graph as rag_graph
 
     test_query = "What is the Mimir project?"
     config = {"configurable": {"thread_id": "test-rag"}}
@@ -37,7 +36,7 @@ async def test_rag_workflow():
 async def test_knowledge_agent_workflow():
     """Test Knowledge Agent workflow executes without error."""
     from langchain_core.messages import HumanMessage
-    from knowledge_agent import graph as agent_graph
+    from langgraph.workflows.knowledge_agent import graph as agent_graph
 
     test_query = "What is the Mimir project?"
     config = {"configurable": {"thread_id": "test-agent"}}

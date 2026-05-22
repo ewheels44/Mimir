@@ -22,15 +22,15 @@ from llama_index.core import (
 from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.llms.openai import OpenAI as OpenAILike
 
-from mimir.config import MimirConfig
-from mimir.metrics import get_tracker
-from mimir.shared_index import SharedIndexRegistry
+from src.mimir.config import MimirConfig
+from src.mimir.metrics import get_tracker
+from src.mimir.shared_index import SharedIndexRegistry
 
 logger = logging.getLogger(__name__)
 
 # Try to import file watcher (graceful degradation)
 try:
-    from mimir.watcher import MimirFileWatcher
+    from src.mimir.watcher import MimirFileWatcher
 
     WATCHER_AVAILABLE = True
 except ImportError:
@@ -97,7 +97,7 @@ class KnowledgeServer:
             return self._index
 
     def _create_index(self) -> VectorStoreIndex:
-        from mimir.indexing import index_with_progress, add_file_to_index
+        from src.mimir.indexing import index_with_progress, add_file_to_index
 
         custom_patterns = (
             list(self.config.exclude_patterns) if self.config.exclude_patterns else None
@@ -195,25 +195,26 @@ class KnowledgeServer:
 
         # Enhance with knowledge graph context if available
         try:
-            from mimir.knowledge_graph import load_knowledge_graph
+            import json as _json
+            graph_path = self.project_root / ".knowledge" / "code_relationships.json"
+            if graph_path.exists():
+                with open(graph_path) as f:
+                    kg = _json.load(f)
+                if kg and kg.get("relationships"):
+                    query_terms = [q.strip() for q in query.split() if len(q.strip()) > 3]
+                    matching_entities = []
+                    for entity_id in kg.get("entities", {}):
+                        if any(term.lower() in entity_id.lower() for term in query_terms):
+                            matching_entities.append(entity_id)
 
-            kg = load_knowledge_graph(self.project_root)
-            if kg and kg.get("relationships"):
-                query_terms = [q.strip() for q in query.split() if len(q.strip()) > 3]
-                matching_nodes = []
-                for node in kg.get("nodes", []):
-                    node_name = node.get("id", "")
-                    if any(term.lower() in node_name.lower() for term in query_terms):
-                        matching_nodes.append(node_name)
-
-                if matching_nodes:
-                    top_node = matching_nodes[0]
-                    neighbors = self._get_graph_neighbors(kg, top_node, depth=1)
-                    if neighbors:
-                        results.append("\n\n[Knowledge Graph Context]")
-                        results.append(f"Node '{top_node}' is connected to:")
-                        for neighbor in neighbors[:5]:
-                            results.append(f"  - {neighbor}")
+                    if matching_entities:
+                        top_entity = matching_entities[0]
+                        neighbors = self._get_graph_neighbors(kg, top_entity, depth=1)
+                        if neighbors:
+                            results.append("\n\n[Knowledge Graph Context]")
+                            results.append(f"Entity '{top_entity}' is connected to:")
+                            for neighbor in neighbors[:5]:
+                                results.append(f"  - {neighbor}")
         except Exception:
             pass
 
@@ -278,7 +279,7 @@ class KnowledgeServer:
             return self._format_search_error(e, "query engine")
 
     def index_documents(self, docs_dir: Optional[Path] = None) -> str:
-        from mimir.indexing import index_with_progress
+        from src.mimir.indexing import index_with_progress
 
         target_dir = docs_dir or self.docs_dir
 
@@ -302,7 +303,7 @@ class KnowledgeServer:
 
             individual_files = self.config.files
             if individual_files:
-                from mimir.indexing import add_file_to_index
+                from src.mimir.indexing import add_file_to_index
 
                 print(f"  Indexing {len(individual_files)} individual file(s) from config...")
                 for file_path_str in individual_files:
@@ -323,7 +324,7 @@ class KnowledgeServer:
             return "Error indexing documents"
 
     def add_documents(self, source_dir: Path) -> str:
-        from mimir.indexing import add_directory_with_progress
+        from src.mimir.indexing import add_directory_with_progress
 
         if not source_dir.exists():
             return f"Source directory not found: {source_dir}"
@@ -346,7 +347,7 @@ class KnowledgeServer:
             return "Error adding documents"
 
     def remove_file(self, source_file: Path) -> str:
-        from mimir.indexing import remove_file_from_index
+        from src.mimir.indexing import remove_file_from_index
 
         resolved = source_file.resolve()
 
@@ -363,7 +364,7 @@ class KnowledgeServer:
             return f"File not found in index: {resolved}"
 
     def remove_directory(self, source_dir: Path) -> str:
-        from mimir.indexing import remove_directory_from_index
+        from src.mimir.indexing import remove_directory_from_index
 
         resolved = source_dir.resolve()
         if not resolved.exists():

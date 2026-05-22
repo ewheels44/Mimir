@@ -26,8 +26,8 @@ MIMIR_DIR = Path(os.environ.get("MIMIR_ROOT", Path.home() / "Documents" / "Mimir
 sys.path.insert(0, str(MIMIR_DIR))
 
 try:
-    from mimir.server import KnowledgeServer
-    from mimir.config import MimirConfig, get_config
+    from src.mimir.server import KnowledgeServer
+    from src.mimir.config import MimirConfig, get_config
 
     _import_ok = True
     _import_err = None

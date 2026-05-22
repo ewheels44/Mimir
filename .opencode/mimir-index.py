@@ -504,7 +504,7 @@ def main():
     print("   - Query via OpenCode: Just start asking questions!")
     print("   - Web UI: cd ~/Documents/Mimir/web && ./dev.sh --project $(pwd)")
     print(
-        "   - CLI: python ~/Documents/Mimir/mcp_server_llamaindex.py --query 'your question'"
+        "   - CLI: python ~/Documents/Mimir/mimir_bridge.py  (or: python ~/Documents/Mimir/mimir.py search 'query')"
     )
 
     if not args.no_knowledge_graph:

@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-from mimir.indexing import compute_file_hash
+from src.mimir.indexing import compute_file_hash
 
 logger = logging.getLogger(__name__)
 

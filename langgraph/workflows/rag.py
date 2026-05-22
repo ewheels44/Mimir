@@ -5,7 +5,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 
-from mimir.token_callback import create_token_callback
+from src.mimir.token_callback import create_token_callback
 
 from .utils import create_llm, detect_project_root, get_mcp_client
 
@@ -24,7 +24,7 @@ async def retrieve(state: AgentState) -> AgentState:
     project_root = detect_project_root()
     client = get_mcp_client(project_root)
 
-    tools = await client.get_tools()
+    tools = client.get_tools()
     search_tool = next((t for t in tools if t.name == "search"), None)
 
     if search_tool:
@@ -85,7 +85,7 @@ Return ONLY the JSON object, no other text."""
 
     # Record metrics
     try:
-        from mimir.metrics import get_tracker
+        from src.mimir.metrics import get_tracker
 
         tracker = get_tracker()
         usage = token_callback.get_usage()

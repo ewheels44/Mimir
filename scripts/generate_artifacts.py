@@ -15,7 +15,7 @@ import json
 import sys
 from pathlib import Path
 
-# Ensure src directory is in path (same pattern as mcp_server_llamaindex.py)
+# Ensure src directory is in path
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
 SRC_DIR = SCRIPT_DIR / "src"
 
@@ -119,7 +119,7 @@ def generate_rag_architecture_artifact() -> dict:
         "source_files": [
             "langgraph/workflows/rag.py",
             "langgraph/workflows/knowledge_agent.py",
-            "mcp_server_llamaindex.py",
+            "src/mimir/server.py",
             "src/mimir/indexing.py",
             "src/mimir/token_callback.py"
         ],
@@ -179,7 +179,7 @@ def generate_indexing_architecture_artifact() -> dict:
         "source_files": [
             "src/mimir/indexing.py",
             "src/mimir/watcher.py",
-            "mcp_server_llamaindex.py"
+            "src/mimir/server.py"
         ],
         "generated_at": "2026-05-16T01:46:00Z"
     }
@@ -204,7 +204,7 @@ def generate_artifact_system_artifact() -> dict:
         },
         "source_files": [
             "src/mimir/artifacts.py",
-            "mcp_server_llamaindex.py"
+            "src/mimir/server.py"
         ],
         "generated_at": "2026-05-17T02:16:00Z"
     }
@@ -247,7 +247,7 @@ def generate_knowledge_graph_integration_artifact() -> dict:
             "depth": 1
         },
         "source_files": [
-            "mcp_server_llamaindex.py",
+            "src/mimir/server.py",
             "src/mimir/knowledge_graph.py"
         ]
     }
@@ -273,7 +273,7 @@ def generate_query_caching_artifact() -> dict:
         "cache_tools": ["cache_stats", "cache_clear", "cache_cleanup"],
         "source_files": [
             "src/mimir/query_cache.py",
-            "mcp_server_llamaindex.py"
+            "src/mimir/server.py"
         ]
     }
 

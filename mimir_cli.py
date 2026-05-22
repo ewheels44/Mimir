@@ -503,7 +503,7 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
         # Try to get artifact first if expected
         if expected_artifact:
             try:
-                from mimir.artifacts import get_artifact
+                from src.mimir.artifacts import get_artifact
                 artifact = get_artifact(expected_artifact, mimir_root)
                 if artifact:
                     print(f"✓ Using artifact: {expected_artifact}")

@@ -6,17 +6,34 @@ the thin CLI bridge directly.
 """
 
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
-from langchain_core.tools import Tool
+from langchain_core.tools import StructuredTool
+
+
+def _get_python_executable() -> str:
+    """Get the correct Python executable (venv preferred)."""
+    from src.mimir.config import get_config
+    venv_python = get_config().mimir_root / ".venv" / "bin" / "python"
+    if venv_python.exists():
+        return str(venv_python)
+    return sys.executable
 
 
 def get_bridge_path() -> Path:
     """Get the path to mimir_bridge.py."""
-    from mimir.config import get_config
+    from src.mimir.config import get_config
     return get_config().mimir_root / "mimir_bridge.py"
+
+
+def _get_project_root() -> Path:
+    """Get the project root from config."""
+    from src.mimir.config import get_config
+    return get_config().project_root
 
 
 def call_bridge(action: str, params: dict = None) -> dict:
@@ -30,13 +47,20 @@ def call_bridge(action: str, params: dict = None) -> dict:
     
     request = json.dumps({"action": action, "params": params})
     bridge_path = get_bridge_path()
+    python = _get_python_executable()
+    project_root = _get_project_root()
+    
+    # Pass PROJECT_ROOT so the bridge finds the right knowledge base
+    env = os.environ.copy()
+    env["PROJECT_ROOT"] = str(project_root)
     
     result = subprocess.run(
-        ["python3", str(bridge_path)],
+        [python, str(bridge_path)],
         input=request,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=60,
+        env=env,
     )
     
     if result.returncode != 0:
@@ -62,26 +86,26 @@ def query(question: str) -> str:
     return result.get("error", "Unknown error")
 
 
-def get_stats() -> str:
+def get_stats(**kwargs) -> str:
     """Get knowledge base statistics."""
     result = call_bridge("stats")
     return json.dumps(result)
 
 
-def get_tools() -> list[Tool]:
+def get_tools() -> list:
     """Get LangChain tools that wrap the bridge actions."""
     return [
-        Tool(
+        StructuredTool.from_function(
             name="search",
             func=search,
             description="Semantic search over the knowledge base. Returns relevant code/docs.",
         ),
-        Tool(
+        StructuredTool.from_function(
             name="query",
             func=query,
             description="RAG question answering. Synthesizes an answer from the knowledge base.",
         ),
-        Tool(
+        StructuredTool.from_function(
             name="stats",
             func=get_stats,
             description="Get knowledge base statistics.",

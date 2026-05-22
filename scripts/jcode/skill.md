@@ -46,5 +46,5 @@ python ~/Documents/Mimir/mimir-init.py  # already includes jcode bridge setup
 
 Or manually:
 ```bash
-python ~/Documents/Mimir/scripts/jcode/mimir_bridge.py --auto
+python ~/Documents/Mimir/mimir_bridge.py --auto
 ```

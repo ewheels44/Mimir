@@ -55,10 +55,11 @@ pub async fn spawn(project_root: &Path, port: u16) -> Result<Sidecar> {
     );
 
     let pythonpath = std::env::var("PYTHONPATH").unwrap_or_default();
+    let src_dir = mimir_dir.join("src");
     let new_pythonpath = if pythonpath.is_empty() {
-        mimir_dir.to_string_lossy().to_string()
+        src_dir.to_string_lossy().to_string()
     } else {
-        format!("{}:{}", mimir_dir.display(), pythonpath)
+        format!("{}:{}", src_dir.display(), pythonpath)
     };
 
     let child = tokio::process::Command::new(&python)

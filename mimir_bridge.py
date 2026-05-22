@@ -130,7 +130,7 @@ def handle_search(params: dict, project_root: Path) -> dict:
 
 def handle_enrich_task(params: dict, project_root: Path) -> dict:
     """Enrich a task with project context."""
-    from src.mimir.query_router import route_task
+    from mimir.query_router import route_task
 
     task = params.get("task", "")
     top_k = params.get("top_k", 5)
@@ -342,8 +342,8 @@ def handle_stats(params: dict, project_root: Path) -> dict:
 
 def handle_task_health(params: dict, project_root: Path) -> dict:
     """Check query router health."""
-    from src.mimir.config import get_config, reset_config
-    from src.mimir.query_router import RouterConfig
+    from mimir.config import get_config, reset_config
+    from mimir.query_router import RouterConfig
 
     reset_config()
     config = get_config(project_root=project_root)
@@ -368,7 +368,7 @@ def handle_task_health(params: dict, project_root: Path) -> dict:
 
 def handle_sdk_cache_get(params: dict, project_root: Path) -> dict:
     """Get SDK documentation from cache."""
-    from src.mimir.sdk_cache import SDKCache
+    from mimir.sdk_cache import SDKCache
 
     library = params.get("library", "")
     topic = params.get("topic", "general")
@@ -392,7 +392,7 @@ def handle_sdk_cache_get(params: dict, project_root: Path) -> dict:
 
 def handle_sdk_cache_list(params: dict, project_root: Path) -> dict:
     """List cached SDK documentation."""
-    from src.mimir.sdk_cache import SDKCache
+    from mimir.sdk_cache import SDKCache
 
     try:
         cache = SDKCache(project_root)
@@ -405,7 +405,7 @@ def handle_sdk_cache_list(params: dict, project_root: Path) -> dict:
 def handle_cache_stats(params: dict, project_root: Path) -> dict:
     """Get query cache statistics."""
     try:
-        from src.mimir.query_cache import QueryCache
+        from mimir.query_cache import QueryCache
 
         cache = QueryCache(project_root)
         return {"status": "ok", "cache_stats": cache.stats()}
@@ -416,7 +416,7 @@ def handle_cache_stats(params: dict, project_root: Path) -> dict:
 def handle_cache_clear(params: dict, project_root: Path) -> dict:
     """Clear all cached query results."""
     try:
-        from src.mimir.query_cache import QueryCache
+        from mimir.query_cache import QueryCache
 
         cache = QueryCache(project_root)
         count = cache.invalidate()
@@ -428,7 +428,7 @@ def handle_cache_clear(params: dict, project_root: Path) -> dict:
 def handle_cache_cleanup(params: dict, project_root: Path) -> dict:
     """Remove expired cache entries."""
     try:
-        from src.mimir.query_cache import QueryCache
+        from mimir.query_cache import QueryCache
 
         cache = QueryCache(project_root)
         count = cache.cleanup()

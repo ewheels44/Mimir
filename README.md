@@ -227,10 +227,10 @@ mimir-knowledge_sdk_cache_get("stripe", "checkout sessions")
 
 ```bash
 # From within a Mimir-enabled project:
-python /path/to/Mimir/scripts/jcode/mimir_bridge.py --check
+python /path/to/Mimir/mimir_bridge.py --check
 
 # Or register manually:
-python /path/to/Mimir/scripts/jcode/mimir_bridge.py --auto
+python /path/to/Mimir/mimir_bridge.py --auto
 ```
 
 Alternatively, verify Jcode integration from any project:
@@ -963,10 +963,10 @@ The installer auto-detects your Mimir path — no manual editing needed.
 mimir jcode --check
 
 # Quick setup (registers skill, prompt, and MCP config)
-python /path/to/Mimir/scripts/jcode/mimir_bridge.py --auto
+python /path/to/Mimir/mimir_bridge.py --auto
 
 # Clean up all Mimir Jcode config
-python /path/to/Mimir/scripts/jcode/mimir_bridge.py --unregister
+python /path/to/Mimir/mimir_bridge.py --unregister
 ```
 
 ### Auth Config: `~/.local/share/opencode/auth.json`

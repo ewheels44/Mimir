@@ -239,7 +239,7 @@ Each problem has a proposed fix or investigation path. Check off as you go.
 
 ## Stage 6 — Jcode Skill Integration
 
-**Source:** `scripts/jcode/mimir_bridge.py`  
+**Source:** `mimir_bridge.py`  
 **Config:** `~/.jcode/skills/mimir-Mimir.json`, `~/.jcode/mcp.json`
 
 ### P-21 🟠 ~~Auto-activate is always-on (no granularity)~~ — SHIPPED `f07cb96`
@@ -248,7 +248,7 @@ Each problem has a proposed fix or investigation path. Check off as you go.
 
 **Impact:** ~~Unnecessary latency on every message + token burn for trivial tasks.~~
 
-**Fix applied:** Changed `auto_activate` to `false` in both `scripts/jcode/mimir_bridge.py` and `~/.jcode/skills/mimir-Mimir.json`. Mimir now requires explicit `/skills enable mimir-Mimir` per session.
+**Fix applied:** Changed `auto_activate` to `false` in both `mimir_bridge.py` and `~/.jcode/skills/mimir-Mimir.json`. Mimir now requires explicit `/skills enable mimir-Mimir` per session.
 
 ### P-22 🟡 `usage_when` hints are unenforced suggestions
 

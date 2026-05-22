@@ -41,9 +41,6 @@ exclude = ["experiments*"]
 [project.scripts]
 mimir = "mimir:main"
 
-[project.entry-points."console_scripts"]
-mimir-server = "mcp_server_llamaindex:main"
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

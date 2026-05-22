@@ -104,22 +104,58 @@ def _run_init(args: list[str]) -> int:
     return _run_script("scripts/mimir-init.py", args)
 
 
-def _run_indexing(args: list[str]) -> int:
-    """Run the MCP server in indexing mode (not as a server)."""
-    script_path = MIMIR_ROOT / "mcp_server_llamaindex.py"
-    if not script_path.exists():
-        print(f"Error: mcp_server_llamaindex.py not found at {script_path}")
+def _run_bridge(action: str, params: dict | None = None) -> int:
+    """Run the Mimir bridge with a JSON action."""
+    bridge_path = MIMIR_ROOT / "mimir_bridge.py"
+    if not bridge_path.exists():
+        print(f"Error: mimir_bridge.py not found at {bridge_path}")
         return 1
 
     env = os.environ.copy()
-    # Put src first to avoid shadowing by mimir.py in root
     env["PYTHONPATH"] = str(MIMIR_ROOT / "src") + os.pathsep + env.get("PYTHONPATH", "")
 
+    request = json.dumps({"action": action, "params": params or {}})
     result = subprocess.run(
-        [sys.executable, str(script_path)] + args,
+        [sys.executable, str(bridge_path)],
+        input=request,
+        capture_output=True,
+        text=True,
         cwd=str(Path.cwd()),
         env=env,
     )
+
+    if result.stdout.strip():
+        try:
+            response = json.loads(result.stdout)
+            # Pretty-print the response
+            if "error" in response:
+                print(f"Error: {response['error']}")
+            elif "answer" in response:
+                print(response["answer"])
+            elif "message" in response:
+                print(response["message"])
+            elif "results" in response:
+                for r in response["results"]:
+                    source = r.get("source", "?")
+                    score = r.get("score", 0)
+                    text = r.get("text", "")
+                    print(f"[{source}] (score: {score:.3f})\n{text}\n")
+            elif "stats" in response:
+                for k, v in response["stats"].items():
+                    print(f"  {k}: {v}")
+            elif "docs" in response:
+                print(response["docs"])
+            elif "cached" in response:
+                for entry in response["cached"]:
+                    print(f"  - {entry}")
+            else:
+                print(json.dumps(response, indent=2))
+        except json.JSONDecodeError:
+            print(result.stdout)
+
+    if result.stderr.strip():
+        print(result.stderr, file=sys.stderr)
+
     return result.returncode
 
 
@@ -150,47 +186,30 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
 
 
 def cmd_server(args: argparse.Namespace) -> int:
-    """Run the MCP server."""
-    extra = []
-    if args.transport:
-        extra.extend(["--transport", args.transport])
-    if args.port:
-        extra.extend(["--port", str(args.port)])
-    return _run_indexing(extra)
+    """MCP server removed — use native jcode mimir tool instead."""
+    print("MCP server is no longer supported.")
+    print("Mimir now uses a native jcode tool via mimir_bridge.py.")
+    print("The agent calls mimir(action=...) directly — no server needed.")
+    return 1
 
 
 def cmd_index(args: argparse.Namespace) -> int:
     """Index documents."""
-    extra = []
     if args.reindex:
-        extra.append("--reindex")
+        return _run_bridge("reindex", {"force": True})
     if args.add:
-        extra.extend(["--add", args.add])
-    if args.remove:
-        extra.extend(["--remove", args.remove])
-    if args.remove_dir:
-        extra.extend(["--remove-dir", args.remove_dir])
-    if args.shared_index:
-        extra.extend(["--shared-index", args.shared_index])
-        if args.name:
-            extra.extend(["--name", args.name])
-    if args.shared_list:
-        extra.append("--shared-list")
-    if args.directory:
-        extra.extend(["--index", args.directory])
-    if not extra:
-        extra.append("--index")
-    return _run_indexing(extra)
+        return _run_bridge("reindex", {})
+    return _run_bridge("reindex", {})
 
 
 def cmd_search(args: argparse.Namespace) -> int:
     """One-shot semantic search."""
-    return _run_indexing(["--query", args.query])
+    return _run_bridge("search", {"query": args.query})
 
 
 def cmd_stats(args: argparse.Namespace) -> int:
     """Show index statistics."""
-    return _run_indexing(["--stats"])
+    return _run_bridge("stats")
 
 
 def cmd_list(args: argparse.Namespace) -> int:

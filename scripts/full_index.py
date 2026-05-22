@@ -96,7 +96,7 @@ def main():
     print("Loading config and creating server...")
     from llama_index.core import SimpleDirectoryReader, StorageContext, VectorStoreIndex
 
-    from mcp_server_llamaindex import KnowledgeServer
+    from mimir.server import KnowledgeServer
     from mimir.config import MimirConfig
 
     config = MimirConfig.load()

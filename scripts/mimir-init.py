@@ -118,7 +118,7 @@ def find_mimir_root() -> Path | None:
             return p
 
     this_file = Path(__file__).resolve()
-    if (this_file.parent / "mcp_server_llamaindex.py").exists():
+    if (this_file.parent / "mimir_bridge.py").exists():
         return this_file.parent
 
     legacy = Path.home() / "Documents" / "Mimir"
@@ -257,81 +257,13 @@ def inject_system_rules(opencode_config_dir: Path, force: bool = False) -> dict:
     return result
 
 
-def install_mcp_config(opencode_config_dir: Path, mimir_root: Path) -> dict:
-    """Merge Mimir MCP server config into global opencode.json.
-
-    Preserves existing MCP entries. Returns status dict.
-    """
-    result = {"backed_up": False, "updated": False}
-
-    config_path = opencode_config_dir / "opencode.json"
-    backup_dir = opencode_config_dir / "mimir-backups"
-
-    # Backup existing
-    if config_path.exists():
-        backup = backup_file(config_path, backup_dir)
-        if backup:
-            result["backed_up"] = str(backup)
-
-    # Load existing or create new
-    if config_path.exists():
-        config = json.loads(config_path.read_text())
-    else:
-        config = {"$schema": "https://opencode.ai/config.json"}
-
-    if "mcp" not in config:
-        config["mcp"] = {}
-
-    # Add Mimir knowledge server
-    mcp_server = mimir_root / "scripts" / "run_mcp_server.sh"
-    config["mcp"]["mimir-knowledge"] = {
-        "command": [str(mcp_server)],
-        "args": [],
-        "env": {
-            "EMBEDDING_MODEL": "text-embedding-3-small",
-            "OPENAI_BASE_URL": "https://openrouter.ai/api/v1",
-            "LOG_LEVEL": "INFO",
-        },
-    }
-
-    # Add OpenSpace server if available
-    openspace_server = mimir_root / "scripts" / "run_openspace_mcp.sh"
-    if openspace_server.exists():
-        config["mcp"]["openspace"] = {
-            "command": [str(openspace_server)],
-            "args": [],
-            "env": {
-                "OPENSPACE_HOST_SKILL_DIRS": str(mimir_root / "skills"),
-            },
-        }
-
-    config_path.write_text(json.dumps(config, indent=2) + "\n")
-    result["updated"] = True
-
-    return result
-
-
 def global_install(mimir_root: Path, opencode_config_dir: Path, force: bool) -> bool:
-    """Run global installation: MCP config + system rules."""
+    """Run global installation: system rules (no MCP — uses native jcode tool)."""
     print("\n🔧 Global Mimir Install")
     print(f"   Mimir root: {mimir_root}")
     print(f"   OpenCode config: {opencode_config_dir}")
 
-    # Check prerequisites
-    mcp_server = mimir_root / "scripts" / "run_mcp_server.sh"
-    if not mcp_server.exists():
-        print(f"\n❌ MCP server not found at {mcp_server}")
-        return False
-
-    # 1. MCP config
-    print("\n📦 MCP Server Config:")
-    mcp_result = install_mcp_config(opencode_config_dir, mimir_root)
-    if mcp_result["backed_up"]:
-        print(f"   ✓ Backed up opencode.json → {mcp_result['backed_up']}")
-    if mcp_result["updated"]:
-        print("   ✓ Updated opencode.json with Mimir MCP server")
-
-    # 2. System rules
+    # 1. System rules
     print("\n📋 System Rules:")
     rules_result = inject_system_rules(opencode_config_dir, force=force)
     if rules_result["backed_up"]:
@@ -341,7 +273,7 @@ def global_install(mimir_root: Path, opencode_config_dir: Path, force: bool) -> 
     if rules_result["skipped"]:
         print("   ⏭️  Mimir rules already present (use --force to re-inject)")
 
-    # 3. API key check
+    # 2. API key check
     api_key = get_openrouter_api_key()
     if api_key:
         print("\n🔑 OpenRouter API key found")
@@ -351,10 +283,9 @@ def global_install(mimir_root: Path, opencode_config_dir: Path, force: bool) -> 
 
     print("\n✅ Global install complete!")
     print("\nNext steps:")
-    print("  1. Restart OpenCode to pick up the MCP server")
     mimir_cli = Path(__file__).resolve().parent / "mimir.py"
-    print(f"  2. In any project, run: python {mimir_cli} init --code-dirs=src,tests")
-    print("  3. Then use: mimir-knowledge_enrich_task()")
+    print(f"  1. In any project, run: python {mimir_cli} init --code-dirs=src,tests")
+    print("  2. Jcode will auto-detect Mimir via the native mimir tool")
     print(f"\nTo uninstall: python {mimir_cli} uninstall")
 
     return True
@@ -432,46 +363,6 @@ def create_mimir_config(project_root: Path, code_dirs: list[str] = None) -> Path
         config["code_dirs"] = code_dirs
 
     config_path = mimir_dir / "config.json"
-    config_path.write_text(json.dumps(config, indent=2) + "\n")
-    return config_path
-
-
-def create_jcode_mcp_config(project_root: Path, mimir_root: Path) -> Path:
-    """Create .jcode/mcp.json for project-local Mimir MCP server.
-    
-    Creates a unique server name per project to avoid conflicts when
-    working on multiple projects. Sets PROJECT_ROOT so the MCP server
-    knows which project it's serving.
-    
-    Note: Jcode may need to reload/restart to pick up changes to .jcode/mcp.json.
-    Use 'mcp' tool with action='reload' or restart Jcode.
-    """
-    jcode_dir = project_root / ".jcode"
-    jcode_dir.mkdir(exist_ok=True)
-
-    # Use the project's venv python if available, otherwise use current python
-    venv_python = project_root / ".venv" / "bin" / "python"
-    python_cmd = str(venv_python) if venv_python.exists() else sys.executable
-
-    # Create unique server name based on project directory name
-    # This avoids conflicts when working on multiple projects
-    project_name = project_root.name
-    server_name = f"mimir-{project_name}"
-
-    config = {
-        "servers": {
-            server_name: {
-                "command": python_cmd,
-                "args": [str(mimir_root / "mcp_server_llamaindex.py")],
-                "env": {
-                    "PYTHONPATH": str(mimir_root / "src"),
-                    "PROJECT_ROOT": str(project_root),
-                },
-            }
-        }
-    }
-
-    config_path = jcode_dir / "mcp.json"
     config_path.write_text(json.dumps(config, indent=2) + "\n")
     return config_path
 
@@ -623,15 +514,7 @@ def init_project(project_root: Path, mimir_root: Path, args) -> bool:
     else:
         print("   ⏭️  Skipped git hook (not a git repo or hook already installed)")
 
-    # Jcode MCP config (project-local)
-    jcode_mcp_path = project_root / ".jcode" / "mcp.json"
-    if not jcode_mcp_path.exists() or args.force:
-        create_jcode_mcp_config(project_root, mimir_root)
-        print(f"   ✓ Created: {jcode_mcp_path}")
-    else:
-        print(f"   ⏭️  Skipped: {jcode_mcp_path} (exists)")
-
-    # Jcode bridge integration
+    # Jcode integration (native tool — no MCP needed)
     if getattr(args, 'jcode', False):
         try:
             # Add Mimir root to path so the bridge can be imported

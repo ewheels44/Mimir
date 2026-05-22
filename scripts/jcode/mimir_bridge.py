@@ -33,12 +33,12 @@ def find_mimir_root() -> Path | None:
     """Find the Mimir installation root."""
     # Try relative to this script
     candidate = Path(__file__).resolve().parent.parent.parent
-    if (candidate / "mcp_server_llamaindex.py").exists():
+    if (candidate / "mimir_bridge.py").exists():
         return candidate
 
     # Try standard install path
     home_mimir = Path.home() / "Documents" / "Mimir"
-    if (home_mimir / "mcp_server_llamaindex.py").exists():
+    if (home_mimir / "mimir_bridge.py").exists():
         return home_mimir
 
     # Try adjacent to this script (dev layout)
@@ -337,6 +337,40 @@ def inject_mimir_prompt(project_root: Path) -> str:
     return f"✅ Injected Mimir system prompt → {prompt_file}"
 
 
+def setup_auto_enrichment(project_root: Path) -> str:
+    """Set up automatic context enrichment for Jcode.
+    
+    This creates a prompt file that injects enriched context
+    before the agent starts thinking.
+    """
+    auto_enrich_script = Path(__file__).resolve().parent / "mimir_auto_enrich.py"
+    
+    if not auto_enrich_script.exists():
+        return f"⚠️  Auto-enrich script not found: {auto_enrich_script}"
+    
+    import subprocess
+    
+    # Use a sample task to generate initial enrichment
+    sample_task = "implement a new feature"
+    
+    try:
+        result = subprocess.run(
+            [sys.executable, str(auto_enrich_script), sample_task, "--output", 
+             str(project_root / ".jcode" / "prompts" / "01-mimir-auto-enriched.md")],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        
+        if result.returncode == 0:
+            return "✅ Auto-enrichment configured (context will be injected automatically)"
+        else:
+            return f"⚠️  Auto-enrichment setup failed: {result.stderr}"
+            
+    except Exception as e:
+        return f"⚠️  Auto-enrichment setup error: {e}"
+
+
 # ── Main ────────────────────────────────────────────────────────────────────
 
 def print_usage():
@@ -367,6 +401,11 @@ def main():
         help="Inject Mimir system prompt into Jcode",
     )
     parser.add_argument(
+        "--setup-auto-enrich",
+        action="store_true",
+        help="Set up automatic context enrichment (recommended)",
+    )
+    parser.add_argument(
         "--unregister",
         action="store_true",
         help="Remove Mimir from Jcode config",
@@ -384,7 +423,7 @@ def main():
     parser.add_argument(
         "--auto",
         action="store_true",
-        help="Full auto-setup: register skill + inject prompt + MCP server",
+        help="Full auto-setup: register skill + inject prompt + MCP server + auto-enrich",
     )
     parser.add_argument(
         "--quiet", "-q",

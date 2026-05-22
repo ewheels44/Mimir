@@ -34,7 +34,7 @@ def _get_artifact_dir(project_root: Optional[Path] = None) -> Path:
         # Auto-detect project root by looking for marker files
         current = Path.cwd()
         for parent in [current] + list(current.parents):
-            if (parent / ".git").exists() or (parent / "mcp_server_llamaindex.py").exists():
+            if (parent / ".git").exists() or (parent / ".mimir").exists():
                 project_root = parent
                 break
         if project_root is None:

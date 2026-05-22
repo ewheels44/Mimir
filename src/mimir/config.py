@@ -403,7 +403,7 @@ def _detect_mimir_root() -> Path:
     # This file is at {mimir_root}/src/mimir/config.py
     this_file = Path(__file__).resolve()
     candidate = this_file.parent.parent.parent
-    if (candidate / "mcp_server_llamaindex.py").exists():
+    if (candidate / "mimir_bridge.py").exists():
         return candidate
 
     # Legacy fallback

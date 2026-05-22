@@ -2,7 +2,7 @@
 
 A semantic knowledge base that gives your AI agents instant access to your codebase, eliminating repeated discovery and context loss between sessions.
 
-**Works with**: [Jcode](https://github.com/1jehuang/jcode) • [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) • [OpenAgents](https://github.com/darrenhinde/OpenAgentsControl)
+**Now embedded directly in [ecode](https://github.com/ewheels44/ecode) (a fork of [Jcode](https://github.com/1jehuang/jcode)) — no MCP server needed.**
 
 ---
 
@@ -13,14 +13,15 @@ A semantic knowledge base that gives your AI agents instant access to your codeb
 git clone https://github.com/ewheels44/Mimir.git ~/Mimir
 # Or any location you prefer: git clone https://github.com/ewheels44/Mimir.git /path/to/your/Mimir
 
-# 2. Global install (once — sets up MCP server + system rules)
-python /path/to/Mimir/mimir.py install
+# 2. Use with ecode (jcode fork with Mimir embedded)
+cd ~/ecode
+# Mimir tools are available directly in ecode
 
-# 3. Per-project (in each project you want to index)
+# 3. Initialize a project for indexing
 cd ~/Projects/YourProject
-python /path/to/Mimir/mimir.py init --code-dirs=src,tests
+python /path/to/Mimir/mimir_cli.py init --code-dirs=src,tests
 
-# 4. Restart OpenCode — your agents now have semantic search.
+# 4. Start ecode — your agents now have semantic search.
 ```
 
 ---
@@ -110,7 +111,7 @@ rag_workflow(query="...")
 
 ### Query Router (Standalone)
 
-The **query router** (`src/mimir/query_router`) is the new standalone routing layer that replaced the OpenSpace bridge. It classifies and routes every `enrich_task` call:
+The **query router** (`src/mimir/query_router`) is the routing layer that classifies and routes every `enrich_task` call:
 
 ```
 User task
@@ -166,78 +167,34 @@ Code → AST + tree-sitter → Relationships → Rust Graph Server (Weighted Dij
 
 ---
 
-## Jcode Integration
+## ecode Integration
 
-Mimir includes a built-in Jcode bridge for seamless integration with the [Jcode](https://github.com/1jehuang/jcode) agent server.
+Mimir is now **embedded directly into ecode**, a fork of Jcode. This means:
+- No MCP server setup required
+- Mimir tools are native to ecode
+- Direct function calls instead of MCP transport
+- Simplified architecture with better performance
 
-### Quick Setup
+### Using Mimir Tools in ecode
 
-```bash
-# 1. Start Jcode
-jcode
-
-# 2. In another terminal, install Mimir and auto-configure Jcode
-cd ~/Projects/YourProject
-python /path/to/Mimir/scripts/mimir-init.py --jcode
-```
-
-This does three things:
-1. **Registers a Jcode skill** → `~/.jcode/skills/mimir-{project}.json` with all Mimir tools
-2. **Injects a system prompt** → `~/.jcode/prompts/mimir-{project}.md` with usage instructions
-3. **Registers the MCP server** → `~/.jcode/mcp.json` with the Mimir MCP server config
-
-### Manual Configuration
-
-If you prefer to configure things by editing files:
-
-**MCP Config** (`~/.jcode/mcp.json`):
-```json
-{
-  "servers": {
-    "mimir-my-project": {
-      "command": "python3",
-      "args": ["/path/to/Mimir/mcp_server_llamaindex.py"],
-      "env": {
-        "PROJECT_ROOT": "/path/to/your/project",
-        "PYTHONPATH": "/path/to/Mimir/src"
-      }
-    }
-  }
-}
-```
-
-**Per-project config** (`.jcode/mcp.json` in project root) works too — same format.
-
-### Using Mimir Tools in Jcode
-
-Once configured, Jcode agents can call Mimir tools directly:
+Once your project is indexed, ecode agents can call Mimir tools directly:
 
 ```
-/mcp reload                    # Pick up new MCP servers
-
-# Then in conversation:
-mimir-knowledge_enrich_task("Implement JWT auth")
-mimir-knowledge_search("database connection pooling")
-mimir-knowledge_query("How does the caching layer work?")
-mimir-knowledge_graph_query("auth middleware", "database pool")
-mimir-knowledge_sdk_cache_get("stripe", "checkout sessions")
+# In ecode conversation:
+mimir(action="enrich_task", params={"task": "Implement JWT auth"})
+mimir(action="search", params={"query": "database connection pooling"})
+mimir(action="query", params={"question": "How does the caching layer work?"})
+mimir(action="graph_query", params={"source": "auth middleware", "target": "database pool"})
+mimir(action="sdk_cache_get", params={"library": "stripe", "topic": "checkout sessions"})
 ```
 
-### Checking Status
+### ecode-Specific Features
 
-```bash
-# From within a Mimir-enabled project:
-python /path/to/Mimir/mimir_bridge.py --check
-
-# Or register manually:
-python /path/to/Mimir/mimir_bridge.py --auto
-```
-
-Alternatively, verify Jcode integration from any project:
-
-```bash
-mimir jcode --check
-```
+Since Mimir is embedded in ecode, you get:
+- **Native tool access** — No MCP bridge overhead
+- **Direct function calls** — `mimir(action=..., params=...)` instead of HTTP/MCP transport
+- **Tighter integration** — ecode's agent system has direct access to Mimir's internals
+- **Better performance** — No serialization/deserialization overhead
 
 ---
 
@@ -249,7 +206,7 @@ mimir jcode --check
 |-------------|----------------|--------|
 | **Python 3.11+** | `brew install python` or [python.org](https://python.org) | `python3 --version` |
 | **uv package manager** | `brew install uv` or `curl -LsSf https://astral.sh/uv/install.sh \| sh` | `uv --version` |
-| **oh-my-opencode** | See [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) | `opencode --version` |
+| **ecode (jcode fork)** | `git clone https://github.com/ewheels44/ecode.git` | — |
 | **OpenRouter API key** | [openrouter.ai](https://openrouter.ai) → Settings → Keys | — |
 
 ### Step 1: Clone Mimir
@@ -265,31 +222,55 @@ git clone https://github.com/ewheels44/Mimir.git ~/Mimir
 # Option A: Set environment variable (add to ~/.zshrc or ~/.bashrc)
 export OPENROUTER_API_KEY="sk-or-v1-your-key-here"
 
-# Option B: Use opencode auth (recommended)
-opencode auth openrouter
+# Option B: Use ecode auth
+cd ~/ecode
+ecode auth openrouter
 # Paste your key when prompted
 ```
 
-### Step 3: Global Install
+### Step 3: Initialize Your Project
 
 ```bash
-python /path/to/Mimir/mimir.py install
+cd ~/Projects/YourProject
+python /path/to/Mimir/mimir_cli.py init --code-dirs=src,tests
 ```
 
-This does three things automatically:
-1. Backs up your existing `~/.config/opencode/opencode.json` and `system-context.md`
-2. Adds the Mimir MCP server to your global config (preserves existing entries)
-3. Injects Mimir rules into your system context (marker-based, clean uninstall)
+This creates:
+```
+YourProject/
+├── docs/                    # Your documentation
+├── .knowledge/llamaindex/   # Vector index (auto-generated)
+├── .mimir/
+│   ├── config.json          # Project configuration
+│   └── AGENTS.md            # Local Mimir docs
+└── .opencode/
+    └── mimir-index.py       # Indexing script
+```
 
-To uninstall later: `python /path/to/Mimir/mimir.py uninstall`
-
-### Step 4: Verify Installation
+### Step 4: Index Your Content
 
 ```bash
-# Restart OpenCode, then check tools are available
-cd /path/to/Mimir
-opencode
-# Ask: "What tools are available?"
+# Add documentation
+echo "# My Project Architecture" > docs/README.md
+
+# Index docs only
+python /path/to/Mimir/mimir_cli.py index
+
+# Add source code (optional)
+# Edit .mimir/config.json:
+#   {"code_dirs": ["src", "tests"]}
+python /path/to/Mimir/mimir_cli.py index --reindex
+
+# Or add incrementally
+python /path/to/Mimir/mimir_cli.py index --add src
+```
+
+### Step 5: Start ecode
+
+```bash
+cd ~/ecode
+ecode
+# Mimir tools are now available directly
 ```
 
 ---
@@ -300,7 +281,7 @@ opencode
 
 ```bash
 cd ~/Projects/YourProject
-python /path/to/Mimir/mimir.py init --code-dirs=src,tests
+python /path/to/Mimir/mimir_cli.py init --code-dirs=src,tests
 ```
 
 This creates:
@@ -322,35 +303,31 @@ YourProject/
 echo "# My Project Architecture" > docs/README.md
 
 # Index docs only
-python /path/to/Mimir/mimir.py index
+python /path/to/Mimir/mimir_cli.py index
 
 # Add source code (optional)
 # Edit .mimir/config.json:
 #   {"code_dirs": ["src", "tests"]}
-python /path/to/Mimir/mimir.py index --reindex
+python /path/to/Mimir/mimir_cli.py index --reindex
 
 # Or add incrementally
-python /path/to/Mimir/mimir.py index --add src
+python /path/to/Mimir/mimir_cli.py index --add src
 ```
 
 ### Query Your Knowledge Base
 
 ```bash
 # One-shot search
-python /path/to/Mimir/mimir.py search "How does auth work?"
+python /path/to/Mimir/mimir_cli.py search "How does auth work?"
 
 # RAG workflow
-python /path/to/Mimir/mimir.py rag "Explain the database layer"
+python /path/to/Mimir/mimir_cli.py rag "Explain the database layer"
 
 # Knowledge agent
-python /path/to/Mimir/mimir.py agent "Find all API endpoints"
+python /path/to/Mimir/mimir_cli.py agent "Find all API endpoints"
 
-# FDE workflows
-python /path/to/Mimir/mimir.py prep "video latency issues"
-python /path/to/Mimir/mimir.py diff --days 1
-
-# Via opencode (automatic)
-# Just ask questions — agents use Mimir tools automatically
+# Via ecode (automatic)
+# Just ask questions — agents use Mimir tools directly
 ```
 
 ### Enable Auto-Indexing (Recommended)
@@ -420,7 +397,7 @@ to add `code_dirs` if you want code changes tracked too.
 cat .mimir/reindex.log
 
 # Check tracked files
-python /path/to/Mimir/mimir.py stats
+python /path/to/Mimir/mimir_cli.py stats
 ```
 
 ---
@@ -442,21 +419,13 @@ Check .knowledge/sdk-cache/stripe/
     └── Stale or missing → Fetch from Context7 API → Cache locally
 ```
 
-### MCP Tools
+### CLI Commands
 
-| Tool | Purpose |
-|------|---------|
-| `sdk_cache_get` | Get SDK docs (fetches + caches if stale) |
-| `sdk_cache_list` | List all cached libraries with freshness info |
-
-### Usage
-
-```
-# In opencode sessions — agents use these automatically
-"How do I create a Stripe checkout session?"
-# → Agent calls sdk_cache_get(library="stripe", topic="checkout sessions")
-# → Gets live API docs, cached for 7 days
-```
+| Command | Purpose |
+|---------|---------|
+| `mimir_cli.py cache list` | List all cached libraries with freshness info |
+| `mimir_cli.py cache get stripe --topic "checkout sessions"` | Get docs for a library |
+| `mimir_cli.py cache refresh stripe --topic "webhooks"` | Force refresh |
 
 ### Cache Location
 
@@ -469,19 +438,6 @@ Check .knowledge/sdk-cache/stripe/
 │   ├── usestate-hooks.md
 │   └── meta.json
 └── ...
-```
-
-### CLI
-
-```bash
-# List cached libraries
-python /path/to/Mimir/mimir.py cache list
-
-# Get docs for a library
-python /path/to/Mimir/mimir.py cache get stripe --topic "checkout sessions"
-
-# Force refresh
-python /path/to/Mimir/mimir.py cache refresh stripe --topic "webhooks"
 ```
 
 ---
@@ -499,10 +455,10 @@ Code extraction (AST + tree-sitter)
 code_relationships.json (entities + relationships)
     │
     ▼
-Rust graph server (weighted Dijkstra, BFS neighbors)
+Rust graph server (weighted Dijkstra, BFS neighbors, stats)
     │
     ▼
-MCP tools (graph_query, graph_neighbors, graph_stats)
+Mimir tools (graph_query, graph_neighbors, graph_stats)
 ```
 
 ### Semantic Search vs Graph Query
@@ -528,27 +484,6 @@ Relationships are weighted by coupling strength — Dijkstra finds the **stronge
 
 External nodes (stdlib, third-party) are excluded from path-finding — only internal project connections are traced.
 
-### MCP Tools
-
-| Tool | Purpose | Example |
-|------|---------|---------|
-| `graph_query` | Find shortest weighted path between two modules | "How does watcher.py reach indexing.py?" |
-| `graph_neighbors` | Explore connections around a node | "What does config.py import?" |
-| `graph_stats` | Graph overview (counts, top connected) | "What are the hub files?" |
-
-### Usage
-
-```
-# In opencode sessions — agents use these automatically for structural questions
-"How does the MCP server reach the SDK cache?"
-# → Agent calls graph_query(source="mcp_server_llamaindex.py", target="src/mimir/sdk_cache.py")
-# → Returns: direct calls edge, cost 1.0
-
-"What depends on config.py?"
-# → Agent calls graph_neighbors(node_id="src/mimir/config.py", depth=1)
-# → Returns: list of modules that import or call config.py
-```
-
 ### Requirements
 
 The graph query tools require the **Rust web server** to be running:
@@ -558,7 +493,7 @@ cd /path/to/Mimir/web
 ./dev.sh --project /path/to/your/project
 ```
 
-The MCP server proxies graph queries to the Rust server via HTTP (`localhost:8000`). If the web server isn't running, graph tools return a clear error with instructions.
+The Mimir tools proxy graph queries to the Rust server via HTTP (`localhost:8000`). If the web server isn't running, graph tools return a clear error with instructions.
 
 ---
 
@@ -571,7 +506,7 @@ Mimir includes seed skills that give agents immediate knowledge for common tasks
 | Skill | Purpose |
 |-------|---------|
 | `mimir-knowledge` | Search the project knowledge base before executing tasks |
-| `unified-query` | Single entry point — searches OpenSpace skills, SDK cache, and Mimir automatically |
+| `unified-query` | Single entry point — searches SDK cache and Mimir automatically |
 | `sdk-onboarding` | Guide for onboarding developers to any SDK or library |
 | `sdk-integration-pattern` | Common patterns for integrating external SDKs (config, errors, testing) |
 | `find-and-follow-pattern` | "How do I add a new X?" — find existing patterns and follow them |
@@ -591,16 +526,13 @@ The `unified-query` skill automatically hits all knowledge layers:
 Your question
     │
     ▼
-Layer 1: OpenSpace Skills ─── "Do I already know the answer?"
+Layer 1: SDK Doc Cache ────── "Do I have fresh docs for this?"
     │
     ▼
-Layer 2: SDK Doc Cache ────── "Do I have fresh docs for this?"
+Layer 2: Mimir Knowledge ──── "What does the project codebase say?"
     │
     ▼
-Layer 3: Mimir Knowledge ──── "What does the project codebase say?"
-    │
-    ▼
-Layer 4: Synthesize ───────── Combined answer with source attribution
+Layer 3: Synthesize ───────── Combined answer with source attribution
 ```
 
 ### SDK Onboarding Flow
@@ -614,7 +546,7 @@ Dev: "How do I add Stripe checkout to the billing page?"
 2. SDK cache: Fetches live Stripe API docs
 3. Skill: Guides integration following project patterns
 4. Agent: Proposes plan using all three sources
-5. Dev: Approves → Agent implements → OpenSpace learns
+5. Dev: Approves → Agent implements
 ```
 
 ---
@@ -644,10 +576,10 @@ Reference large SDKs (indexed once globally) alongside customer code in a single
 
 ```bash
 # 1. Index a shared SDK (once, globally)
-python /path/to/Mimir/mimir.py index --shared-index ~/path/to/sdk/ --name acme-sdk
+python /path/to/Mimir/mimir_cli.py index --shared-index ~/path/to/sdk/ --name acme-sdk
 
 # 2. List available shared indices
-python /path/to/Mimir/mimir.py index --shared-list
+python /path/to/Mimir/mimir_cli.py index --shared-list
 
 # 3. Add to your project's .mimir/config.json:
 #    "shared_indexes": { "acme-sdk": "~/.mimir/shared-indexes/acme-sdk/llamaindex" }
@@ -657,13 +589,13 @@ python /path/to/Mimir/mimir.py index --shared-list
 
 ```
 # Search everything (local + shared)
-search(query="voice pipeline", scope="all")
+mimir(action="search", params={"query": "voice pipeline", "scope": "all"})
 
 # Search only customer code
-search(query="voice pipeline", scope="local")
+mimir(action="search", params={"query": "voice pipeline", "scope": "local"})
 
 # Search only the SDK
-search(query="voice pipeline", scope="shared:acme-sdk")
+mimir(action="search", params={"query": "voice pipeline", "scope": "shared:acme-sdk"})
 ```
 
 **Results are source-tagged:**
@@ -682,24 +614,24 @@ Manage multiple customer engagements with isolated knowledge bases:
 
 ```bash
 # Register projects
-python /path/to/Mimir/mimir.py projects add ~/Projects/customer-a --name customer-a
-python /path/to/Mimir/mimir.py projects add ~/Projects/customer-b --name customer-b
+python /path/to/Mimir/mimir_cli.py projects add ~/Projects/customer-a --name customer-a
+python /path/to/Mimir/mimir_cli.py projects add ~/Projects/customer-b --name customer-b
 
 # List all projects
-python /path/to/Mimir/mimir.py projects list
+python /path/to/Mimir/mimir_cli.py projects list
 
 # Switch context
-python /path/to/Mimir/mimir.py projects switch customer-a
+python /path/to/Mimir/mimir_cli.py projects switch customer-a
 
 # Check status of all projects
-python /path/to/Mimir/mimir.py projects status
+python /path/to/Mimir/mimir_cli.py projects status
 
 # Auto-discover projects in common locations
-python /path/to/Mimir/mimir.py projects discover
+python /path/to/Mimir/mimir_cli.py projects discover
 ```
 
 ```
-$ mimir projects list
+$ mimir_cli.py projects list
 Name                 Status     Index    Last Accessed
 ------------------------------------------------------------
 customer-a           ✓          ✓        2026-04-07
@@ -712,8 +644,8 @@ Generate a structured briefing before a customer call:
 
 ```bash
 # Generate a structured briefing before a customer call
-python /path/to/Mimir/mimir.py prep "video latency issues"
-python /path/to/Mimir/mimir.py prep "payment integration" --customer acme-corp
+python /path/to/Mimir/mimir_cli.py prep "video latency issues"
+python /path/to/Mimir/mimir_cli.py prep "payment integration" --customer acme-corp
 ```
 
 The briefing includes:
@@ -730,10 +662,10 @@ See what you learned in recent sessions:
 
 ```bash
 # What happened in the last day?
-python /path/to/Mimir/mimir.py diff
+python /path/to/Mimir/mimir_cli.py diff
 
 # Last 3 days
-python /path/to/Mimir/mimir.py diff --days 3
+python /path/to/Mimir/mimir_cli.py diff --days 3
 ```
 
 The report includes:
@@ -748,18 +680,18 @@ Generate a handoff document when transferring to the permanent team:
 
 ```bash
 # Generate for current directory
-python /path/to/Mimir/mimir.py handoff
+python /path/to/Mimir/mimir_cli.py handoff
 
 # Generate for a registered project
-python /path/to/Mimir/mimir.py handoff --project customer-a
+python /path/to/Mimir/mimir_cli.py handoff --project customer-a
 
 # With engagement summary
-python /path/to/Mimir/mimir.py handoff --project customer-a \
+python /path/to/Mimir/mimir_cli.py handoff --project customer-a \
   --summary "Built video calling integration using WebRTC" \
   --customer "Acme Corp"
 
 # Custom output path
-python /path/to/Mimir/mimir.py handoff --project customer-a -o docs/handoff.md
+python /path/to/Mimir/mimir_cli.py handoff --project customer-a -o docs/handoff.md
 ```
 
 The handoff document includes 9 sections:
@@ -777,18 +709,18 @@ The handoff document includes 9 sections:
 
 ## Usage Examples
 
-### In opencode Sessions
+### In ecode Sessions
 
 ```
 User: "How does authentication work?"
-Agent: [Calls mimir-knowledge/search] → Finds auth.py, middleware.py, jwt.ts
+Agent: [Calls mimir with action="search"] → Finds auth.py, middleware.py, jwt.ts
 Agent: "The auth flow uses JWT with refresh tokens..."
 
 User: "Find all database migrations"
-Agent: [Calls mimir-knowledge/query] → Returns migration files and patterns
+Agent: [Calls mimir with action="query"] → Returns migration files and patterns
 
 User: "What changed in the API recently?"
-Agent: [Calls mimir-knowledge/rag_workflow] → Structured analysis with sources
+Agent: [Calls mimir with action="rag_workflow"] → Structured analysis with sources
 ```
 
 ### Available Tools
@@ -810,68 +742,28 @@ Agent: [Calls mimir-knowledge/rag_workflow] → Structured analysis with sources
 | `task_health` | Check query router + config | Before depending on enrich_task |
 | `health_check` | Server health + config diagnostics | Debugging setup issues |
 
-### Subagent Context (Critical)
-
-When spawning subagents, they **don't inherit** Mimir context. But now they have Mimir tool permissions built-in!
-
-**For subagents with built-in Mimir permissions (ContextScout, CoderAgent, TaskManager):**
-
-```typescript
-// CORRECT - Just include instructions in your prompt
-task(
-    subagent_type="ContextScout",
-    prompt="Find authentication patterns. Use mimir-knowledge_search for project-specific queries."
-)
-
-// WRONG - load_skills parameter does NOT exist
-task(
-    subagent_type="ContextScout",
-    load_skills=["mimir"],  // ❌ This parameter doesn't exist!
-    prompt="Find authentication patterns..."
-)
-```
-
-**For other subagents (explore, librarian), embed Mimir instructions in the prompt:**
-
-```typescript
-task(
-    subagent_type="explore",
-    run_in_background=true,
-    prompt="Find authentication patterns. IMPORTANT: Use mimir-knowledge_search for project-specific queries instead of grep when available."
-)
-```
-
 ### How It Works
 
-The install script (`mimir.py init`) copies Mimir-enhanced agent definitions to `~/.config/opencode/agent/`. These definitions include:
+Since Mimir is embedded in ecode, the integration is straightforward:
 
-- `mimir-knowledge_search` — Semantic search across indexed docs/code
-- `mimir-knowledge_query` — Synthesized answers from knowledge base
-- `mimir-knowledge_enrich_task` — Project-specific context before executing
-- `mimir-knowledge_sdk_cache_get` — Current API docs from cache
-
-This ensures subagents can use Mimir tools without needing a `load_skills` parameter.
+```python
+# ecode calls Mimir tools directly (no MCP overhead)
+mimir(action="search", params={"query": "authentication patterns"})
+mimir(action="enrich_task", params={"task": "Implement JWT auth"})
+mimir(action="graph_query", params={"source": "auth.py", "target": "database.py"})
+```
 
 ---
 
 ## Working Configuration Example
 
-Here's a complete working setup from a real installation:
+Here's a complete working setup with ecode:
 
 ### Directory Structure
 
 ```
 /path/to/Mimir/           # Central installation
-├── mimir.py                       # Unified CLI (all commands)
-├── mcp_server_llamaindex.py       # MCP server (used by mimir server)
-├── scripts/mimir-init.py                  # Project initializer (used by mimir init)
-├── mimir-projects.py              # Multi-project CLI (used by mimir projects)
-├── scripts/
-│   ├── run_mcp_server.sh         # MCP wrapper script
-│   ├── git-hooks/
-│   │   └── post-commit           # Auto-index git hook
-│   ├── install-git-hooks.sh      # Hook installer
-│   └── mimir-reindex-hook.py     # Hook reindex logic
+├── mimir_cli.py                   # Unified CLI (all commands)
 ├── src/mimir/               # Core modules
 │   ├── config.py                 # Unified configuration (MimirConfig)
 │   ├── utils.py                  # Shared utilities
@@ -879,20 +771,14 @@ Here's a complete working setup from a real installation:
 │   ├── shared_index.py           # Shared index composition
 │   ├── sdk_cache.py              # SDK doc caching
 │   ├── knowledge_graph.py        # Code relationship extraction
-│   ├── query_router.py           # Query router (standalone, zero OpenSpace deps)
-│   ├── openspace_bridge.py       # DEPRECATED: backward-compat shim (delegates to query_router)
+│   ├── query_router.py           # Query router (standalone, zero ecode deps)
+│   ├── artifacts.py              # Pre-compiled knowledge artifacts
 │   ├── handoff.py                # Handoff document generator
 │   ├── projects.py               # Multi-project management
 │   ├── metrics.py                # Cost tracking
 │   ├── token_callback.py         # LangChain callback for actual token usage
 │   └── watcher.py                # File watcher
-├── tests/                   # Test suite (264 tests)
-│   ├── test_config.py
-│   ├── test_indexing.py
-│   ├── test_metrics.py
-│   ├── test_openspace_bridge.py
-│   ├── test_sdk_cache.py
-│   └── test_utils.py
+├── tests/                   # Test suite
 ├── langgraph/               # Workflows
 │   ├── workflows/
 │   │   ├── rag.py                # Basic RAG workflow (with token tracking)
@@ -901,18 +787,13 @@ Here's a complete working setup from a real installation:
 │   │   ├── session_diff.py       # Session diff report (with token tracking)
 │   │   └── utils.py              # Shared workflow utilities
 │   └── cli.py                    # Workflow CLI
-├── skills/                  # Agent skills
-│   ├── mimir-knowledge/          # Knowledge base search
-│   ├── unified-query/            # Multi-layer query orchestration
-│   ├── sdk-onboarding/           # SDK onboarding guide
-│   ├── sdk-integration-pattern/  # Integration patterns
-│   ├── find-and-follow-pattern/  # Pattern discovery
-│   ├── fde-customer-onboarding/  # FDE: fast codebase onboarding
-│   ├── fde-call-prep/            # FDE: pre-call briefing
-│   ├── fde-technical-writeup/    # FDE: post-call documentation
-│   ├── fde-handoff/              # FDE: engagement handoff
-│   └── fde-shared-index/         # FDE: shared index setup
-└── opencode-plugin/         # System context plugin
+├── scripts/                 # Utilities
+│   ├── generate_artifacts.py     # Artifact generators
+│   ├── git-hooks/                # Auto-index git hooks
+│   └── install-git-hooks.sh      # Hook installer
+└── web/                     # Rust web server + React UI
+    ├── server/                    # Rust graph server
+    └── sidecar/                   # Python sidecar for ecode integration
 
 ~/Projects/AnyProject/       # Any project using Mimir
 ├── docs/
@@ -923,7 +804,6 @@ Here's a complete working setup from a real installation:
 │   ├── config.json               # Project config (includes shared_indexes)
 │   ├── index_state.json          # File hash tracking
 │   └── reindex.log               # Auto-index logs
-├── .opencode/mimir-index.py
 └── HANDOFF.md                    # Generated handoff doc (if created)
 
 ~/.mimir/                    # Global Mimir data
@@ -931,96 +811,6 @@ Here's a complete working setup from a real installation:
 │   ├── acme-sdk/llamaindex/
 │   └── stripe-sdk/llamaindex/
 └── projects.json                 # Multi-project registry
-```
-
-### Global Config: `~/.config/opencode/opencode.json`
-
-After running `scripts/mimir-init.py --install`, your config will include:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "mimir-knowledge": {
-      "command": ["/path/to/Mimir/scripts/run_mcp_server.sh"],
-      "args": [],
-      "env": {
-        "EMBEDDING_MODEL": "text-embedding-3-small",
-        "OPENAI_BASE_URL": "https://openrouter.ai/api/v1",
-        "LOG_LEVEL": "INFO"
-      }
-    }
-  }
-}
-```
-
-The installer auto-detects your Mimir path — no manual editing needed.
-
-### Jcode Bridge Commands
-
-```bash
-# Verify Jcode integration status
-mimir jcode --check
-
-# Quick setup (registers skill, prompt, and MCP config)
-python /path/to/Mimir/mimir_bridge.py --auto
-
-# Clean up all Mimir Jcode config
-python /path/to/Mimir/mimir_bridge.py --unregister
-```
-
-### Auth Config: `~/.local/share/opencode/auth.json`
-
-```json
-{
-  "openrouter": {
-    "type": "api",
-    "key": "sk-or-v1-your-key-here"
-  }
-}
-```
-
-### System Context Plugin: `~/.config/opencode/plugin/system-prompt.ts`
-
-```typescript
-import type { Plugin } from "@opencode-ai/plugin"
-import { readFile } from "fs/promises"
-import { execSync } from "child_process"
-import { homedir } from "os"
-
-const ENABLED = true
-const PROMPT_FILE = `${homedir()}/.config/opencode/prompts/system-context.md`
-const REMINDER_INTERVAL = 6
-const MIMIR_REMINDER_TEXT = `[System Reminder]: **Mimir Context**: Remember to leverage Mimir tools (search, query, rag_workflow, knowledge_agent) for code exploration.`
-
-// ... plugin implementation injects context on session start
-```
-
-### System Context: `~/.config/opencode/prompts/system-context.md`
-
-The installer injects Mimir rules using markers for clean uninstall:
-
-```markdown
-# System Context
-...
-
-## MIMIR RULES (5 ONLY)
-
-### 1. MIMIR FIRST
-Before any task, call `mimir-knowledge_enrich_task()`.
-
-### 2. CONTEXT BEFORE CODE
-Before writing/editing, read the relevant standards file.
-
-### 3. ASK FIRST
-Never run bash/write/edit/task without approval.
-
-### 4. CHECK SKILLS
-Load matching skills before executing.
-
-### 5. GRAPH FIRST
-For structural questions ("how does X connect to Y?"), use `graph_query` or `graph_neighbors` before reading files.
-<!-- MIMIR_RULES_END -->
 ```
 
 ### Project Config: `.mimir/config.json`
@@ -1042,16 +832,6 @@ All configuration flows through a single source of truth: `src/mimir/config.py` 
   "sdk_cache_ttl_days": 7,
   "shared_indexes": {
     "acme-sdk": "~/.mimir/shared-indexes/acme-sdk/llamaindex"
-  },
-  "bridge": {
-    "enabled": true,
-    "cache_maxsize": 128,
-    "cache_ttl_seconds": 600,
-    "circuit_breaker_threshold": 3,
-    "circuit_breaker_reset_seconds": 60,
-    "search_timeout_seconds": 30.0,
-    "max_context_tokens": 2500,
-    "top_k": 5
   }
 }
 ```
@@ -1070,15 +850,6 @@ Any config value can be overridden via environment variables:
 | `PROJECT_ROOT` | Project root | Auto-detected |
 | `MIMIR_ROOT` | Mimir install dir | Auto-detected |
 | `MIMIR_SDK_CACHE_TTL` | `sdk_cache_ttl_days` | `7` |
-| `MIMIR_OPENSPACE_ENABLED` | `bridge.enabled` | `true` |
-| `MIMIR_BRIDGE_CACHE_SIZE` | `bridge.cache_maxsize` | `128` |
-| `MIMIR_BRIDGE_CACHE_TTL` | `bridge.cache_ttl_seconds` | `600` |
-| `MIMIR_BRIDGE_CB_THRESHOLD` | `bridge.circuit_breaker_threshold` | `3` |
-| `MIMIR_BRIDGE_CB_RESET` | `bridge.circuit_breaker_reset_seconds` | `60` |
-| `MIMIR_BRIDGE_TIMEOUT` | `bridge.search_timeout_seconds` | `30` |
-| `MIMIR_BRIDGE_MAX_TOKENS` | `bridge.max_context_tokens` | `2500` |
-| `MIMIR_BRIDGE_TOP_K` | `bridge.top_k` | `5` |
-| `MIMIR_WEB_PORT` | Rust web server port | `8000` |
 
 ### Shared Index Configuration
 
@@ -1095,11 +866,11 @@ Shared indices are configured in `.mimir/config.json` (not env vars):
 
 | CLI Command | Purpose |
 |-------------|---------|
-| `mimir index --shared-index DIR --name NAME` | Index a directory as a shared reference |
-| `mimir index --shared-list` | List available shared indices |
-| `search(query="...", scope="all")` | Search local + all shared indices |
-| `search(query="...", scope="local")` | Search only local project code |
-| `search(query="...", scope="shared:NAME")` | Search only a specific shared index |
+| `mimir_cli.py index --shared-index DIR --name NAME` | Index a directory as a shared reference |
+| `mimir_cli.py index --shared-list` | List available shared indices |
+| `mimir(action="search", params={"query": "...", "scope": "all"})` | Search local + all shared indices |
+| `mimir(action="search", params={"query": "...", "scope": "local"})` | Search only local project code |
+| `mimir(action="search", params={"query": "...", "scope": "shared:NAME"})` | Search only a specific shared index |
 
 ---
 
@@ -1108,7 +879,7 @@ Shared indices are configured in `.mimir/config.json` (not env vars):
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Entry Points                                           │
-│  mcp_server_llamaindex.py │ langgraph/cli.py │ mimir.py│
+│  mimir_cli.py │ langgraph/cli.py │ ecode (embedded)    │
 └──────────────────────┬──────────────────────────────────┘
                        │ all use
                        ▼
@@ -1121,10 +892,9 @@ Shared indices are configured in `.mimir/config.json` (not env vars):
            ┌───────────┼───────────┐
            ▼           ▼           ▼
     ┌────────────┐ ┌────────┐ ┌──────────┐
-    │ MCP Server │ │Query   │ │ LangGraph│
-    │ (search,   │ │Router  │ │(RAG,     │
-    │  query,    │ │(standalone)│ │ agent)   │
-    │  graph_*)  │ │        │ │          │
+    │ ecode      │ │Query   │ │ LangGraph│
+    │ (embedded) │ │Router  │ │(RAG,     │
+    │            │ │(standalone)│ │ agent)   │
     └─────┬──────┘ └───┬────┘ └────┬─────┘
           │            │           │
           └────────────┼───────────┘
@@ -1137,15 +907,15 @@ Shared indices are configured in `.mimir/config.json` (not env vars):
 ┌─────────────────────────────────────────────────────────┐
 │  Rust Web Server (web/server/)                          │
 │  Graph query engine (Dijkstra, BFS neighbors, stats)    │
-│  Proxied by MCP server for graph_* tools                │
+│  Proxied by Mimir tools for graph_* queries              │
 │  Serves React UI for visualization                      │
 └─────────────────────────────────────────────────────────┘
 ```
 
 **Key Components**:
 - **MimirConfig**: Unified configuration — one class, all settings, all entry points
-- **MCP Server**: Tool discovery and transport (search, query, graph_query, health_check, etc.)
-- **Query Router** (`src/mimir/query_router.py`): Standalone routing — classification, graph/vector search, circuit breaker, caching, content filtering. Zero OpenSpace dependencies.
+- **ecode Integration**: Mimir is embedded directly in ecode (no MCP server needed)
+- **Query Router** (`src/mimir/query_router.py`): Standalone routing — classification, graph/vector search, circuit breaker, caching, content filtering
 - **Rust Web Server**: Graph query engine with weighted Dijkstra path-finding, serves the React UI
 - **LlamaIndex**: Document ingestion, chunking, embeddings, vector storage
 - **LangGraph**: Advanced RAG workflows and agentic exploration
@@ -1181,10 +951,10 @@ Mimir tracks usage and calculates savings:
 
 ```bash
 # View 30-day report
-python /path/to/Mimir/mimir.py metrics
+python /path/to/Mimir/mimir_cli.py metrics
 
 # View last 7 days
-python /path/to/Mimir/mimir.py metrics --days 7
+python /path/to/Mimir/mimir_cli.py metrics --days 7
 ```
 
 **Typical Savings**: 60-80% reduction in token costs vs. traditional exploration.
@@ -1193,79 +963,77 @@ python /path/to/Mimir/mimir.py metrics --days 7
 
 ## CLI Reference
 
-All commands go through a single entry point: `mimir.py`
+All commands go through a single entry point: `mimir_cli.py`
 
 ```bash
-python /path/to/Mimir/mimir.py <command>
+python /path/to/Mimir/mimir_cli.py <command>
 ```
 
 ### Core
 
 | Command | Purpose |
 |---------|---------|
-| `mimir init` | Initialize a project for Mimir |
-| `mimir server` | Run the MCP server |
-| `mimir health` | Check configuration and status |
-| `mimir stats` | Show index statistics |
+| `mimir_cli.py init` | Initialize a project for Mimir |
+| `mimir_cli.py stats` | Show index statistics |
+| `mimir_cli.py health` | Check configuration and status |
 
 ### Indexing
 
 | Command | Purpose |
 |---------|---------|
-| `mimir index` | Index documents |
-| `mimir index --reindex` | Rebuild index from scratch |
-| `mimir index --add DIR` | Add directory to existing index |
-| `mimir index --remove FILE` | Remove file from index |
-| `mimir index --shared-index DIR --name NAME` | Index as shared reference |
-| `mimir index --shared-list` | List shared indices |
+| `mimir_cli.py index` | Index documents |
+| `mimir_cli.py index --reindex` | Rebuild index from scratch |
+| `mimir_cli.py index --add DIR` | Add directory to existing index |
+| `mimir_cli.py index --shared-index DIR --name NAME` | Index as shared reference |
+| `mimir_cli.py index --shared-list` | List shared indices |
 
 ### Search & Analysis
 
 | Command | Purpose |
 |---------|---------|
-| `mimir search "query"` | One-shot semantic search |
-| `mimir rag "question"` | RAG workflow |
-| `mimir agent "question"` | Knowledge agent workflow |
+| `mimir_cli.py search "query"` | One-shot semantic search |
+| `mimir_cli.py rag "question"` | RAG workflow |
+| `mimir_cli.py agent "question"` | Knowledge agent workflow |
 
 ### FDE Workflows
 
 | Command | Purpose |
 |---------|---------|
-| `mimir prep "topic"` | Customer call briefing |
-| `mimir prep "topic" --customer NAME` | Call briefing with customer name |
-| `mimir diff` | Session diff (last day) |
-| `mimir diff --days 3` | Session diff (last 3 days) |
-| `mimir handoff` | Generate handoff doc |
-| `mimir handoff --project NAME --customer "..."` | Handoff for specific project |
+| `mimir_cli.py prep "topic"` | Customer call briefing |
+| `mimir_cli.py prep "topic" --customer NAME` | Call briefing with customer name |
+| `mimir_cli.py diff` | Session diff (last day) |
+| `mimir_cli.py diff --days 3` | Session diff (last 3 days) |
+| `mimir_cli.py handoff` | Generate handoff doc |
+| `mimir_cli.py handoff --project NAME --customer "..."` | Handoff for specific project |
 
 ### Multi-Project
 
 | Command | Purpose |
 |---------|---------|
-| `mimir projects list` | List registered projects |
-| `mimir projects add PATH` | Register a project |
-| `mimir projects add PATH --name NAME` | Register with custom name |
-| `mimir projects remove NAME` | Unregister a project |
-| `mimir projects switch NAME` | Switch to a project |
-| `mimir projects status` | Show all project status |
-| `mimir projects discover` | Find projects in common locations |
+| `mimir_cli.py projects list` | List registered projects |
+| `mimir_cli.py projects add PATH` | Register a project |
+| `mimir_cli.py projects add PATH --name NAME` | Register with custom name |
+| `mimir_cli.py projects remove NAME` | Unregister a project |
+| `mimir_cli.py projects switch NAME` | Switch to a project |
+| `mimir_cli.py projects status` | Show all project status |
+| `mimir_cli.py projects discover` | Find projects in common locations |
 
 ### SDK Cache
 
 | Command | Purpose |
 |---------|---------|
-| `mimir cache list` | List cached libraries |
-| `mimir cache get LIBRARY` | Get SDK docs (fetches if stale) |
-| `mimir cache get LIBRARY --topic TOPIC` | Get specific topic |
-| `mimir cache refresh LIBRARY` | Force refresh |
-| `mimir cache invalidate LIBRARY` | Remove cached docs |
+| `mimir_cli.py cache list` | List cached libraries |
+| `mimir_cli.py cache get LIBRARY` | Get SDK docs (fetches if stale) |
+| `mimir_cli.py cache get LIBRARY --topic TOPIC` | Get specific topic |
+| `mimir_cli.py cache refresh LIBRARY` | Force refresh |
+| `mimir_cli.py cache invalidate LIBRARY` | Remove cached docs |
 
 ### Metrics
 
 | Command | Purpose |
 |---------|---------|
-| `mimir metrics` | Cost report (30 days) |
-| `mimir metrics --days 7` | Cost report (7 days) |
+| `mimir_cli.py metrics` | Cost report (30 days) |
+| `mimir_cli.py metrics --days 7` | Cost report (7 days) |
 
 ---
 
@@ -1274,19 +1042,18 @@ python /path/to/Mimir/mimir.py <command>
 ### Quick Diagnosis
 
 ```bash
-python /path/to/Mimir/mimir.py health
+python /path/to/Mimir/mimir_cli.py health
 ```
 
 This returns:
-- Server status (healthy/degraded)
+- Configuration summary
 - Index availability and freshness
 - API key presence
-- Configuration summary
 - Validation warnings
 
 ### "No module named 'llama_index'"
 
-The MCP server can run with either `uv` or plain `python3`. If both are missing:
+The CLI can run with either `uv` or plain `python3`. If both are missing:
 
 ```bash
 cd /path/to/Mimir
@@ -1296,72 +1063,19 @@ uv sync
 ### "OPENROUTER_API_KEY not set"
 
 ```bash
-# Check auth file
-cat ~/.local/share/opencode/auth.json
-
-# Or set environment variable
-export OPENROUTER_API_KEY="sk-or-v1-your-key"
-
-# Or check what MimirConfig sees:
-cd /path/to/Mimir
+# Check what MimirConfig sees:
+cd /path/to/YourProject
 python -c "from src.mimir.config import get_config, reset_config; reset_config(); c = get_config(); print(c.to_dict())"
 ```
 
 ### "Knowledge base not found"
 
 ```bash
-# Check what MimirConfig resolves to:
-cd /path/to/your/project
-python /path/to/Mimir/mimir.py health
+# Check configuration
+python /path/to/Mimir/mimir_cli.py health
 
 # Index the project
-python /path/to/Mimir/mimir.py index
-```
-
-### MCP server not starting
-
-```bash
-# Check the wrapper script
-/path/to/Mimir/scripts/run_mcp_server.sh --help
-
-# Check logs (opencode shows MCP logs in console)
-# The wrapper now supports both uv and plain python3
-```
-
-### Subagents with Built-in Permissions
-
-The following subagents have Mimir tool permissions built-in automatically — no `load_skills` parameter needed:
-
-| Subagent | Built-in Tools |
-|----------|---------------|
-| `ContextScout` | `mimir-knowledge_search`, `mimir-knowledge_enrich_task` |
-| `CoderAgent` | `mimir-knowledge_search`, `mimir-knowledge_enrich_task` |
-| `TaskManager` | `mimir-knowledge_search`, `mimir-knowledge_enrich_task` |
-
-**Usage** — just include instructions in your prompt:
-
-```typescript
-// CORRECT — just add instructions, no special parameter needed
-task(
-    subagent_type="ContextScout",
-    prompt="Find authentication patterns. Use mimir-knowledge_search for project-specific queries."
-)
-
-// WRONG — this parameter does NOT exist
-task(
-    subagent_type="ContextScout",
-    load_skills=["mimir"],  // ❌ Does not exist!
-    prompt="Find authentication patterns..."
-)
-```
-
-For other subagents (explore, librarian, etc.), embed Mimir instructions directly in the prompt:
-
-```typescript
-task(
-    subagent_type="explore",
-    prompt="Find patterns. IMPORTANT: Use mimir-knowledge_search for project-specific queries instead of grep."
-)
+python /path/to/Mimir/mimir_cli.py index
 ```
 
 ### Workflow Token Tracking
@@ -1383,15 +1097,12 @@ Notable changes in the current version:
 
 | Change | Impact |
 |--------|--------|
-| **Unified CLI** (`mimir.py`) | All commands through single entry point: `install`, `uninstall`, `init`, `server`, `index`, `search`, `rag`, `agent`, `prep`, `diff`, `metrics`, `projects`, `handoff`, `cache`, `list`, `health` |
-| **Git hook rewrite** | Now checks for `docs/` file changes before triggering reindex — faster, no false positives |
+| **Embedded in ecode** | Mimir is now embedded directly in ecode (jcode fork) — no MCP server needed |
+| **CLI renamed** | `mimir.py` → `mimir_cli.py` to clarify CLI-only role |
+| **Removed MCP dependencies** | Dropped `langchain-mcp-adapters` and MCP server code |
+| **Direct function calls** | ecode calls Mimir tools directly instead of via MCP transport |
+| **Simplified architecture** | Better performance, less overhead, tighter integration |
 | **LangGraph token tracking** | `TokenUsageCallbackHandler` captures actual token usage from API calls in all workflows |
-| **Subagent tool permissions** | ContextScout, CoderAgent, TaskManager have built-in Mimir tool permissions — no `load_skills` needed |
-| **Production installer** | `mimir.py install` backs up config, sets up MCP server, and injects system context rules |
-| **OpenSpace bridge → Query Router** | Routing is now standalone (`src/mimir/query_router.py`) with inlined guardrails, neural classifier, and zero OpenSpace dependencies |
-| **OpenSpace bridge hardening** | Circuit breaker (3 failures → 60s cooldown), caching (128 entries, 10min TTL), timeout (30s) |
-| **Weighted Dijkstra graph queries** | `graph_query` finds strongest-coupling paths between modules, not just shortest |
-| **Demo app redesign** | Animated architecture diagram, theme toggle, flow diagram, state inspector |
 | **Batch indexing** | Documents indexed in batches to reduce API calls and memory usage |
 
 ---

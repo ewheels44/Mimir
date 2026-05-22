@@ -54,32 +54,16 @@ Thumbs.db
 
 # Mimir - Generated/Derived
 .knowledge/
-.ruff_cache/
 
 # LangGraph
 .langgraph/
 
-# Rust
-target/
-Cargo.lock
-
-# Node modules
-node_modules/
-
-# Temporary/working files
-.tmp/
-.sisyphus/
-test_*.py
-fix_*.py
-patch_*.py
+# uv
+.uv/
 
 # Logs
 *.log
 reindex.log
 
-# Keep docs/ - documentation should be committed for open-source
-# Keep skills/ - skills should be committed
-# Keep package.json and lock files at project root if they exist
+# Mimir config state (runtime)
 .mimir/index_state.json
-docs/README.md
-docs/BLOG_POST.md

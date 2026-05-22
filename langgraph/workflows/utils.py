@@ -17,7 +17,7 @@ def create_llm(
     callbacks=None,
 ) -> ChatOpenAI:
     """Create a LangChain LLM configured for OpenRouter."""
-    from src.mimir.config import get_config
+    from mimir.config import get_config
 
     config = get_config()
 
@@ -46,25 +46,25 @@ def create_llm(
 
 
 def get_mcp_server_path() -> Path:
-    """Get the path to the MCP server script."""
-    from src.mimir.config import get_config
+    """Get the path to the bridge script."""
+    from mimir.config import get_config
 
-    return get_config().mimir_root / "mcp_server_llamaindex.py"
+    return get_config().mimir_root / "mimir_bridge.py"
 
 
 def get_mcp_server_python_path() -> Path:
-    """Get the Python path for running the MCP server.
+    """Get the Python path for running the bridge.
 
-    Returns the directory containing mcp_server_llamaindex.py
+    Returns the directory containing mimir_bridge.py
     so that imports work correctly.
     """
-    from src.mimir.config import get_config
+    from mimir.config import get_config
 
     return get_config().mimir_root
 
 
 def get_mcp_env(project_root: Optional[Path] = None) -> dict:
-    """Get environment variables for MCP server.
+    """Get environment variables for bridge.
 
     Args:
         project_root: Project root directory (auto-detected if not provided)
@@ -72,7 +72,7 @@ def get_mcp_env(project_root: Optional[Path] = None) -> dict:
     Returns:
         Dictionary of environment variables
     """
-    from src.mimir.config import get_config
+    from mimir.config import get_config
 
     if project_root is None:
         project_root = detect_project_root()
@@ -90,7 +90,7 @@ def get_mcp_env(project_root: Optional[Path] = None) -> dict:
 
 def detect_project_root() -> Path:
     """Detect project root from unified config."""
-    from src.mimir.config import get_config
+    from mimir.config import get_config
 
     return get_config().project_root
 
@@ -98,14 +98,14 @@ def detect_project_root() -> Path:
 def get_mcp_config(project_root: Optional[Path] = None) -> dict[str, Any]:
     """Get MCP client configuration.
 
-    Centralizes the MCP server configuration that was previously duplicated
+    Centralizes the bridge configuration that was previously duplicated
     in knowledge_agent.py and rag.py.
 
     Args:
         project_root: Project root directory (auto-detected if not provided)
 
     Returns:
-        Dictionary with MCP server configuration for MultiServerMCPClient
+        Dictionary with bridge configuration for MultiServerMCPClient
     """
     if project_root is None:
         project_root = detect_project_root()
@@ -127,22 +127,19 @@ def get_mcp_config(project_root: Optional[Path] = None) -> dict[str, Any]:
     }
 
 
-def get_mcp_client(project_root: Optional[Path] = None) -> MultiServerMCPClient:
-    """Get an MCP client instance.
-
-    Note: As of langchain-mcp-adapters 0.1.0, MultiServerMCPClient no longer
-    supports context manager usage. Use client.get_tools() directly instead.
-
+def get_mcp_client(project_root: Optional[Path] = None):
+    """Get tools wrapped as an object with get_tools() method.
+    
     Args:
         project_root: Project root directory (auto-detected if not provided)
-
+        
     Returns:
-        MultiServerMCPClient instance
-
-    Example:
-        client = get_mcp_client()
-        tools = await client.get_tools()
-        # ... use tools ...
+        Object with get_tools() method for compatibility with workflow patterns
     """
-    config = get_mcp_config(project_root)
-    return MultiServerMCPClient(config)
+    from .bridge_client import get_tools
+    
+    class ToolsAdapter:
+        def get_tools(self):
+            return get_tools()
+    
+    return ToolsAdapter()

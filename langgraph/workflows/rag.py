@@ -5,7 +5,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 
-from src.mimir.token_callback import create_token_callback
+from mimir.token_callback import create_token_callback
 
 from .utils import create_llm, detect_project_root, get_mcp_client
 
@@ -85,7 +85,7 @@ Return ONLY the JSON object, no other text."""
 
     # Record metrics
     try:
-        from src.mimir.metrics import get_tracker
+        from mimir.metrics import get_tracker
 
         tracker = get_tracker()
         usage = token_callback.get_usage()

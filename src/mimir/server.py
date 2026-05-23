@@ -22,15 +22,15 @@ from llama_index.core import (
 from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.llms.openai import OpenAI as OpenAILike
 
-from src.mimir.config import MimirConfig
-from src.mimir.metrics import get_tracker
-from src.mimir.shared_index import SharedIndexRegistry
+from mimir.config import MimirConfig
+from mimir.metrics import get_tracker
+from mimir.shared_index import SharedIndexRegistry
 
 logger = logging.getLogger(__name__)
 
 # Try to import file watcher (graceful degradation)
 try:
-    from src.mimir.watcher import MimirFileWatcher
+    from mimir.watcher import MimirFileWatcher
 
     WATCHER_AVAILABLE = True
 except ImportError:
@@ -97,7 +97,7 @@ class KnowledgeServer:
             return self._index
 
     def _create_index(self) -> VectorStoreIndex:
-        from src.mimir.indexing import index_with_progress, add_file_to_index
+        from mimir.indexing import index_with_progress, add_file_to_index
 
         custom_patterns = (
             list(self.config.exclude_patterns) if self.config.exclude_patterns else None
@@ -279,7 +279,7 @@ class KnowledgeServer:
             return self._format_search_error(e, "query engine")
 
     def index_documents(self, docs_dir: Optional[Path] = None) -> str:
-        from src.mimir.indexing import index_with_progress
+        from mimir.indexing import index_with_progress
 
         target_dir = docs_dir or self.docs_dir
 
@@ -303,7 +303,7 @@ class KnowledgeServer:
 
             individual_files = self.config.files
             if individual_files:
-                from src.mimir.indexing import add_file_to_index
+                from mimir.indexing import add_file_to_index
 
                 print(f"  Indexing {len(individual_files)} individual file(s) from config...")
                 for file_path_str in individual_files:
@@ -324,7 +324,7 @@ class KnowledgeServer:
             return "Error indexing documents"
 
     def add_documents(self, source_dir: Path) -> str:
-        from src.mimir.indexing import add_directory_with_progress
+        from mimir.indexing import add_directory_with_progress
 
         if not source_dir.exists():
             return f"Source directory not found: {source_dir}"
@@ -347,7 +347,7 @@ class KnowledgeServer:
             return "Error adding documents"
 
     def remove_file(self, source_file: Path) -> str:
-        from src.mimir.indexing import remove_file_from_index
+        from mimir.indexing import remove_file_from_index
 
         resolved = source_file.resolve()
 
@@ -364,7 +364,7 @@ class KnowledgeServer:
             return f"File not found in index: {resolved}"
 
     def remove_directory(self, source_dir: Path) -> str:
-        from src.mimir.indexing import remove_directory_from_index
+        from mimir.indexing import remove_directory_from_index
 
         resolved = source_dir.resolve()
         if not resolved.exists():

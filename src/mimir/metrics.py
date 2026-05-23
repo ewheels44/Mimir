@@ -195,7 +195,7 @@ class MetricsTracker:
     """Track and report Mimir usage metrics."""
 
     def __init__(self, project_root: Optional[Path] = None):
-        from src.mimir.config import get_config
+        from mimir.config import get_config
 
         config = get_config(project_root=project_root)
         self.project_root = config.project_root

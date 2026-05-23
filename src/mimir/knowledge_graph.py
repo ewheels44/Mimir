@@ -33,7 +33,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
 
-from src.mimir.utils import should_exclude as _should_exclude_files
+from mimir.utils import should_exclude as _should_exclude_files
 
 # ---------------------------------------------------------------------------
 # Constants

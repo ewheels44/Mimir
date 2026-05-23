@@ -443,7 +443,7 @@ if __name__ == "__main__":
 To integrate with Mimir's openspace_bridge.py:
 
 1. Import the classifier:
-   from src.mimir.query_classifier import classify_query
+   from mimir.query_classifier import classify_query
 
 2. Replace the LLM classification in _classify_query():
    # OLD:

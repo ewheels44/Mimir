@@ -10,15 +10,15 @@ from typing import Any, Optional
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from src.mimir.indexing import (
+from mimir.indexing import (
     EXCLUDE_PATTERNS,
     detect_changed_files,
     incremental_reindex,
     load_hash_state,
     save_hash_state,
 )
-from src.mimir.knowledge_graph import incremental_graph_update
-from src.mimir.artifacts import invalidate_artifacts_for_file
+from mimir.knowledge_graph import incremental_graph_update
+from mimir.artifacts import invalidate_artifacts_for_file
 
 logger = logging.getLogger(__name__)
 

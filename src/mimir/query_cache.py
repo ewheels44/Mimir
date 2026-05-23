@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from src.mimir.config import MimirConfig
+from mimir.config import MimirConfig
 
 
 # ---------------------------------------------------------------------------

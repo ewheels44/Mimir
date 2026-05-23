@@ -10,7 +10,7 @@ Resolution order (highest priority first):
     3. Defaults
 
 Usage:
-    from src.mimir.config import MimirConfig
+    from mimir.config import MimirConfig
 
     # Auto-detect everything
     config = MimirConfig.load()

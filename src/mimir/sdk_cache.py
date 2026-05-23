@@ -42,7 +42,7 @@ class SDKCache:
     def __init__(
         self, project_root: Optional[Path] = None, ttl_days: Optional[int] = None
     ):
-        from src.mimir.config import get_config
+        from mimir.config import get_config
 
         config = get_config(project_root=project_root)
         self.project_root = config.project_root
@@ -262,7 +262,7 @@ class SDKCache:
 def main():
     import argparse
 
-    from src.mimir.config import MimirConfig
+    from mimir.config import MimirConfig
 
     parser = argparse.ArgumentParser(description="SDK Documentation Cache")
     parser.add_argument(

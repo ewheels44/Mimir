@@ -10,7 +10,7 @@ Uses a lightweight neural classifier (10->8->2) for routing decisions,
 with keyword and LLM fallbacks. No external framework dependencies.
 
 Usage:
-    from src.mimir.query_router import route_task
+    from mimir.query_router import route_task
 
     result = route_task("How does the auth module work?", project_root=Path("."))
     print(result.context)   # Injected into prompt
@@ -32,7 +32,7 @@ from urllib.parse import urlencode
 
 import numpy as np
 
-from src.mimir.config import MimirConfig, get_config
+from mimir.config import MimirConfig, get_config
 
 # ─── Artifact Keyword Mapping ────────────────────────────────────────────────
 # Maps task keywords to pre-compiled artifact IDs for instant answers.
@@ -76,7 +76,7 @@ def _find_matching_artifact(task: str, project_root: Optional[Path] = None) -> O
         project_root: Project root for resolving artifact paths
     """
     import re
-    from src.mimir.artifacts import load_manifest, get_artifact
+    from mimir.artifacts import load_manifest, get_artifact
     
     task_lower = task.lower()
     
@@ -119,7 +119,7 @@ def _find_matching_artifact(task: str, project_root: Optional[Path] = None) -> O
 def _try_artifact(artifact_id: str, project_root: Path) -> Optional[RoutingResult]:
     """Try to retrieve and return an artifact. Returns RoutingResult if found and fresh."""
     try:
-        from src.mimir.artifacts import get_artifact
+        from mimir.artifacts import get_artifact
         
         content = get_artifact(artifact_id, project_root)
         if content is None:
@@ -552,7 +552,7 @@ def _classify_query(query: str) -> str:
 
     # 2. Try neural classifier
     try:
-        from src.mimir.query_classifier import (
+        from mimir.query_classifier import (
             classify_query as _nn_classify,
         )
 
@@ -692,7 +692,7 @@ def route_task(
     Returns:
         RoutingResult with context ready for prompt injection
     """
-    from src.mimir.config import reset_config
+    from mimir.config import reset_config
 
     reset_config()
     config = get_config()

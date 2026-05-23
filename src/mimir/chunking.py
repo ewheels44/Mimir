@@ -15,7 +15,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from src.mimir.utils import should_exclude as _should_exclude
+from mimir.utils import should_exclude as _should_exclude
 
 
 # ---------------------------------------------------------------------------

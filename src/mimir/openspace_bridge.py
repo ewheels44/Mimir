@@ -12,7 +12,7 @@ query_router.route_task() directly.
 
 Migration path:
   - Old: bridge = MimirOpenSpaceBridge(root); bridge.enrich_task(q)
-  - New: from src.mimir.query_router import route_task; route_task(q)
+  - New: from mimir.query_router import route_task; route_task(q)
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from src.mimir.query_router import (
+from mimir.query_router import (
     RoutingResult,
     SearchResult,
     _CircuitBreakerState,
@@ -63,7 +63,7 @@ class BridgeConfig:
     @classmethod
     def from_env(cls) -> BridgeConfig:
         """Load from env — delegates to MimirConfig (same as before)."""
-        from src.mimir.config import get_config
+        from mimir.config import get_config
 
         config = get_config()
         return cls(
@@ -109,7 +109,7 @@ class MimirOpenSpaceBridge:
         result = bridge.enrich_task("Build auth middleware")
 
         # New (standalone):
-        from src.mimir.query_router import route_task
+        from mimir.query_router import route_task
         result = route_task("Build auth middleware")
     """
 
@@ -130,14 +130,14 @@ class MimirOpenSpaceBridge:
     @property
     def _circuit(self) -> _CircuitBreakerState:
         """Expose circuit breaker for test compatibility."""
-        from src.mimir.query_router import route_task
+        from mimir.query_router import route_task
 
         if not hasattr(route_task, "_circuit"):
             route_task._circuit = _CircuitBreakerState()
         return route_task._circuit
 
     def _resolve_api_key(self) -> tuple[str, Optional[str]]:
-        from src.mimir.config import get_config
+        from mimir.config import get_config
 
         cfg = get_config()
         return cfg.api_key, cfg.api_base
@@ -158,8 +158,8 @@ class MimirOpenSpaceBridge:
 
     def health_check(self) -> dict:
         """Health check — delegates to query_router."""
-        from src.mimir.query_router import RouterConfig
-        from src.mimir.config import get_config
+        from mimir.query_router import RouterConfig
+        from mimir.config import get_config
 
         cfg = get_config()
         rc = RouterConfig.from_mimir_config(cfg)

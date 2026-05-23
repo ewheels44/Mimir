@@ -15,8 +15,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from src.mimir.utils import EXCLUDE_PATTERNS
-from src.mimir.utils import should_exclude as _should_exclude
+from mimir.utils import EXCLUDE_PATTERNS
+from mimir.utils import should_exclude as _should_exclude
 
 
 def get_progress_bar(iterable=None, desc="", total=None, unit="it", ncols=80):
@@ -427,7 +427,7 @@ def index_with_progress(
         return False
 
     # Load config to get API credentials
-    from src.mimir.config import MimirConfig
+    from mimir.config import MimirConfig
     config = MimirConfig.load(project_root=project_root)
 
     # Configure embedding model with API credentials

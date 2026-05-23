@@ -3,7 +3,6 @@
 mimir-init.py - Initialize Mimir for any project or install globally.
 
 Two modes:
-  1. Global install (run once): Sets up MCP server and system rules
   2. Per-project init (run in each project): Creates directories and indexes
 
 Per-project setup creates:
@@ -118,7 +117,7 @@ def detect_project_root(provided_path: str | None = None) -> Path:
 
 def create_mimir_config(project_root: Path, code_dirs: list[str] | None = None) -> Path:
     """Create .mimir/config.json for a project.
-    
+
     This config file is read by MimirConfig in src/mimir/config.py
     to set project-specific settings.
     """
@@ -139,10 +138,9 @@ def create_mimir_config(project_root: Path, code_dirs: list[str] | None = None) 
     return config_path
 
 
-
-
-
-def init_project(project_root: Path, mimir_root: Path, code_dirs: str | None = None) -> bool:
+def init_project(
+    project_root: Path, mimir_root: Path, code_dirs: str | None = None
+) -> bool:
     """Initialize a project for Mimir knowledge base."""
     print(f"\n🎯 Initializing Mimir for project: {project_root}")
 
@@ -163,7 +161,7 @@ def init_project(project_root: Path, mimir_root: Path, code_dirs: str | None = N
     print("\n📁 Creating directories...")
     docs_dir = project_root / "docs"
     knowledge_dir = project_root / ".knowledge" / "llamaindex"
-    
+
     for d, desc in [
         (docs_dir, "Documents"),
         (knowledge_dir, "Knowledge base"),
@@ -175,7 +173,7 @@ def init_project(project_root: Path, mimir_root: Path, code_dirs: str | None = N
     print(f"\nNext steps:")
     print(f"  1. Run: mimir index")
     print(f"  2. Run: mimir health (to verify configuration)")
-    
+
     return True
 
 
@@ -193,7 +191,7 @@ def install_global(mimir_root: Path, force: bool = False) -> bool:
 
     # Update system-context.md with Mimir rules
     system_context = opencode_config_dir / "system-context.md"
-    
+
     if system_context.exists() and not force:
         content = system_context.read_text()
         if MIMIR_RULES_START in content:
@@ -222,7 +220,7 @@ def uninstall(mimir_root: Path) -> bool:
     # Remove Mimir rules from system-context.md
     opencode_config_dir = Path.home() / ".config" / "opencode"
     system_context = opencode_config_dir / "system-context.md"
-    
+
     if system_context.exists():
         content = system_context.read_text()
         if MIMIR_RULES_START in content and MIMIR_RULES_END in content:
@@ -242,7 +240,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Initialize Mimir for a project or install globally."
     )
-    
+
     # Global install/uninstall
     parser.add_argument(
         "--install",
@@ -259,7 +257,7 @@ def main():
         action="store_true",
         help="Force reinstall even if already installed",
     )
-    
+
     # Per-project init
     parser.add_argument(
         "--code-dirs",

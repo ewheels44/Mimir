@@ -1,7 +1,0 @@
-{
-  "origin": "captured",
-  "parent_skill_ids": [],
-  "change_summary": "Comprehensive system health check workflow that validates OS info, disk space, memory, CPU, network connectivity, installed utilities, and permissions with a well-formatted diagnostic report.",
-  "created_by": "openspace",
-  "tags": []
-}

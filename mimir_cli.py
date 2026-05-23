@@ -113,6 +113,12 @@ def _run_bridge(action: str, params: dict | None = None) -> int:
 
     env = os.environ.copy()
     env["PYTHONPATH"] = str(MIMIR_ROOT / "src") + os.pathsep + env.get("PYTHONPATH", "")
+    # Set PROJECT_ROOT so the bridge knows which project it's serving
+    # This is critical for re-index and other project-specific operations
+    if "PROJECT_ROOT" not in env:
+        # Auto-detect project root and set it
+        from src.mimir.config import _detect_project_root
+        env["PROJECT_ROOT"] = str(_detect_project_root())
 
     request = json.dumps({"action": action, "params": params or {}})
     result = subprocess.run(
@@ -195,11 +201,12 @@ def cmd_server(args: argparse.Namespace) -> int:
 
 def cmd_index(args: argparse.Namespace) -> int:
     """Index documents."""
-    if args.reindex:
-        return _run_bridge("reindex", {"force": True})
+    params = {"force": bool(args.reindex)}
+    if args.directory:
+        params["directory"] = args.directory
     if args.add:
-        return _run_bridge("reindex", {})
-    return _run_bridge("reindex", {})
+        params["add"] = args.add
+    return _run_bridge("reindex", params)
 
 
 def cmd_search(args: argparse.Namespace) -> int:

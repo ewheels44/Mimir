@@ -152,7 +152,6 @@ export default function GraphPage() {
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy) return;
-    const f = settings.edgeFilters;
     cy.edges().forEach(edge => {
       const t = edge.data('type') as string;
       const show =
@@ -161,7 +160,7 @@ export default function GraphPage() {
         (t === 'imports_from' && f.imports_from) ||
         (t === 'inherits_from' && f.inherits_from) ||
         !['calls', 'imports_module', 'imports_from', 'inherits_from'].includes(t);
-      show ? edge.show() : edge.hide();
+      edge.style('display', show ? 'element' : 'none');
     });
   }, [settings.edgeFilters]);
 
@@ -171,7 +170,7 @@ export default function GraphPage() {
     if (!cy) return;
     cy.style()
       .selector('node')
-      .style('label', settings.labelsVisible ? (ele: cytoscape.NodeSingular) => {
+      .style('label', settings.labelsVisible ? (ele: any) => {
         const label = ele.data('label') as string;
         const meta = (ele.data('metadata') ?? {}) as { total_children?: number };
         return meta.total_children ? `${label} (${meta.total_children})` : label;
@@ -496,6 +495,6 @@ function applyEdgeVisibility(
       (t === 'imports_from' && filters.imports_from) ||
       (t === 'inherits_from' && filters.inherits_from) ||
       !['calls', 'imports_module', 'imports_from', 'inherits_from'].includes(t);
-    show ? edge.show() : edge.hide();
+    edge.style('display', show ? 'element' : 'none');
   });
 }

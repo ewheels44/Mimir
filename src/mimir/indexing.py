@@ -8,6 +8,7 @@ used by both the CLI (mimir-index.py) and the MCP server.
 
 import hashlib
 import json
+import os
 import shutil
 import sys
 from datetime import datetime
@@ -414,14 +415,28 @@ def index_with_progress(
     """
     try:
         from llama_index.core import (
+            Settings,
             SimpleDirectoryReader,
             StorageContext,
             VectorStoreIndex,
         )
+        from llama_index.embeddings.openai import OpenAIEmbedding
     except ImportError as e:
         print(f"❌ Missing dependency: {e}")
-        print("   Run: pip install llama-index tqdm")
+        print("   Run: pip install llama-index tqdm llama-index-embeddings-openai")
         return False
+
+    # Load config to get API credentials
+    from src.mimir.config import MimirConfig
+    config = MimirConfig.load(project_root=project_root)
+
+    # Configure embedding model with API credentials
+    embed_kwargs = {"model": config.embedding_model, "api_key": config.api_key}
+    if config.api_base:
+        embed_kwargs["api_base"] = config.api_base
+        os.environ["OPENAI_BASE_URL"] = config.api_base
+    os.environ["OPENAI_API_KEY"] = config.api_key
+    Settings.embed_model = OpenAIEmbedding(**embed_kwargs)
 
     # Merge default and custom exclude patterns
     all_exclude_patterns = EXCLUDE_PATTERNS[:]

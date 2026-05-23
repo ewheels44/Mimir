@@ -54,6 +54,16 @@ MIMIR_RULES_BLOCK = f"""
 ### 1. MIMIR FIRST
 Before any task, use `mimir(action="enrich_task", params={...})`. This is my memory — without it I'm guessing. No exceptions.
 
+Artifacts: For common architectural questions, Mimir serves pre-compiled artifacts (instant, zero token cost):
+- `rag_architecture` - RAG system design, LangGraph workflows, LLM config
+- `indexing_architecture` - Indexing system, incremental updates, file watcher
+- `artifact_system` - Artifact dependency tracking, staleness, TTL
+- `code_chunking` - AST-aware code chunking strategies
+- `knowledge_graph_integration` - Knowledge graph + search integration
+- `query_caching` - Query cache system with TTL
+
+These are auto-triggered by keywords in your task (e.g., "rag", "indexing", "artifact").
+
 ### 2. CONTEXT BEFORE CODE
 Before writing/editing:
 - Code → read `~/.config/opencode/context/core/standards/code-quality.md`
@@ -67,3 +77,5 @@ If it's bash-only, skip this.
 ### 3. ASK FIRST
 Never run bash/write/edit/task without showing a plan and getting approval. Read/list/glob/grep are fine without asking.
 
+{MIMIR_RULES_END}
+"""

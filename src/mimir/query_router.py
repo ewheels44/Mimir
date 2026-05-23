@@ -34,6 +34,122 @@ import numpy as np
 
 from src.mimir.config import MimirConfig, get_config
 
+# ─── Artifact Keyword Mapping ────────────────────────────────────────────────
+# Maps task keywords to pre-compiled artifact IDs for instant answers.
+# Artifacts are checked FIRST before any search/retrieval (zero token cost).
+
+ARTIFACT_KEYWORDS = {
+    "rag_architecture": [
+        "rag", "retrieval", "hybrid search", "vector search", "bm25", "retriever",
+        "rag workflow", "knowledge agent", "langgraph", "llm", "token tracking",
+    ],
+    "indexing_architecture": [
+        "indexing", "index", "reindex", "incremental", "file watcher", "watchdog",
+        "document id", "doc_id", "change detection", "hash",
+    ],
+    "artifact_system": [
+        "artifact", "pre-compiled", "stale", "ttl", "dependency tracking",
+        "manifest", "invalidation",
+    ],
+    "code_chunking": [
+        "chunking", "chunk", "ast", "tree-sitter", "python chunker",
+        "code chunk", "split",
+    ],
+    "knowledge_graph_integration": [
+        "knowledge graph", "graph query", "dijkstra", "relationship",
+        "imports_from", "calls", "inherits_from",
+    ],
+    "query_caching": [
+        "cache", "query cache", "ttl", "expiration", "query_caching",
+    ],
+}
+
+
+def _find_matching_artifact(task: str, project_root: Optional[Path] = None) -> Optional[str]:
+    """Check if task matches any artifact keywords. Returns artifact_id or None.
+    
+    Checks both the static ARTIFACT_KEYWORDS mapping and dynamic keywords
+    stored in each artifact's content.
+    
+    Args:
+        task: The task/query string
+        project_root: Project root for resolving artifact paths
+    """
+    import re
+    from src.mimir.artifacts import load_manifest, get_artifact
+    
+    task_lower = task.lower()
+    
+    best_match = None
+    best_score = 0
+    
+    # First check static keyword mapping (fast path, no I/O)
+    for artifact_id, keywords in ARTIFACT_KEYWORDS.items():
+        score = sum(1 for kw in keywords if kw in task_lower)
+        if score > best_score:
+            best_score = score
+            best_match = artifact_id
+    
+    # If we got a good match from static mapping, use it
+    if best_score > 0:
+        logger.info("[ROUTER] Task matches artifact '%s' (score=%d, static)", best_match, best_score)
+        return best_match
+    
+    # Fall back to dynamic keywords from artifact content
+    try:
+        manifest = load_manifest(project_root)
+        for artifact_id in manifest.get("artifacts", {}):
+            content = get_artifact(artifact_id, project_root)
+            if content:
+                keywords = content.get("keywords", [])
+                if not keywords:
+                    continue
+                score = sum(1 for kw in keywords if kw in task_lower)
+                if score > best_score:
+                    best_score = score
+                    best_match = artifact_id
+    except Exception as e:
+        logger.warning("[ROUTER] Failed to load dynamic artifact keywords: %s", e)
+    
+    if best_score > 0:
+        logger.info("[ROUTER] Task matches artifact '%s' (score=%d, dynamic)", best_match, best_score)
+    return best_match
+
+
+def _try_artifact(artifact_id: str, project_root: Path) -> Optional[RoutingResult]:
+    """Try to retrieve and return an artifact. Returns RoutingResult if found and fresh."""
+    try:
+        from src.mimir.artifacts import get_artifact
+        
+        content = get_artifact(artifact_id, project_root)
+        if content is None:
+            logger.info("[ROUTER] Artifact '%s' not found", artifact_id)
+            return None
+        
+        # Check if stale
+        metadata = content.get("_metadata", {})
+        if metadata.get("stale"):
+            logger.info("[ROUTER] Artifact '%s' is stale, skipping", artifact_id)
+            return None
+        
+        elapsed = 1  # Artifacts are essentially instant
+        context = json.dumps(content, indent=2, ensure_ascii=False)
+        
+        result = RoutingResult(
+            success=True,
+            context=f"[ARTIFACT: {artifact_id}]\n{context}",
+            query_type="artifact",
+            routed_to="artifact",
+            elapsed_ms=elapsed,
+            status="ok",
+        )
+        logger.info("[ROUTER] Served artifact '%s' (instant, zero tokens)", artifact_id)
+        return result
+        
+    except Exception as e:
+        logger.warning("[ROUTER] Artifact '%s' retrieval failed: %s", artifact_id, e)
+        return None
+
 logger = logging.getLogger(__name__)
 
 
@@ -560,6 +676,12 @@ def route_task(
 ) -> RoutingResult:
     """Route a task to the most appropriate Mimir backend and return context.
 
+    Flow:
+      1. Check for matching pre-compiled artifact (instant, zero token cost)
+      2. Check cache (avoids repeat searches)
+      3. Classify query (structural vs semantic)
+      4. Route to graph (structural) or vector search (semantic)
+
     Replacement for enrich_task_for_openspace() — no OpenSpace dependency.
 
     Args:
@@ -594,7 +716,16 @@ def route_task(
     if circuit.check(rc.circuit_breaker_reset_seconds):
         return RoutingResult(success=False, circuit_open=True, error="Circuit breaker open", status="circuit_open")
 
-    # Cache check
+    # ─── STEP 1: Try pre-compiled artifact first (instant, zero token cost) ───
+    artifact_id = _find_matching_artifact(task, project_root)
+    if artifact_id:
+        artifact_result = _try_artifact(artifact_id, project_root)
+        if artifact_result:
+            # Cache the artifact result too
+            cache.put(task, k, _to_shim(artifact_result))
+            return artifact_result
+
+    # ─── STEP 2: Cache check ───
     cached = cache.get(task, k)
     if cached is not None and hasattr(cached, "success"):
         logger.info("[ROUTER] Cache hit: %s", task[:50])
@@ -609,7 +740,7 @@ def route_task(
             status=cached.status,
         )
 
-    # Classify
+    # ─── STEP 3: Classify and route ───
     start = time.time()
     query_type = _classify_query(task) if rc.neural_classifier_enabled else "semantic"
     logger.info("[ROUTER] Query classified as: %s", query_type)

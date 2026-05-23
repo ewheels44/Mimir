@@ -34,6 +34,10 @@ def generate_rag_architecture_artifact() -> dict:
         "artifact_type": "architectural_summary",
         "component": "rag_system",
         "description": "Mimir's RAG (Retrieval-Augmented Generation) system architecture",
+        "keywords": [
+            "rag", "retrieval", "hybrid search", "vector search", "bm25", "retriever",
+            "rag workflow", "knowledge agent", "langgraph", "llm", "token tracking",
+        ],
         "structure": {
             "retrieval": {
                 "type": "hybrid",
@@ -133,6 +137,10 @@ def generate_indexing_architecture_artifact() -> dict:
         "artifact_type": "architectural_summary",
         "component": "indexing_system",
         "description": "Mimir's document indexing and incremental update system",
+        "keywords": [
+            "indexing", "index", "reindex", "incremental", "file watcher", "watchdog",
+            "document id", "doc_id", "change detection", "hash",
+        ],
         "structure": {
             "indexing_modes": {
                 "full_reindex": {
@@ -191,6 +199,10 @@ def generate_artifact_system_artifact() -> dict:
         "artifact_type": "architectural_summary",
         "component": "artifact_system",
         "description": "Mimir's pre-compiled artifact system with dependency tracking",
+        "keywords": [
+            "artifact", "pre-compiled", "stale", "ttl", "dependency tracking",
+            "manifest", "invalidation",
+        ],
         "structure": {
             "storage": {
                 "manifest": ".knowledge/artifacts/manifest.json",
@@ -216,6 +228,10 @@ def generate_code_chunking_artifact() -> dict:
         "artifact_type": "implementation_summary",
         "component": "chunking_system",
         "description": "Mimir's AST-aware code chunking for better retrieval",
+        "keywords": [
+            "chunking", "chunk", "ast", "tree-sitter", "python chunker",
+            "code chunk", "split",
+        ],
         "chunking_strategy": "AST-aware",
         "python_chunking": "PythonASTChunker",
         "multilang_chunking": "TreeSitterChunker",
@@ -238,6 +254,10 @@ def generate_knowledge_graph_integration_artifact() -> dict:
         "artifact_type": "integration_summary",
         "component": "search_plus_graph",
         "description": "How search tool uses knowledge graph for enhanced context",
+        "keywords": [
+            "knowledge graph", "graph query", "dijkstra", "relationship",
+            "imports_from", "calls", "inherits_from",
+        ],
         "kg_in_search": "enhanced with graph context",
         "relationship_types": ["imports_from", "calls", "inherits_from", "has_method"],
         "integration": {
@@ -259,6 +279,9 @@ def generate_query_caching_artifact() -> dict:
         "artifact_type": "caching_summary",
         "component": "query_cache",
         "description": "Query result caching to reduce redundant API calls",
+        "keywords": [
+            "cache", "query cache", "ttl", "expiration", "query_caching",
+        ],
         "query_cache": "QueryCache with TTL",
         "cache_location": ".knowledge/query_cache/",
         "ttl_search": 3600,

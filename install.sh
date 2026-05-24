@@ -419,7 +419,7 @@ setup_shell() {
     mkdir -p "$BIN_DIR"
 
     # Create mimir CLI symlink
-    local cli_script="$MIMIR_ROOT/scripts/mimir-cli.py"
+    local cli_script="$MIMIR_ROOT/scripts/mimir_bridge.py"
     if [ -f "$cli_script" ]; then
         # Create a wrapper script that activates the venv
         cat > "$BIN_DIR/mimir" << 'EOF'
@@ -428,7 +428,7 @@ setup_shell() {
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MIMIR_ROOT="$(dirname "$SCRIPT_DIR")"
 source "$MIMIR_ROOT/.venv/bin/activate"
-exec python "$MIMIR_ROOT/scripts/mimir-cli.py" "$@"
+exec python "$MIMIR_ROOT/scripts/mimir_bridge.py" "$@"
 EOF
         chmod +x "$BIN_DIR/mimir"
         print_success "Mimir CLI installed to $BIN_DIR/mimir"

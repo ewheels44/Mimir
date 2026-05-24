@@ -5,8 +5,7 @@
 set -e
 
 PROJECT_ROOT="$(git rev-parse --show-toplevel)"
-MIMIR_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-MIMIR_INDEX="${PROJECT_ROOT}/.opencode/mimir-index.py"
+MIMIR_CLI="$(command -v mimir 2>/dev/null || echo '')"
 
 # Only reindex if docs/ files were touched in this commit
 DOCS_CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -c "^docs/" || true)
@@ -16,4 +15,4 @@ fi
 
 echo "📚 Mimir: changes detected — reindexing..."
 cd "${PROJECT_ROOT}"
-python3 "${MIMIR_INDEX}" --reindex 2>&1 | tail -5
+mimir index 2>&1 | tail -5

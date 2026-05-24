@@ -85,7 +85,7 @@ export default function GraphPage() {
       handleNodeTap(node);
     });
 
-    cy.on('tap', evt => {
+    cy.on('tap', (evt) => {
       if (evt.target === cy) {
         setSelectedNode(null);
         cy.elements().removeClass('highlighted dimmed');
@@ -171,11 +171,11 @@ export default function GraphPage() {
     if (!cy) return;
     cy.style()
       .selector('node')
-      .style('label', settings.labelsVisible ? (ele: cytoscape.NodeSingular) => {
+      .style('label', settings.labelsVisible ? ((ele: cytoscape.NodeSingular) => {
         const label = ele.data('label') as string;
         const meta = (ele.data('metadata') ?? {}) as { total_children?: number };
         return meta.total_children ? `${label} (${meta.total_children})` : label;
-      } : '')
+      }) as unknown as string : '')
       .selector('edge')
       .style('label', settings.labelsVisible ? 'data(label)' : '')
       .update();
@@ -307,18 +307,24 @@ export default function GraphPage() {
     setSelectedNode(nodeData);
     setSelectedDegree(node.degree());
     setSelectedOutEdges(
-      node.outgoers('edge').map(e => ({
-        targetId: e.target().id(),
-        targetLabel: e.target().data('label') as string,
-        type: e.data('type') as string,
-      }))
+      node.outgoers('edge').map(e => {
+        const edge = e as unknown as cytoscape.EdgeSingular;
+        return {
+          targetId: edge.target().id(),
+          targetLabel: edge.target().data('label') as string,
+          type: edge.data('type') as string,
+        };
+      })
     );
     setSelectedInEdges(
-      node.incomers('edge').map(e => ({
-        sourceId: e.source().id(),
-        sourceLabel: e.source().data('label') as string,
-        type: e.data('type') as string,
-      }))
+      node.incomers('edge').map(e => {
+        const edge = e as unknown as cytoscape.EdgeSingular;
+        return {
+          sourceId: edge.source().id(),
+          sourceLabel: edge.source().data('label') as string,
+          type: edge.data('type') as string,
+        };
+      })
     );
 
     if (settings.floatingMode) setInsights(computeInsights(cy));

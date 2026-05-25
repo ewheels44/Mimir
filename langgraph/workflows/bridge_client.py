@@ -1,99 +1,97 @@
 """
-Bridge Client - Simplified adapter for mimir_bridge.py
+Bridge Client — Direct KnowledgeServer API adapter for LangGraph workflows.
 
-Provides tools that langgraph workflows can use by calling
-the thin CLI bridge directly.
+Previously used subprocess calls to mimir_bridge.py, which caused ~24s overhead
+per tool call due to LlamaIndex re-initialization. Now uses the KnowledgeServer
+Python API directly, keeping the index loaded in-process.
+
+Provides the same tool interface (search, query, stats) for backward compatibility
+with knowledge_agent.py and rag.py.
 """
 
 import json
-import os
-import subprocess
-import sys
 from pathlib import Path
 from typing import Any, Optional
 
 from langchain_core.tools import StructuredTool
 
 
-def _get_python_executable() -> str:
-    """Get the correct Python executable (venv preferred)."""
-    from src.mimir.config import get_config
-    venv_python = get_config().mimir_root / ".venv" / "bin" / "python"
-    if venv_python.exists():
-        return str(venv_python)
-    return sys.executable
+# ── In-process KnowledgeServer (lazy singleton) ──────────────────────────────
+
+_server_instance: Optional[Any] = None
 
 
-def get_bridge_path() -> Path:
-    """Get the path to mimir_bridge.py."""
-    from src.mimir.config import get_config
-    return get_config().mimir_root / "mimir_bridge.py"
+def _get_server() -> Any:
+    """Get or create the KnowledgeServer singleton (lazy, in-process).
 
-
-def _get_project_root() -> Path:
-    """Get the project root from config."""
-    from src.mimir.config import get_config
-    return get_config().project_root
-
-
-def call_bridge(action: str, params: dict = None) -> dict:
-    """Call the mimir_bridge.py with a JSON request.
-    
-    Returns:
-        Parsed JSON response as dict
+    Returns the same KnowledgeServer instance across calls, keeping the
+    LlamaIndex loaded in memory.
     """
-    if params is None:
-        params = {}
-    
-    request = json.dumps({"action": action, "params": params})
-    bridge_path = get_bridge_path()
-    python = _get_python_executable()
-    project_root = _get_project_root()
-    
-    # Pass PROJECT_ROOT so the bridge finds the right knowledge base
-    env = os.environ.copy()
-    env["PROJECT_ROOT"] = str(project_root)
-    
-    result = subprocess.run(
-        [python, str(bridge_path)],
-        input=request,
-        capture_output=True,
-        text=True,
-        timeout=60,
-        env=env,
-    )
-    
-    if result.returncode != 0:
-        raise RuntimeError(f"Bridge error: {result.stderr}")
-    
-    return json.loads(result.stdout)
+    global _server_instance
+    if _server_instance is not None:
+        return _server_instance
+
+    from mimir.config import get_config
+    from mimir.server import KnowledgeServer
+
+    config = get_config()
+    _server_instance = KnowledgeServer(config)
+    return _server_instance
+
+
+# ── Tool implementations (direct API calls, no subprocess) ──────────────────
 
 
 def search(query: str, top_k: int = 5) -> str:
-    """Search the knowledge base."""
-    result = call_bridge("search", {"query": query, "top_k": top_k})
-    if result.get("status") == "ok":
-        items = result.get("results", [])
-        return json.dumps(items)
-    return result.get("error", "Unknown error")
+    """Semantic search over the knowledge base.
+
+    Returns a JSON string of results for backward compatibility with
+    tool callers that expect the old bridge_client format.
+    """
+    server = _get_server()
+    result = server.search(query, top_k=top_k)
+
+    # server.search() returns a formatted string with [1] source (score)
+    # items — parse it into structured JSON for callers that expect
+    # the old format
+    try:
+        lines = [line.strip() for line in result.split("\n\n") if line.strip()]
+        items = []
+        for line in lines:
+            if line.startswith("["):
+                items.append({"text": line})
+            elif line.startswith("[Knowledge Graph") or items:
+                if items:
+                    items[-1]["text"] += "\n" + line
+                continue
+
+        if items:
+            return json.dumps(items)
+
+        # Fallback: return raw text if parsing didn't work
+        return result
+    except Exception:
+        return result
 
 
 def query(question: str) -> str:
-    """Query the knowledge base."""
-    result = call_bridge("query", {"question": question})
-    if result.get("status") == "ok":
-        return result.get("answer", "")
-    return result.get("error", "Unknown error")
+    """RAG question answering. Synthesizes an answer from the knowledge base."""
+    server = _get_server()
+    return server.query(question)
 
 
 def get_stats(**kwargs) -> str:
-    """Get knowledge base statistics."""
-    result = call_bridge("stats")
-    return json.dumps(result)
+    """Get knowledge base statistics as JSON string."""
+    server = _get_server()
+    stats = server.get_stats()
+    return json.dumps(stats)
+
+
+# ── Tool registry ───────────────────────────────────────────────────────────
 
 
 def get_tools() -> list:
-    """Get LangChain tools that wrap the bridge actions."""
+    """Get LangChain tools that wrap the KnowledgeServer API directly."""
     return [
         StructuredTool.from_function(
             name="search",

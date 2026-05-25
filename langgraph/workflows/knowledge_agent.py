@@ -1,4 +1,3 @@
-import json
 from typing import Annotated, Literal, Optional, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -6,7 +5,8 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 
-from .utils import create_llm, detect_project_root, get_mcp_client
+from .bridge_client import get_tools as bridge_get_tools
+from .utils import create_llm, detect_project_root
 
 
 class AgentState(TypedDict):
@@ -21,31 +21,44 @@ async def cleanup_client(state: AgentState):
 
 
 async def check_knowledge(state: AgentState) -> AgentState:
-    project_root = detect_project_root()
-    client = get_mcp_client(project_root)
-
+    """Check knowledge base availability and stats using direct API."""
     try:
-        tools = client.get_tools()
-        stats_tool = next((t for t in tools if t.name == "stats"), None)
+        # Use the bridge_client's server singleton so shared across workflow
+        from .bridge_client import _get_server as _get_bridge_server
 
-        if stats_tool:
-            result = await stats_tool.ainvoke({})
-            
-            # Parse the result - stats tool returns JSON string with nested structure
-            if isinstance(result, str):
-                parsed = json.loads(result)
-            elif isinstance(result, dict):
-                parsed = result
-            else:
-                parsed = {}
-            
-            # Extract the stats object (it's nested under "stats" key)
-            stats = parsed.get("stats", {})
-            if not stats and isinstance(parsed, dict):
-                # Maybe the result is already the stats object
-                stats = parsed if "has_index" in parsed else {"has_index": False}
-            
-            return {**state, "knowledge_stats": stats}
+        server = _get_bridge_server()
+        from mimir.config import get_config
+
+        config = get_config()
+
+        # Quick existence check without loading full index
+        knowledge_dir = config.knowledge_dir
+        has_index = (knowledge_dir / "index_store.json").exists()
+
+        stats = {
+            "project_root": str(config.project_root),
+            "knowledge_dir": str(config.knowledge_dir),
+            "docs_dir": str(config.docs_dir),
+            "code_dirs": [str(d) for d in config.code_dirs],
+            "has_index": has_index,
+        }
+
+        if has_index:
+            try:
+                full_stats = server.get_stats()
+                stats["document_count"] = full_stats.get("document_count", "unknown")
+            except Exception:
+                stats["document_count"] = "unknown"
+
+        total_source_files = 0
+        if config.docs_dir.exists():
+            total_source_files += len([f for f in config.docs_dir.rglob("*") if f.is_file()])
+        for code_dir in config.code_dirs:
+            if code_dir.exists():
+                total_source_files += len([f for f in code_dir.rglob("*") if f.is_file()])
+        stats["source_files"] = total_source_files
+
+        return {**state, "knowledge_stats": stats}
     except Exception as e:
         print(f"[Knowledge Agent] Error checking knowledge base: {e}")
 
@@ -75,9 +88,7 @@ async def agent(state: AgentState) -> AgentState:
 
 Use the search or query tools to find information. Be concise and cite sources."""
 
-    project_root = detect_project_root()
-    client = get_mcp_client(project_root)
-    tools = client.get_tools()
+    tools = bridge_get_tools()
     llm_with_tools = llm.bind_tools(tools)
 
     response = await llm_with_tools.ainvoke(
@@ -93,9 +104,7 @@ async def execute_tools(state: AgentState) -> AgentState:
     if not last_message.tool_calls:
         return state
 
-    project_root = detect_project_root()
-    client = get_mcp_client(project_root)
-    tools = client.get_tools()
+    tools = bridge_get_tools()
     tools_by_name = {tool.name: tool for tool in tools}
 
     tool_messages = []

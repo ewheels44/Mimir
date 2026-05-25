@@ -3,4 +3,4 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MIMIR_ROOT="$(dirname "$SCRIPT_DIR")"
 source "$MIMIR_ROOT/.venv/bin/activate"
-exec python "$MIMIR_ROOT/scripts/mimir_bridge.py" "$@"
+exec python "$MIMIR_ROOT/mimir_bridge.py" "$@"

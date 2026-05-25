@@ -1,7 +1,6 @@
 {
   "docs_dir": "docs",
   "code_dirs": [
-    "langgraph",
     "src",
     "tests",
     "scripts",
@@ -10,23 +9,16 @@
   ],
   "knowledge_dir": ".knowledge/llamaindex",
   "embedding_model": "text-embedding-3-large",
-  "files": [
-    "AGENTS.md",
-    "README.md",
-    "mcp_server_llamaindex.py",
-    "mimir.py"
-  ],
-  "openspace": {
-    "enabled": true,
-    "skill_dir": "skills/mimir-knowledge",
-    "bridge": {
-      "cache_maxsize": 128,
-      "cache_ttl_seconds": 600,
-      "circuit_breaker_threshold": 3,
-      "circuit_breaker_reset_seconds": 60,
-      "search_timeout_seconds": 30,
-      "max_context_tokens": 2500,
-      "top_k": 5
-    }
-  }
+  "llm_model": "deepseek/deepseek-v4-flash",
+  "exclude_patterns": [
+    "*.egg-info",
+    "*.egg-info/*",
+    "node_modules",
+    "node_modules/*",
+    ".git",
+    "__pycache__",
+    "*.pyc",
+    "dist",
+    "build"
+  ]
 }

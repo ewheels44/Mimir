@@ -5,16 +5,18 @@ Standalone Query Router — replaces OpenSpace bridge dependency.
 Routes user queries to the most appropriate Mimir backend:
   - Structural queries -> Knowledge graph (Dijkstra path-finding)
   - Semantic queries  -> Vector search (LlamaIndex)
+  - Hybrid queries    -> Both graph + vector, merged by confidence threshold
 
-Uses a lightweight neural classifier (10->8->2) for routing decisions,
-with keyword and LLM fallbacks. No external framework dependencies.
+Uses embedding-based semantic caching, normalized query matching, and
+sentence-transformer classification for routing decisions.
+No external framework dependencies beyond numpy + LlamaIndex.
 
 Usage:
     from mimir.query_router import route_task
 
     result = route_task("How does the auth module work?", project_root=Path("."))
     print(result.context)   # Injected into prompt
-    print(result.routed_to) # "graph" | "vector" | "none"
+    print(result.routed_to) # "graph" | "vector" | "hybrid" | "artifact" | "none"
 """
 
 from __future__ import annotations
@@ -22,10 +24,11 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlencode
@@ -33,6 +36,38 @@ from urllib.parse import urlencode
 import numpy as np
 
 from mimir.config import MimirConfig, get_config
+
+# ─── Query Normalization ────────────────────────────────────────────────────────
+# Normalizes natural language queries to improve cache hit rates and
+# reduce surface variation. Based on standard IR normalization practices.
+
+_NORMALIZE_FILLER = re.compile(
+    r"\b(?:can you|could you|would you|please|kindly|I want to|I need to|"
+    r"tell me|show me|help me|explain|what is|what are|how do I|how can I)\b",
+    re.IGNORECASE,
+)
+_NORMALIZE_WHITESPACE = re.compile(r"\s+")
+_NORMALIZE_PUNCTUATION = re.compile(r"\s*([.,;:!?])\s*")
+
+
+def normalize_query(query: str) -> str:
+    """Normalize a query string for better cache matching and retrieval.
+
+    Steps:
+      1. Lowercase
+      2. Strip filler phrases that don't change semantic meaning
+      3. Normalize whitespace
+      4. Strip trailing/leading punctuation from words
+      5. Strip trailing punctuation from the whole string
+    """
+    q = query.lower().strip()
+    q = _NORMALIZE_FILLER.sub(" ", q)
+    q = _NORMALIZE_WHITESPACE.sub(" ", q)
+    q = _NORMALIZE_PUNCTUATION.sub(r"\1", q)
+    # Strip any remaining trailing/leading punctuation on the full string
+    q = q.strip(" .,;:!?\"'()[]{}")
+    return q
+
 
 # ─── Artifact Keyword Mapping ────────────────────────────────────────────────
 # Maps task keywords to pre-compiled artifact IDs for instant answers.
@@ -210,28 +245,135 @@ class _CircuitBreakerState:
         return True
 
 
-class _TimedCache:
-    """Simple TTL-based LRU cache. No external dependencies."""
+class _SemanticCache:
+    """Semantic cache using embedding similarity instead of exact-match hashing.
 
-    def __init__(self, maxsize: int = 128, ttl_seconds: int = 600):
+    Instead of SHA256(query) exact lookups, this:
+      1. Embeds the query using the same model as document indexing
+      2. Computes cosine similarity against cached query embeddings
+      3. Returns the cached result if similarity > threshold (default 0.92)
+
+    This handles paraphrases, rewording, and natural language variation
+    that exact-match SHA256 hashing misses entirely.
+
+    Research basis: GPTCache (2023), semantic caching surveys show
+    exact-match cache hit rates near zero for NL queries.
+    """
+
+    def __init__(
+        self,
+        maxsize: int = 128,
+        ttl_seconds: int = 600,
+        similarity_threshold: float = 0.92,
+    ):
         self._maxsize = maxsize
         self._ttl = ttl_seconds
-        self._store: dict[str, tuple[float, "RoutingResult"]] = {}  # noqa: F821
+        self._threshold = similarity_threshold
+        # Store: list of (timestamp, query_text, query_embedding, RoutingResult)
+        self._store: list[tuple[float, str, Optional[np.ndarray], "RoutingResult"]] = []  # noqa: F821
+        self._embed_model = None
+        self._embed_kwargs = {}
 
-    def _make_key(self, query: str, top_k: int) -> str:
-        return hashlib.sha256(f"{query}:{top_k}".encode()).hexdigest()[:16]
+    def _ensure_embedding_model(self):
+        """Lazily initialize the embedding model to match document indexing."""
+        if self._embed_model is not None:
+            return
+        try:
+            from llama_index.core import Settings
+
+            cfg: MimirConfig = get_config()
+            api_key = cfg.api_key
+            api_base = cfg.api_base
+
+            from llama_index.embeddings.openai import OpenAIEmbedding
+
+            embed_kwargs = {"model": cfg.embedding_model, "api_key": api_key}
+            if api_base:
+                embed_kwargs["api_base"] = api_base
+            self._embed_kwargs = embed_kwargs
+            Settings.embed_model = OpenAIEmbedding(**embed_kwargs)
+            self._embed_model = Settings.embed_model
+        except Exception:
+            # Fallback: will use keyword-based matching
+            self._embed_model = None
+
+    def _embed(self, text: str) -> Optional[np.ndarray]:
+        """Get embedding for a text string. Returns None if unavailable."""
+        self._ensure_embedding_model()
+        if self._embed_model is None:
+            return None
+        try:
+            emb = self._embed_model.get_text_embedding(text)
+            return np.array(emb, dtype=np.float32)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+        """Compute cosine similarity between two vectors."""
+        norm_a = np.linalg.norm(a)
+        norm_b = np.linalg.norm(b)
+        if norm_a < 1e-10 or norm_b < 1e-10:
+            return 0.0
+        return float(np.dot(a, b) / (norm_a * norm_b))
 
     def get(self, query: str, top_k: int) -> Optional["RoutingResult"]:  # noqa: F821
-        key = self._make_key(query, top_k)
-        entry = self._store.get(key)
-        if entry is None:
+        """Look up a cached result using semantic similarity."""
+        # First try exact-match key (fast path for identical queries)
+        exact_key = self._exact_key(query, top_k)
+        for entry in self._store:
+            ts, qtext, qemb, result = entry
+            if qtext == query and result is not None:
+                if time.time() - ts > self._ttl:
+                    self._store.remove(entry)
+                    continue
+                return self._make_cache_result(result)
+
+        # Semantic lookup
+        query_emb = self._embed(query)
+        if query_emb is None:
             return None
-        timestamp, result = entry
-        if time.time() - timestamp > self._ttl:
-            del self._store[key]
-            return None
-        # Return with cache_hit=True
-        return RoutingResult(  # noqa: F821
+
+        best_match = None
+        best_sim = 0.0
+        for entry in self._store:
+            ts, qtext, qemb, result = entry
+            if qemb is None:
+                continue
+            if time.time() - ts > self._ttl:
+                self._store.remove(entry)
+                continue
+            sim = self._cosine_similarity(query_emb, qemb)
+            if sim > best_sim and sim >= self._threshold:
+                best_sim = sim
+                best_match = entry
+
+        if best_match is not None:
+            logger.info(
+                "[SEMANTIC CACHE] Hit with similarity=%.3f for query: %s",
+                best_sim,
+                query[:60],
+            )
+            return self._make_cache_result(best_match[3])
+        return None
+
+    def put(self, query: str, top_k: int, result: "RoutingResult") -> None:  # noqa: F821
+        """Store a result with its query embedding."""
+        # Evict oldest if at capacity
+        if len(self._store) >= self._maxsize:
+            self._store.pop(0)
+
+        query_emb = self._embed(query)
+        self._store.append((time.time(), query, query_emb, result))
+
+    @staticmethod
+    def _exact_key(query: str, top_k: int) -> str:
+        return hashlib.sha256(f"{query}:{top_k}".encode()).hexdigest()[:16]
+
+    @staticmethod
+    def _make_cache_result(result: "RoutingResult") -> "RoutingResult":  # noqa: F821
+        """Return a RoutingResult with cache_hit=True and elapsed_ms=0."""
+        return RoutingResult(
             success=result.success,
             context=result.context,
             results=result.results,
@@ -243,14 +385,6 @@ class _TimedCache:
             routed_to=result.routed_to,
             query_type=result.query_type,
         )
-
-    def put(self, query: str, top_k: int, result: "RoutingResult") -> None:  # noqa: F821
-        key = self._make_key(query, top_k)
-        # Evict oldest if at capacity
-        if len(self._store) >= self._maxsize:
-            oldest_key = min(self._store, key=lambda k: self._store[k][0])
-            del self._store[oldest_key]
-        self._store[key] = (time.time(), result)
 
     @property
     def size(self) -> int:
@@ -327,9 +461,16 @@ def _compute_freshness(index_timestamp: Optional[str], decay_hours: float) -> fl
 
 # ─── Query Classification ─────────────────────────────────────────────────
 
+# Strong structural indicators (high confidence alone is enough)
+_STRONG_STRUCTURAL = [
+    "connect to", "path from", "depends on", "depends on the",
+    "how does.*connect", "how does.*depend", "how does.*call",
+    "how do.*connect", "how do.*depend", "how do.*call",
+]
+
 _STRUCTURAL_KEYWORDS = [
     "connect", "connection", "link", "linked", "relate", "relationship",
-    "depend", "depends", "dependency", "path", "between", "from", "to",
+    "depend", "depends", "dependency", "dependen", "path", "between", "from", "to",
     "import", "call", "invoke", "structure of", "graph",
     "how does", "how do",
 ]
@@ -340,6 +481,9 @@ def _quick_structural_check(query: str) -> Optional[str]:
     query_lower = query.lower()
     keyword_hits = sum(1 for kw in _STRUCTURAL_KEYWORDS if kw in query_lower)
 
+    has_strong_phrase = any(
+        phrase in query_lower for phrase in _STRONG_STRUCTURAL
+    )
     has_structural_phrase = any(
         phrase in query_lower
         for phrase in ["connect to", "path from", "depends on", "how does"]
@@ -349,7 +493,7 @@ def _quick_structural_check(query: str) -> Optional[str]:
         kw in query_lower for kw in ["connect", "link", "relate", "depend", "call"]
     )
 
-    if keyword_hits >= 2 or has_structural_phrase or is_how_do_structural:
+    if has_strong_phrase or keyword_hits >= 2 or has_structural_phrase or is_how_do_structural:
         return "structural"
     if keyword_hits == 0:
         return "semantic"
@@ -533,37 +677,100 @@ def _keyword_fallback(query: str) -> str:
     return result if result else "semantic"
 
 
-def _classify_query(query: str) -> str:
-    """Classify a query as 'structural' or 'semantic'.
+def _keyword_confidence(query: str) -> tuple[str, float]:
+    """Keyword-based classification with confidence score.
+
+    Returns (label, confidence) where confidence is 0.0-1.0.
+    Strong phrases get high confidence; weak signals get lower.
+    """
+    query_lower = query.lower()
+    keyword_hits = sum(1 for kw in _STRUCTURAL_KEYWORDS if kw in query_lower)
+
+    has_strong_phrase = any(
+        phrase in query_lower for phrase in _STRONG_STRUCTURAL
+    )
+    has_structural_phrase = any(
+        phrase in query_lower
+        for phrase in ["connect to", "path from", "depends on", "how does"]
+    )
+    is_how_do_structural = "how do" in query_lower and any(
+        kw in query_lower for kw in ["connect", "link", "relate", "depend", "call"]
+    )
+
+    # Compute structural score (0 to 1)
+    structural_score = 0.0
+    if has_strong_phrase:
+        structural_score = 0.95
+    elif keyword_hits >= 3:
+        structural_score = 0.85
+    elif has_structural_phrase:
+        structural_score = 0.80
+    elif is_how_do_structural:
+        structural_score = 0.75
+    elif keyword_hits == 2:
+        structural_score = 0.65
+    elif keyword_hits == 1:
+        structural_score = 0.40
+    else:
+        structural_score = 0.10
+
+    # Semantic score is inverse
+    semantic_score = 1.0 - structural_score
+
+    if structural_score >= 0.60:
+        return "structural", structural_score
+    if structural_score <= 0.20:
+        return "semantic", semantic_score
+    # Uncertain zone: return semantic with low confidence
+    return "semantic", semantic_score
+
+
+def _classify_query(query: str) -> tuple[str, float]:
+    """Classify a query as 'structural' or 'semantic' with confidence.
 
     Decision chain:
-      1. Fast keyword pre-check (free, handles clear structural patterns)
+      1. Fast keyword pre-check with confidence (free, handles clear patterns)
       2. Neural classifier (~$0.000001 via query_classifier module)
       3. Keyword fallback for uncertain/edge cases
 
     Returns:
-        'structural' or 'semantic'
+        (label, confidence) tuple where label is 'structural' or 'semantic'
+        and confidence is 0.0-1.0.
     """
-    # 1. Quick keyword check
-    quick_result = _quick_structural_check(query)
-    if quick_result:
-        logger.debug("[ROUTER] Quick keyword classification: %s", quick_result)
-        return quick_result
+    # Normalize query for better classification
+    norm_query = normalize_query(query)
 
-    # 2. Try neural classifier
-    try:
-        from mimir.query_classifier import (
-            classify_query as _nn_classify,
-        )
+    # 1. Quick keyword check with confidence
+    label, confidence = _keyword_confidence(norm_query)
 
-        label = _nn_classify(query, use_llm_fallback=False)
-        logger.info("[ROUTER] Neural classified as: %s", label)
-        return label
-    except Exception:
-        logger.debug("[ROUTER] Neural classifier unavailable, using keyword fallback")
+    # If high confidence from keywords alone, return early
+    if confidence >= 0.75:
+        logger.debug("[ROUTER] Keyword classification: %s (confidence=%.2f)", label, confidence)
+        return label, confidence
 
-    # 3. Final keyword fallback
-    return _keyword_fallback(query)
+    # 2. Try neural classifier for uncertain cases
+    if confidence < 0.75:
+        try:
+            from mimir.query_classifier import (
+                classify_query as _nn_classify,
+            )
+
+            nn_label = _nn_classify(norm_query, use_llm_fallback=False)
+            # Neural classifier returns label; we assign moderate confidence
+            nn_confidence = 0.70 if nn_label == label else 0.60
+            logger.info("[ROUTER] Neural classified as: %s", nn_label)
+            # If neural agrees with keyword, boost confidence
+            if nn_label == label:
+                confidence = max(confidence, nn_confidence)
+            else:
+                # Neural disagrees — trust neural slightly more
+                label = nn_label
+                confidence = nn_confidence
+            return label, confidence
+        except Exception:
+            logger.debug("[ROUTER] Neural classifier unavailable, using keyword confidence")
+
+    return label, confidence
 
 
 # ─── Configuration ────────────────────────────────────────────────────────────
@@ -576,6 +783,7 @@ class RouterConfig:
     enabled: bool = True
     cache_maxsize: int = 128
     cache_ttl_seconds: int = 600
+    cache_similarity_threshold: float = 0.92
     circuit_breaker_threshold: int = 3
     circuit_breaker_reset_seconds: int = 60
     search_timeout_seconds: float = 30.0
@@ -584,24 +792,65 @@ class RouterConfig:
     freshness_decay_hours: float = 168.0
     neural_classifier_enabled: bool = True
     classification_model: str = "gpt-3.5-turbo"
+    query_normalization_enabled: bool = True
+    # Hybrid routing: confidence thresholds for blending graph + vector
+    hybrid_confidence_min: float = 0.50   # Below this → vector only
+    hybrid_confidence_max: float = 0.85   # Above this → graph only (if hit)
 
     @classmethod
     def from_mimir_config(cls, config: Optional[MimirConfig] = None) -> RouterConfig:
         """Build RouterConfig from existing MimirConfig using safe getattr."""
         if config is None:
             config = get_config()
+
+        def _get_float(key, default):
+            val = getattr(config, key, None)
+            return float(val) if val is not None else default
+
+        def _get_bool(key, default):
+            val = getattr(config, key, None)
+            if isinstance(val, bool):
+                return val
+            if isinstance(val, str):
+                return val.lower() in ("true", "1", "yes")
+            return default
+
         return cls(
             enabled=getattr(config, "bridge_enabled", True),
             cache_maxsize=getattr(config, "bridge_cache_maxsize", 128),
             cache_ttl_seconds=getattr(config, "bridge_cache_ttl_seconds", 600),
-            circuit_breaker_threshold=getattr(config, "bridge_circuit_breaker_threshold", 3),
-            circuit_breaker_reset_seconds=getattr(config, "bridge_circuit_breaker_reset_seconds", 60),
-            search_timeout_seconds=getattr(config, "bridge_search_timeout_seconds", 30.0),
+            cache_similarity_threshold=_get_float(
+                "bridge_cache_similarity_threshold", 0.92
+            ),
+            circuit_breaker_threshold=getattr(
+                config, "bridge_circuit_breaker_threshold", 3
+            ),
+            circuit_breaker_reset_seconds=getattr(
+                config, "bridge_circuit_breaker_reset_seconds", 60
+            ),
+            search_timeout_seconds=getattr(
+                config, "bridge_search_timeout_seconds", 30.0
+            ),
             max_context_tokens=getattr(config, "bridge_max_context_tokens", 2500),
             top_k=getattr(config, "bridge_top_k", 5),
-            freshness_decay_hours=getattr(config, "bridge_freshness_decay_hours", 168.0),
-            neural_classifier_enabled=getattr(config, "bridge_classification_enabled", True),
-            classification_model=getattr(config, "bridge_classification_model", "gpt-3.5-turbo"),
+            freshness_decay_hours=_get_float(
+                "bridge_freshness_decay_hours", 168.0
+            ),
+            neural_classifier_enabled=_get_bool(
+                "bridge_classification_enabled", True
+            ),
+            classification_model=getattr(
+                config, "bridge_classification_model", "gpt-3.5-turbo"
+            ),
+            query_normalization_enabled=_get_bool(
+                "bridge_query_normalization_enabled", True
+            ),
+            hybrid_confidence_min=_get_float(
+                "bridge_hybrid_confidence_min", 0.50
+            ),
+            hybrid_confidence_max=_get_float(
+                "bridge_hybrid_confidence_max", 0.85
+            ),
         )
 
 
@@ -622,6 +871,7 @@ class RoutingResult:
     status: str = "ok"
     routed_to: str = ""
     query_type: str = ""
+    confidence: float = 0.0  # Classification confidence (0.0-1.0)
 
     def to_dict(self) -> dict:
         return {
@@ -635,6 +885,7 @@ class RoutingResult:
             "status": self.status,
             "routed_to": self.routed_to,
             "query_type": self.query_type,
+            "confidence": round(self.confidence, 3),
         }
 
 
@@ -678,9 +929,12 @@ def route_task(
 
     Flow:
       1. Check for matching pre-compiled artifact (instant, zero token cost)
-      2. Check cache (avoids repeat searches)
-      3. Classify query (structural vs semantic)
-      4. Route to graph (structural) or vector search (semantic)
+      2. Check semantic cache (handles paraphrases via embedding similarity)
+      3. Classify query with confidence (structural vs semantic)
+      4. Route to:
+         - graph (structural, high confidence)
+         - vector (semantic, or structural with no graph hit)
+         - hybrid (both graph + vector, mid-confidence structural)
 
     Replacement for enrich_task_for_openspace() — no OpenSpace dependency.
 
@@ -704,31 +958,46 @@ def route_task(
     project_root = project_root or _detect_project_root()
     k = top_k or rc.top_k
 
+    # Apply query normalization (improves downstream cache + retrieval)
+    if rc.query_normalization_enabled:
+        task_normalized = normalize_query(task)
+    else:
+        task_normalized = task
+
     # Per-project singleton circuit breaker + cache (stored on function object)
-    if not hasattr(route_task, "_circuit") or getattr(route_task, "_cache_root", None) != project_root:
+    if (
+        not hasattr(route_task, "_circuit")
+        or getattr(route_task, "_cache_root", None) != project_root
+    ):
         route_task._circuit = _CircuitBreakerState()  # type: ignore
-        route_task._cache = _TimedCache(maxsize=rc.cache_maxsize, ttl_seconds=rc.cache_ttl_seconds)  # type: ignore
+        route_task._cache = _SemanticCache(  # type: ignore
+            maxsize=rc.cache_maxsize,
+            ttl_seconds=rc.cache_ttl_seconds,
+            similarity_threshold=rc.cache_similarity_threshold,
+        )
         route_task._cache_root = project_root  # type: ignore
 
     circuit = route_task._circuit  # type: ignore
     cache = route_task._cache  # type: ignore
 
     if circuit.check(rc.circuit_breaker_reset_seconds):
-        return RoutingResult(success=False, circuit_open=True, error="Circuit breaker open", status="circuit_open")
+        return RoutingResult(
+            success=False, circuit_open=True,
+            error="Circuit breaker open", status="circuit_open"
+        )
 
     # ─── STEP 1: Try pre-compiled artifact first (instant, zero token cost) ───
     artifact_id = _find_matching_artifact(task, project_root)
     if artifact_id:
         artifact_result = _try_artifact(artifact_id, project_root)
         if artifact_result:
-            # Cache the artifact result too
-            cache.put(task, k, _to_shim(artifact_result))
+            cache.put(task_normalized, k, _to_shim(artifact_result))
             return artifact_result
 
-    # ─── STEP 2: Cache check ───
-    cached = cache.get(task, k)
+    # ─── STEP 2: Semantic cache check ───
+    cached = cache.get(task_normalized, k)
     if cached is not None and hasattr(cached, "success"):
-        logger.info("[ROUTER] Cache hit: %s", task[:50])
+        logger.info("[ROUTER] Semantic cache hit: %s", task[:50])
         return RoutingResult(
             success=cached.success,
             context=cached.context,
@@ -738,16 +1007,22 @@ def route_task(
             error=cached.error,
             elapsed_ms=0,
             status=cached.status,
+            routed_to=cached.routed_to,
         )
 
-    # ─── STEP 3: Classify and route ───
+    # ─── STEP 3: Classify with confidence ───
     start = time.time()
-    query_type = _classify_query(task) if rc.neural_classifier_enabled else "semantic"
-    logger.info("[ROUTER] Query classified as: %s", query_type)
+    query_type, confidence = _classify_query(task) if rc.neural_classifier_enabled else ("semantic", 0.5)
+    logger.info(
+        "[ROUTER] Query classified as: %s (confidence=%.2f)", query_type, confidence
+    )
 
     routed_to = "none"
 
-    if query_type == "structural":
+    # ─── STEP 4: Route based on classification + confidence ───
+    # Hybrid routing: if confidence is in the mid-range, try BOTH graph and vector
+    if query_type == "structural" and confidence >= rc.hybrid_confidence_max:
+        # High confidence structural → try graph only
         graph_context = _search_graph(task, project_root)
         if graph_context:
             elapsed = int((time.time() - start) * 1000)
@@ -756,16 +1031,74 @@ def route_task(
                 context=graph_context,
                 query_type="structural",
                 routed_to="graph",
+                confidence=confidence,
                 elapsed_ms=elapsed,
                 status="ok",
             )
             circuit.record_success()
-            cache.put(task, k, _to_shim(result))
+            cache.put(task_normalized, k, _to_shim(result))
             logger.info("[ROUTER] Graph path found (%dms)", elapsed)
             return result
         logger.info("[ROUTER] Graph search empty, falling to vector")
 
-    # Vector search
+    elif query_type == "structural" and rc.hybrid_confidence_min <= confidence < rc.hybrid_confidence_max:
+        # Mid-confidence structural → try BOTH graph and vector (hybrid)
+        logger.info("[ROUTER] Hybrid routing: mid-confidence structural query")
+        graph_context = _search_graph(task, project_root)
+        vector_results = _search_raw(task, project_root, k)
+
+        if graph_context and vector_results:
+            # Merge: graph context first, then vector results for additional context
+            max_chars = rc.max_context_tokens * 4 // max(k, 1) // 2
+            chunks = [f"[Graph Context]\n{graph_context}"]
+
+            for r in vector_results:
+                src = r.source
+                if _is_sensitive(r.text):
+                    text = _filter_sensitive(r.text)
+                else:
+                    text = r.text
+                if len(text) > max_chars:
+                    text = text[:max_chars] + "..."
+                chunks.append(f"[{src}]\n{text}")
+
+            context = "\n\n".join(chunks)
+            elapsed = int((time.time() - start) * 1000)
+            result = RoutingResult(
+                success=True,
+                context=context,
+                results=tuple(vector_results),
+                query_type="hybrid",
+                routed_to="hybrid",
+                confidence=confidence,
+                elapsed_ms=elapsed,
+                status="ok",
+            )
+            circuit.record_success()
+            cache.put(task_normalized, k, _to_shim(result))
+            logger.info("[ROUTER] Hybrid result (%dms)", elapsed)
+            return result
+
+        elif graph_context:
+            # Graph only (vector returned nothing)
+            elapsed = int((time.time() - start) * 1000)
+            result = RoutingResult(
+                success=True,
+                context=graph_context,
+                query_type="structural",
+                routed_to="graph",
+                confidence=confidence,
+                elapsed_ms=elapsed,
+                status="ok",
+            )
+            circuit.record_success()
+            cache.put(task_normalized, k, _to_shim(result))
+            return result
+
+        # Graph failed, fall through to vector search below
+        logger.info("[ROUTER] Graph search empty in hybrid, using vector")
+
+    # Vector search (also covers semantic queries and structural fallback)
     try:
         results = _search_raw(task, project_root, k)
         elapsed = int((time.time() - start) * 1000)
@@ -777,6 +1110,7 @@ def route_task(
                 success=has_index,
                 query_type=query_type,
                 routed_to="vector",
+                confidence=confidence,
                 elapsed_ms=elapsed,
                 status="no_index" if not has_index else "no_results",
                 error="No knowledge base index found." if not has_index else None,
@@ -801,19 +1135,22 @@ def route_task(
                 results=tuple(results),
                 query_type=query_type,
                 routed_to="vector",
+                confidence=confidence,
                 elapsed_ms=elapsed,
                 status="ok",
             )
 
         circuit.record_success()
-        cache.put(task, k, _to_shim(result))
+        cache.put(task_normalized, k, _to_shim(result))
         return result
 
     except Exception as e:
         elapsed = int((time.time() - start) * 1000)
         circuit.record_failure(rc.circuit_breaker_threshold, rc.circuit_breaker_reset_seconds)
         logger.error("[ROUTER] Search failed: %s", e)
-        return RoutingResult(success=False, error=str(e), elapsed_ms=elapsed, status="error")
+        return RoutingResult(
+            success=False, error=str(e), elapsed_ms=elapsed, status="error"
+        )
 
 
 # ─── Cache Compatibility Shim ─────────────────────────────────────────────────
@@ -831,6 +1168,9 @@ class _EnrichmentShim:
         self.error = result.error
         self.elapsed_ms = result.elapsed_ms
         self.status = result.status
+        self.routed_to = result.routed_to
+        self.query_type = result.query_type
+        self.confidence = getattr(result, "confidence", 0.0)
 
 
 def _to_shim(result: RoutingResult) -> _EnrichmentShim:

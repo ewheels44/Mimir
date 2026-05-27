@@ -11,8 +11,8 @@ export class PhysicsEngine {
   private velocities: Map<string, { x: number; y: number }> = new Map();
 
   // Tunable parameters
-  private static readonly REST_LENGTH = 80;
-  private static readonly SPRING_STRENGTH = 0.005;
+  private static readonly REST_LENGTH = 120;
+  private static readonly SPRING_STRENGTH = 0.002;
   private static readonly DAMPING = 0.85;
 
   constructor(cy: cytoscape.Core) {
@@ -65,9 +65,14 @@ export class PhysicsEngine {
       const dy = tPos.y - sPos.y;
       const dist = Math.sqrt(dx * dx + dy * dy) || 1;
 
+      // Use the larger of the two nodes' radii to scale rest length
+      const sSize = Math.max(source.width(), source.height()) / 2;
+      const tSize = Math.max(target.width(), target.height()) / 2;
+      const restLength = PhysicsEngine.REST_LENGTH + sSize + tSize;
+
       // Spring force: F = k * (dist - restLength)
       // Pulls when stretched, pushes when compressed
-      const displacement = dist - PhysicsEngine.REST_LENGTH;
+      const displacement = dist - restLength;
       const force = PhysicsEngine.SPRING_STRENGTH * displacement;
       const fx = (dx / dist) * force;
       const fy = (dy / dist) * force;
@@ -93,8 +98,10 @@ export class PhysicsEngine {
         const distSq = dx * dx + dy * dy || 1;
         const dist = Math.sqrt(distSq);
 
-        // Repulsive force (inverse square), with softening to prevent extreme forces at close range
-        const minDist = 10;
+        // Repulsive force (inverse square), with softening scaled to node sizes
+        const aSize = Math.max(a.width(), a.height()) / 2;
+        const bSize = Math.max(b.width(), b.height()) / 2;
+        const minDist = Math.max(aSize + bSize, 10);
         const clampedDistSq = Math.max(distSq, minDist * minDist);
         const force = repulsionStrength / clampedDistSq;
         const fx = (dx / dist) * force;

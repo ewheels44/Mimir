@@ -899,15 +899,24 @@ def _detect_project_root(cwd=None, env_vars=None) -> Path:
     if env_vars is None:
         env_vars = ["PROJECT_ROOT", "WORKSPACE_FOLDER", "VSCODE_CWD"]
 
+    # Check env vars first — but only if they point to a valid Mimir project
     for var in env_vars:
         if path := os.environ.get(var):
             resolved = Path(path).resolve()
-            if resolved.exists():
+            if (resolved / ".mimir" / "config.json").exists():
                 return resolved
 
+    # Walk up from cwd preferring .mimir/config.json
     start = (cwd or Path.cwd()).resolve()
-    markers = [".opencode", "opencode.json", ".git", "pyproject.toml", "package.json", "Cargo.toml"]
     current = start
+    while current != current.parent:
+        if (current / ".mimir" / "config.json").exists():
+            return current
+        current = current.parent
+
+    # Fall back to general markers
+    current = start
+    markers = [".opencode", "opencode.json", ".git", "pyproject.toml", "package.json", "Cargo.toml"]
     while current != current.parent:
         for marker in markers:
             if (current / marker).exists():

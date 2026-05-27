@@ -7,6 +7,7 @@ No MCP protocol, no JSON-RPC, no process lifecycle management.
 
 Usage:
     echo '{"action":"search","params":{"query":"how does auth work"}}' | python3 mimir_bridge.py
+    echo '{"action":"init"}' | python3 mimir_bridge.py          # Bootstrap a new project
     echo '{"action":"enrich_task","params":{"task":"implement JWT auth"}}' | python3 mimir_bridge.py
     echo '{"action":"stats"}' | python3 mimir_bridge.py
 
@@ -54,14 +55,74 @@ def detect_project_root() -> Path:
     return cwd
 
 
-def resolve_project_root() -> Path:
-    """Resolve project root from env or detection."""
+def resolve_project_root(cli_override: str | None = None) -> Path:
+    """Resolve project root from CLI override, bridge script location, env, or detection.
+
+    Priority:
+    1. --project-root CLI argument (explicit override)
+    2. Bridge script location — derive project root from where mimir_bridge.py lives,
+       walking up to find .mimir/config.json (most reliable; immune to caller's CWD)
+    3. PROJECT_ROOT env var (only if pointing to a valid Mimir project)
+    4. Auto-detection by walking up from cwd
+
+    This prevents accidentally indexing a parent project (e.g. jcode) when the
+    bridge is invoked from a nested non-Mimir project that happens to have its
+    own .mimir/config.json.
+    """
+    if cli_override:
+        return Path(cli_override).resolve()
+
+    # Derive from bridge script's own location — most reliable signal
+    # The bridge always lives inside or near the Mimir project root
+    bridge_dir = Path(__file__).resolve().parent
+    current = bridge_dir
+    while current != current.parent:
+        if (current / ".mimir" / "config.json").exists():
+            return current
+        current = current.parent
+
+    # Fall back to PROJECT_ROOT env var (only trusted if valid Mimir project)
     if env := os.environ.get("PROJECT_ROOT"):
-        return Path(env).resolve()
+        resolved = Path(env).resolve()
+        if (resolved / ".mimir" / "config.json").exists():
+            return resolved
+
     return detect_project_root()
 
 
 # ─── Action Handlers ──────────────────────────────────────────────────────────
+
+
+def handle_init(params: dict, project_root: Path) -> dict:
+    """Bootstrap a new project for Mimir knowledge base."""
+    import json as _json
+
+    force = params.get("force", False)
+
+    knowledge_dir = project_root / ".knowledge" / "llamaindex"
+    docs_dir = project_root / "docs"
+    mimir_config_dir = project_root / ".mimir"
+
+    # Create directories
+    knowledge_dir.mkdir(parents=True, exist_ok=True)
+    docs_dir.mkdir(exist_ok=True)
+    mimir_config_dir.mkdir(exist_ok=True)
+
+    # Create default config if missing or forced
+    config_path = mimir_config_dir / "config.json"
+    if force or not config_path.exists():
+        default_config = {
+            "docs_dir": "docs",
+            "code_dirs": [],
+            "files": [],
+            "knowledge_dir": ".knowledge/llamaindex",
+            "embedding_model": "text-embedding-3-small",
+        }
+        with open(config_path, "w") as f:
+            _json.dump(default_config, f, indent=2)
+        return {"status": "ok", "message": f"Created default config: {config_path}"}
+
+    return {"status": "ok", "message": f"Config already exists: {config_path}"}
 
 
 def handle_search(params: dict, project_root: Path) -> dict:
@@ -249,6 +310,8 @@ def handle_reindex(params: dict, project_root: Path) -> dict:
     """Rebuild the knowledge base index."""
     from mimir.config import get_config, reset_config
     from mimir.indexing import index_with_progress
+    from mimir.knowledge_graph import extract_code_relationships
+    import json as _json
 
     reset_config()
     config = get_config(project_root=project_root)
@@ -265,9 +328,25 @@ def handle_reindex(params: dict, project_root: Path) -> dict:
             verbose=False,
             custom_exclude_patterns=custom_patterns,
         )
-        if success:
-            return {"status": "ok", "message": f"Indexed {config.docs_dir}"}
-        return {"error": "Indexing failed", "status": "error"}
+        if not success:
+            return {"error": "Indexing failed", "status": "error"}
+
+        # Extract knowledge graph
+        knowledge_graph_dir = config.project_root / ".knowledge"
+        knowledge_graph_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            extractor = extract_code_relationships(
+                config.project_root, from_index=True
+            )
+            stats = extractor.get_stats()
+        except Exception:
+            stats = {"total_relationships": 0, "total_entities": 0}
+
+        return {
+            "status": "ok",
+            "message": f"Indexed {config.docs_dir}",
+            "knowledge_graph": stats,
+        }
     except Exception as e:
         return {"error": str(e), "status": "error"}
 
@@ -360,8 +439,12 @@ def handle_task_health(params: dict, project_root: Path) -> dict:
             "project_root": str(config.project_root),
             "top_k": rc.top_k,
             "cache_maxsize": rc.cache_maxsize,
+            "cache_similarity_threshold": rc.cache_similarity_threshold,
             "circuit_breaker_threshold": rc.circuit_breaker_threshold,
             "neural_classifier_enabled": rc.neural_classifier_enabled,
+            "query_normalization_enabled": rc.query_normalization_enabled,
+            "hybrid_confidence_min": rc.hybrid_confidence_min,
+            "hybrid_confidence_max": rc.hybrid_confidence_max,
         },
     }
 
@@ -466,6 +549,7 @@ def _setup_llama_index(config) -> None:
 # ─── Dispatch ─────────────────────────────────────────────────────────────────
 
 HANDLERS = {
+    "init": handle_init,
     "search": handle_search,
     "enrich_task": handle_enrich_task,
     "query": handle_query,
@@ -498,6 +582,13 @@ def main():
     action = request.get("action", "")
     params = request.get("params", {})
 
+    # Allow --project-root CLI override (highest priority)
+    cli_override = None
+    if "--project-root" in sys.argv:
+        idx = sys.argv.index("--project-root")
+        if idx + 1 < len(sys.argv):
+            cli_override = sys.argv[idx + 1]
+
     if not action:
         _output({"error": "Missing required field: action", "status": "error"})
         sys.exit(1)
@@ -511,7 +602,7 @@ def main():
         sys.exit(1)
 
     # Resolve project root
-    project_root = resolve_project_root()
+    project_root = resolve_project_root(cli_override=cli_override)
 
     # Execute handler
     start = time.time()

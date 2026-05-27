@@ -33,8 +33,15 @@ sys.path.insert(0, str(MIMIR_DIR / "src"))
 
 def detect_project_root() -> Path:
     cwd = Path.cwd().resolve()
-    markers = [".opencode", ".git", "pyproject.toml", "package.json"]
+    # Prefer .mimir/config.json as the most reliable Mimir project marker
+    current = cwd
+    while current != current.parent:
+        if (current / ".mimir" / "config.json").exists():
+            return current
+        current = current.parent
 
+    # Fall back to general project markers
+    markers = [".opencode", ".git", "pyproject.toml", "package.json"]
     current = cwd
     while current != current.parent:
         if any((current / marker).exists() for marker in markers):
@@ -42,6 +49,23 @@ def detect_project_root() -> Path:
         current = current.parent
 
     return cwd
+
+
+def resolve_project_root() -> Path:
+    """Resolve project root by walking up from the bridge script location.
+
+    The bridge script always lives inside or near the Mimir project root.
+    We derive the root by walking up from the script's parent directory
+    looking for .mimir/config.json, so the correct project is always
+    targeted even if invoked from a different working directory.
+    """
+    bridge_dir = Path(__file__).resolve().parent
+    current = bridge_dir
+    while current != current.parent:
+        if (current / ".mimir" / "config.json").exists():
+            return current
+        current = current.parent
+    return detect_project_root()
 
 
 def get_relative_or_absolute_path(file_path: Path, project_root: Path) -> str:

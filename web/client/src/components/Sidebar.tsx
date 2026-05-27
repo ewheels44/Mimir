@@ -172,7 +172,7 @@ export default function Sidebar({
             <input
               type="range"
               min={1000}
-              max={50000}
+              max={100000}
               step={1000}
               value={settings.repulsionStrength}
               onChange={e =>

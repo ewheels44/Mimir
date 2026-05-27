@@ -70,10 +70,15 @@ export class PhysicsEngine {
       const tSize = Math.max(target.width(), target.height()) / 2;
       const restLength = PhysicsEngine.REST_LENGTH + sSize + tSize;
 
-      // Spring force: F = k * (dist - restLength)
+      // Scale spring force inversely by node degree so hubs don't collapse
+      const sDeg = source.degree();
+      const tDeg = target.degree();
+      const degreeFactor = 1 / (1 + Math.max(sDeg, tDeg) * 0.3);
+
+      // Spring force: F = k * (dist - restLength) * degreeFactor
       // Pulls when stretched, pushes when compressed
       const displacement = dist - restLength;
-      const force = PhysicsEngine.SPRING_STRENGTH * displacement;
+      const force = PhysicsEngine.SPRING_STRENGTH * displacement * degreeFactor;
       const fx = (dx / dist) * force;
       const fy = (dy / dist) * force;
 

@@ -18,7 +18,6 @@ src/mimir/indexing.py directly for add/add-file/remove-file/list.
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -30,25 +29,7 @@ MIMIR_DIR = Path.home() / "Documents" / "Mimir"
 sys.path.insert(1, str(MIMIR_DIR))
 sys.path.insert(0, str(MIMIR_DIR / "src"))
 
-
-def detect_project_root() -> Path:
-    cwd = Path.cwd().resolve()
-    # Prefer .mimir/config.json as the most reliable Mimir project marker
-    current = cwd
-    while current != current.parent:
-        if (current / ".mimir" / "config.json").exists():
-            return current
-        current = current.parent
-
-    # Fall back to general project markers
-    markers = [".opencode", ".git", "pyproject.toml", "package.json"]
-    current = cwd
-    while current != current.parent:
-        if any((current / marker).exists() for marker in markers):
-            return current
-        current = current.parent
-
-    return cwd
+from mimir.utils import detect_project_root
 
 
 def resolve_project_root() -> Path:

@@ -36,6 +36,7 @@ from urllib.parse import urlencode
 import numpy as np
 
 from mimir.config import MimirConfig, get_config
+from mimir.utils import detect_project_root
 
 # ─── Query Normalization ────────────────────────────────────────────────────────
 # Normalizes natural language queries to improve cache hit rates and
@@ -893,37 +894,10 @@ class RoutingResult:
 
 
 def _detect_project_root(cwd=None, env_vars=None) -> Path:
-    """Detect project root — no dependency on openspace_bridge."""
-    import os
-
-    if env_vars is None:
-        env_vars = ["PROJECT_ROOT", "WORKSPACE_FOLDER", "VSCODE_CWD"]
-
-    # Check env vars first — but only if they point to a valid Mimir project
-    for var in env_vars:
-        if path := os.environ.get(var):
-            resolved = Path(path).resolve()
-            if (resolved / ".mimir" / "config.json").exists():
-                return resolved
-
-    # Walk up from cwd preferring .mimir/config.json
-    start = (cwd or Path.cwd()).resolve()
-    current = start
-    while current != current.parent:
-        if (current / ".mimir" / "config.json").exists():
-            return current
-        current = current.parent
-
-    # Fall back to general markers
-    current = start
-    markers = [".opencode", "opencode.json", ".git", "pyproject.toml", "package.json", "Cargo.toml"]
-    while current != current.parent:
-        for marker in markers:
-            if (current / marker).exists():
-                return current
-        current = current.parent
-
-    return start
+    """Detect project root — no dependency on openspace_bridge.
+    Delegates to the shared implementation in mimir.utils.
+    """
+    return detect_project_root(cwd=cwd, env_vars=env_vars)
 
 
 # ─── Main Entry Point ─────────────────────────────────────────────────────────

@@ -39,20 +39,7 @@ if str(SRC_DIR) not in sys.path:
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(1, str(SCRIPT_DIR))
 
-
-def detect_project_root() -> Path:
-    """Detect project root by walking up from cwd."""
-    cwd = Path.cwd().resolve()
-    markers = [
-        "opencode.json", ".opencode", ".git",
-        "pyproject.toml", "Cargo.toml", "package.json",
-    ]
-    current = cwd
-    while current != current.parent:
-        if any((current / m).exists() for m in markers):
-            return current
-        current = current.parent
-    return cwd
+from mimir.utils import detect_project_root
 
 
 def resolve_project_root(cli_override: str | None = None) -> Path:

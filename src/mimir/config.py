@@ -34,6 +34,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from mimir.utils import detect_project_root
+
 logger = logging.getLogger(__name__)
 
 # ─── Defaults ────────────────────────────────────────────────────────────────
@@ -346,50 +348,10 @@ def _detect_project_root(
     cwd: Optional[Path] = None,
     env_vars: Optional[list[str]] = None,
 ) -> Path:
-    """Detect project root by walking up from cwd looking for marker files."""
-    if env_vars is None:
-        env_vars = ["PROJECT_ROOT", "WORKSPACE_FOLDER", "VSCODE_CWD"]
-
-    # Check env vars first — but only if they point to a valid Mimir project
-    for var in env_vars:
-        if path := os.environ.get(var):
-            resolved = Path(path).resolve()
-            if (resolved / ".mimir" / "config.json").exists():
-                return resolved
-
-    # Walk up from cwd preferring .mimir/config.json
-    start = (cwd or Path.cwd()).resolve()
-    current = start
-    while current != current.parent:
-        if (current / ".mimir" / "config.json").exists():
-            return current
-        current = current.parent
-
-    # Fall back to general markers
-    current = start
-    while current != current.parent:
-        for marker in _PROJECT_MARKERS:
-            if (current / marker).exists():
-                return current
-        current = current.parent
-
-    # If not found, try using the location of the MCP server script to find the project
-    try:
-        # Get the path of the running script
-        import sys
-        if sys.argv[0]:
-            script_path = Path(sys.argv[0]).resolve()
-            # Walk up from the script location looking for project markers
-            current = script_path.parent
-            while current != current.parent:
-                for marker in _PROJECT_MARKERS:
-                    if (current / marker).exists():
-                        return current
-                current = current.parent
-    except Exception:
-        pass
-
-    return start
+    """Detect project root by walking up from cwd looking for marker files.
+    Delegates to the shared implementation in mimir.utils.
+    """
+    return detect_project_root(cwd=cwd, env_vars=env_vars)
 
 
 def _detect_mimir_root() -> Path:

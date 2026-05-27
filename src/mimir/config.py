@@ -440,15 +440,29 @@ def _resolve_dir(
 
 def _resolve_code_dirs(project_root: Path, file_config: dict) -> list[Path]:
     """Resolve code directories from config sources."""
+    dirs: list[Path] = []
+
     # Config file takes precedence
     if "code_dirs" in file_config:
-        return [Path(d) for d in file_config["code_dirs"]]
+        for d in file_config["code_dirs"]:
+            p = Path(d)
+            if not p.is_absolute():
+                p = project_root / p
+            dirs.append(p)
+        return dirs
 
     # Env var (comma-separated)
     if env := os.environ.get("CODE_DIRS", ""):
-        return [Path(d.strip()) for d in env.split(",") if d.strip()]
+        for d in env.split(","):
+            d = d.strip()
+            if d:
+                p = Path(d)
+                if not p.is_absolute():
+                    p = project_root / p
+                dirs.append(p)
+        return dirs
 
-    return []
+    return dirs
 
 
 def _env_or_default(env_var: str, default_key: str) -> str:

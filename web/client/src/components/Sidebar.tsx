@@ -172,8 +172,8 @@ export default function Sidebar({
             <input
               type="range"
               min={1000}
-              max={100000}
-              step={1000}
+              max={200000}
+              step={5000}
               value={settings.repulsionStrength}
               onChange={e =>
                 onSettingsChange({ repulsionStrength: parseInt(e.target.value, 10) })

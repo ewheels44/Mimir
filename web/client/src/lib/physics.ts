@@ -11,8 +11,8 @@ export class PhysicsEngine {
   private velocities: Map<string, { x: number; y: number }> = new Map();
 
   // Tunable parameters
-  private static readonly REST_LENGTH = 120;
-  private static readonly SPRING_STRENGTH = 0.002;
+  private static readonly REST_LENGTH = 140;
+  private static readonly SPRING_STRENGTH = 0.0012;
   private static readonly DAMPING = 0.85;
 
   constructor(cy: cytoscape.Core) {
@@ -73,7 +73,7 @@ export class PhysicsEngine {
       // Scale spring force inversely by node degree so hubs don't collapse
       const sDeg = source.degree();
       const tDeg = target.degree();
-      const degreeFactor = 1 / (1 + Math.max(sDeg, tDeg) * 0.3);
+      const degreeFactor = 1 / (1 + Math.max(sDeg, tDeg) * 0.5);
 
       // Spring force: F = k * (dist - restLength) * degreeFactor
       // Pulls when stretched, pushes when compressed

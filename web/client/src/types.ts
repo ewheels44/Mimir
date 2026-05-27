@@ -59,7 +59,7 @@ export const DEFAULT_SETTINGS: GraphSettings = {
   layout: 'cose',
   labelsVisible: true,
   floatingMode: true,
-  repulsionStrength: 10000,
+  repulsionStrength: 50000,
   edgeFilters: {
     calls: true,
     imports_module: true,

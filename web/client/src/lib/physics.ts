@@ -98,12 +98,14 @@ export class PhysicsEngine {
         const distSq = dx * dx + dy * dy || 1;
         const dist = Math.sqrt(distSq);
 
-        // Repulsive force (inverse square), with softening scaled to node sizes
+        // Repulsive force (inverse square), scaled by node sizes
+        // so large nodes repel more strongly and don't collapse together
         const aSize = Math.max(a.width(), a.height()) / 2;
         const bSize = Math.max(b.width(), b.height()) / 2;
         const minDist = Math.max(aSize + bSize, 10);
         const clampedDistSq = Math.max(distSq, minDist * minDist);
-        const force = repulsionStrength / clampedDistSq;
+        const sizeFactor = (aSize + bSize) / 80; // 80 = 2 * base radius (40)
+        const force = (repulsionStrength * sizeFactor) / clampedDistSq;
         const fx = (dx / dist) * force;
         const fy = (dy / dist) * force;
 

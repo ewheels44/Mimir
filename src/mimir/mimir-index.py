@@ -291,7 +291,7 @@ def main():
 
         if not args.no_knowledge_graph and config.code_dirs:
             print(
-                f"\n📂 Code directories configured: {', '.join(config.code_dirs)}"
+                f"\n📂 Code directories configured: {', '.join(str(d) for d in config.code_dirs)}"
             )
         else:
             print(

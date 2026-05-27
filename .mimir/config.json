@@ -1,15 +1,16 @@
 {
   "docs_dir": "docs",
   "code_dirs": [
-    "src",
-    "tests",
-    "scripts",
-    "workflows",
-    "web"
+    "RavenEye/docs",
+    "RavenEye/hardware/esp32-capture/src",
+    "RavenEye/hardware/esp32-cam/src",
+    "RavenEye/garmin-widget/source",
+    "marketing-site/src",
+    "scripts"
   ],
-  "knowledge_dir": ".knowledge/llamaindex",
-  "embedding_model": "text-embedding-3-large",
-  "llm_model": "deepseek/deepseek-v4-flash",
+  "knowledge_dir": "/Users/ethanwheeler/Documents/Project_Rouge_Sailing/.knowledge/llamaindex",
+  "embedding_model": "text-embedding-3-small",
+  "llm_model": "gpt-4.1-mini",
   "exclude_patterns": [
     "*.egg-info",
     "*.egg-info/*",

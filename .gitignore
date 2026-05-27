@@ -67,3 +67,6 @@ reindex.log
 
 # Mimir config state (runtime)
 .mimir/index_state.json
+.mimir/config.json
+
+ pyproject.toml 

@@ -43,37 +43,25 @@ from mimir.utils import detect_project_root
 
 
 def resolve_project_root(cli_override: str | None = None) -> Path:
-    """Resolve project root from CLI override, bridge script location, env, or detection.
+    """Resolve project root from CLI override, env, or auto-detection.
 
     Priority:
     1. --project-root CLI argument (explicit override)
-    2. Bridge script location — derive project root from where mimir_bridge.py lives,
-       walking up to find .mimir/config.json (most reliable; immune to caller's CWD)
-    3. PROJECT_ROOT env var (only if pointing to a valid Mimir project)
-    4. Auto-detection by walking up from cwd
-
-    This prevents accidentally indexing a parent project (e.g. jcode) when the
-    bridge is invoked from a nested non-Mimir project that happens to have its
-    own .mimir/config.json.
+    2. PROJECT_ROOT env var (only if pointing to a valid Mimir project)
+    3. Auto-detection via detect_project_root() — walks up from CWD
+       looking for .mimir/config.json, then general markers (.git,
+       pyproject.toml, etc.)
     """
     if cli_override:
         return Path(cli_override).resolve()
 
-    # Derive from bridge script's own location — most reliable signal
-    # The bridge always lives inside or near the Mimir project root
-    bridge_dir = Path(__file__).resolve().parent
-    current = bridge_dir
-    while current != current.parent:
-        if (current / ".mimir" / "config.json").exists():
-            return current
-        current = current.parent
-
-    # Fall back to PROJECT_ROOT env var (only trusted if valid Mimir project)
+    # Check PROJECT_ROOT env var (only trusted if valid Mimir project)
     if env := os.environ.get("PROJECT_ROOT"):
         resolved = Path(env).resolve()
         if (resolved / ".mimir" / "config.json").exists():
             return resolved
 
+    # Auto-detect from CWD using standard project markers
     return detect_project_root()
 
 

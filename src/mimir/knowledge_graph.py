@@ -1,7 +1,7 @@
 """Knowledge Graph Relationship Extraction
 
-Two complementary extractors, used together when tree-sitter-languages is
-available, or Python-only as a reliable fallback:
+Extractors, used together when tree-sitter-languages is available,
+or as standalone regex-based fallbacks:
 
   PythonASTExtractor   — .py files via Python's built-in `ast` module.
                          Always available, semantically accurate, fast.
@@ -11,9 +11,13 @@ available, or Python-only as a reliable fallback:
                          Walks the concrete syntax tree directly — no
                          fragile S-expression queries.
 
-  CombinedExtractor    — Routes .py to AST, everything else to TreeSitter.
-                         This is the preferred path when tree-sitter is
-                         available.
+  CppExtractor         — .cpp/.c/.h files via regex patterns.
+                         Always available, handles includes/structs/functions.
+
+  AstroExtractor       — .astro files via regex patterns.
+                         Extracts imports, components, and JS/TS blocks.
+
+  CombinedExtractor    — Routes each extension to the best available extractor.
 
 Public API
 ----------
@@ -69,6 +73,10 @@ EXTENSION_TO_LANGUAGE: dict[str, str] = {
     ".cjs": "javascript",
     ".rs": "rust",
     ".go": "go",
+    ".cpp": "cpp",
+    ".c": "c",
+    ".h": "cpp",      # treat .h as C++ for extraction
+    ".astro": "astro",
 }
 
 # Per-language keywords — used to filter noise out of extracted identifiers.
@@ -210,6 +218,38 @@ _LANG_KEYWORDS: dict[str, frozenset[str]] = {
     "javascript": _JS_KW,
     "rust": _RUST_KW,
     "go": _GO_KW,
+    "cpp": frozenset({
+        "auto", "break", "case", "char", "const", "continue", "default", "do",
+        "double", "else", "enum", "extern", "float", "for", "goto", "if",
+        "inline", "int", "long", "register", "restrict", "return", "short",
+        "signed", "sizeof", "static", "struct", "switch", "typedef",
+        "union", "unsigned", "void", "volatile", "while", "alignas",
+        "alignof", "and", "and_eq", "asm", "bitand", "bitor", "class",
+        "compl", "concept", "consteval", "constexpr", "decltype", "delete",
+        "dynamic_cast", "explicit", "export", "false", "friend", "inline",
+        "mutable", "namespace", "new", "noexcept", "not", "not_eq", "nullptr",
+        "operator", "or", "or_eq", "private", "protected", "public",
+        "reinterpret_cast", "requires", "return", "sizeof", "static_assert",
+        "static_cast", "template", "this", "thread_local", "throw", "true",
+        "try", "typeid", "typename", "using", "virtual", "wchar_t", "xor",
+        "xor_eq", "bool", "catch", "const_cast", "else", "export", "extern",
+    }),
+    "c": frozenset({
+        "auto", "break", "case", "char", "const", "continue", "default", "do",
+        "double", "else", "enum", "extern", "float", "for", "goto", "if",
+        "inline", "int", "long", "register", "restrict", "return", "short",
+        "signed", "sizeof", "static", "struct", "switch", "typedef",
+        "union", "unsigned", "void", "volatile", "while", "_Alignas",
+        "_Alignof", "_Atomic", "_Bool", "_Complex", "_Generic", "_Imaginary",
+        "_Noreturn", "_Static_assert", "_Thread_local", "true", "false",
+    }),
+    "astro": frozenset({
+        "import", "export", "default", "const", "let", "var", "function",
+        "class", "if", "else", "for", "while", "do", "return", "switch",
+        "case", "break", "continue", "new", "this", "async", "await",
+        "try", "catch", "finally", "throw", "yield", "of", "in",
+        "undefined", "null", "true", "false", "void", "type", "interface",
+    }),
 }
 
 # Valid identifier pattern (covers Python, JS/TS, Rust, Go, with $ for JS)
@@ -556,8 +596,9 @@ def _try_import_treesitter() -> tuple[Optional[object], Optional[object]]:
         return get_parser, get_language
     except ImportError:
         print(
-            "⚠️  tree-sitter-languages not installed — knowledge graph will only cover Python. "
-            "Run: pip install tree-sitter-languages   # adds TS/JS/Rust/Go support",
+            "⚠️  tree-sitter-languages not installed — falling back to regex-based"
+            " extraction for non-Python languages.\n"
+            "    Run: pip install tree-sitter-languages   # for more accurate TS/JS/Rust/Go parsing",
             flush=True,
         )
         return None, None
@@ -577,16 +618,21 @@ class TreeSitterExtractor:
     def __init__(self, project_root: Path):
         get_parser, get_language = _try_import_treesitter()
         if get_parser is None:
-            raise ImportError(
-                "tree-sitter-languages is not installed.\n"
-                "  pip install tree-sitter-languages"
-            )
-        self._get_parser = get_parser
-        self._get_language = get_language
+            # Will not be usable but don't crash — regex fallback handles it
+            self._get_parser = None
+            self._get_language = None
+            self._parser_cache = {}
+        else:
+            self._get_parser = get_parser
+            self._get_language = get_language
         self.project_root = Path(project_root)
         self.relationships: list[Relationship] = []
         self.entities: dict[str, CodeEntity] = {}
         self._parser_cache: dict[str, object] = {}
+
+    @property
+    def _available(self) -> bool:
+        return self._get_parser is not None
 
     # ------------------------------------------------------------------
     # Public interface
@@ -594,7 +640,7 @@ class TreeSitterExtractor:
 
     def extract_from_file(self, file_path: Path) -> list[Relationship]:
         lang = EXTENSION_TO_LANGUAGE.get(file_path.suffix.lower())
-        if lang not in self.SUPPORTED:
+        if lang not in self.SUPPORTED or not self._available:
             return []
 
         try:
@@ -625,6 +671,8 @@ class TreeSitterExtractor:
         return rels
 
     def extract_from_directory(self, directory: Path) -> list[Relationship]:
+        if not self._available:
+            return []
         found: list[Relationship] = []
         supported_exts = {
             ext for ext, lang in EXTENSION_TO_LANGUAGE.items() if lang in self.SUPPORTED
@@ -985,30 +1033,441 @@ class TreeSitterExtractor:
 
 
 # ---------------------------------------------------------------------------
-# Combined extractor — Python via AST, everything else via tree-sitter
+# C/C++ extractor (regex-based, always available)
+# ---------------------------------------------------------------------------
+
+_CPP_KEYWORDS: frozenset[str] = frozenset({
+    "auto", "break", "case", "char", "const", "continue", "default", "do",
+    "double", "else", "enum", "extern", "float", "for", "goto", "if",
+    "inline", "int", "long", "register", "restrict", "return", "short",
+    "signed", "sizeof", "static", "struct", "switch", "typedef",
+    "union", "unsigned", "void", "volatile", "while", "alignas",
+    "alignof", "and", "and_eq", "asm", "bitand", "bitor", "class",
+    "compl", "concept", "consteval", "constexpr", "decltype", "delete",
+    "dynamic_cast", "explicit", "export", "false", "friend", "inline",
+    "mutable", "namespace", "new", "noexcept", "not", "not_eq", "nullptr",
+    "operator", "or", "or_eq", "private", "protected", "public",
+    "reinterpret_cast", "requires", "sizeof", "static_assert",
+    "static_cast", "template", "this", "thread_local", "throw", "true",
+    "try", "typeid", "typename", "using", "virtual", "wchar_t", "xor",
+    "xor_eq", "bool", "catch", "const_cast", "else", "export", "extern",
+})
+
+
+class CppExtractor:
+    """Extract relationships from C/C++ source using regex patterns.
+
+    Handles:
+      - #include directives  (imports_module)
+      - struct/typedef/enum declarations  (class-like entities)
+      - function declarations  (function entities)
+      - function calls  (calls)
+    """
+
+    # Regex patterns
+    _RE_INCLUDE = re.compile(r'^\s*#\s*include\s+["<]([^">/]+(?:/[^">/]+)*)[">/]')
+    _RE_INCLUDE_SYSTEM = re.compile(r'^\s*#\s*include\s+<([^>]+)>')
+    _RE_FUNCTION_DECL = re.compile(
+        r'^\s*(static\s+)?((?:inline|virtual|explicit|constexpr|const\s+)?'
+        r'[\w:<>]+\s+[\w:]+\s*\([^)]*\))\s*\{?\s*$'
+    )
+    _RE_FUNCTION_DEF = re.compile(
+        r'^\s*(static\s+)?((?:inline|virtual|explicit|constexpr|const\s+)?'
+        r'[\w:<>]+\s+)([\w~]+\s*\([^)]*\))'
+    )
+    _RE_STRUCT = re.compile(
+        r'^\s*(struct|class|enum|typedef|union)\s+(\w+)'
+    )
+    _RE_CALL = re.compile(
+        r'\b([a-zA-Z_]\w*)\s*\('
+    )
+
+    def __init__(self, project_root: Path):
+        self.project_root = Path(project_root)
+        self.relationships: list[Relationship] = []
+        self.entities: dict[str, CodeEntity] = {}
+
+    def _rel(self, path: Path) -> str:
+        try:
+            return str(path.relative_to(self.project_root))
+        except ValueError:
+            return str(path)
+
+    def extract_from_file(self, file_path: Path) -> list[Relationship]:
+        suffix = file_path.suffix.lower()
+        if suffix not in (".cpp", ".c", ".h"):
+            return []
+        try:
+            source = file_path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return []
+
+        rel_path = self._rel(file_path)
+        rels: list[Relationship] = []
+        lines = source.splitlines()
+
+        # Extract includes, structs, functions
+        for lineno, line in enumerate(lines, start=1):
+            # #include "foo.h"  →  imports_module
+            m = self._RE_INCLUDE.match(line)
+            if m:
+                target = m.group(1)
+                # Normalize: strip path prefix for system-like headers
+                target_base = Path(target).name
+                rels.append(
+                    Relationship(
+                        source=rel_path,
+                        target=target,
+                        relation_type="imports_module",
+                        metadata={"line": lineno},
+                    )
+                )
+                continue
+
+            # #include <system.h>  →  imports_module (external)
+            m = self._RE_INCLUDE_SYSTEM.match(line)
+            if m:
+                target = m.group(1)
+                rels.append(
+                    Relationship(
+                        source=rel_path,
+                        target=f"external:{target}",
+                        relation_type="imports_module",
+                        metadata={"line": lineno},
+                    )
+                )
+                continue
+
+            # struct/class/enum/typedef
+            m = self._RE_STRUCT.match(line)
+            if m:
+                kind = m.group(1)
+                name = m.group(2)
+                entity_type = {"struct": "struct", "class": "class",
+                               "enum": "enum", "typedef": "typedef",
+                               "union": "struct"}.get(kind, "struct")
+                key = f"{rel_path}::{name}"
+                self.entities[key] = CodeEntity(
+                    name=name,
+                    entity_type=entity_type,
+                    file_path=rel_path,
+                    line_number=lineno,
+                    metadata={"lang": "cpp"},
+                )
+                continue
+
+            # Function declarations/definitions
+            m = self._RE_FUNCTION_DEF.match(line)
+            if m:
+                return_type_prefix = m.group(1) or ""
+                full_sig = m.group(2).strip()
+                func_name = m.group(3).strip().split("(")[0].strip()
+                # Skip if it looks like a control keyword
+                if func_name in _CPP_KEYWORDS:
+                    continue
+                # Strip return type to get just the name
+                sig_parts = full_sig.strip().split()
+                if sig_parts:
+                    func_name = sig_parts[-1].split("(")[0].strip().rstrip("~")
+                if func_name and _is_valid_identifier(func_name, "cpp"):
+                    key = f"{rel_path}::{func_name}"
+                    self.entities[key] = CodeEntity(
+                        name=func_name,
+                        entity_type="function",
+                        file_path=rel_path,
+                        line_number=lineno,
+                        metadata={"lang": "cpp"},
+                    )
+                continue
+
+        # Extract function calls (second pass, deduplicated per file)
+        seen_calls: set[str] = set()
+        for lineno, line in enumerate(lines, start=1):
+            for m in self._RE_CALL.finditer(line):
+                name = m.group(1)
+                if name in _CPP_KEYWORDS or name in (
+                    "if", "for", "while", "switch", "return", "sizeof",
+                    "typeof", "defined", "main",
+                ):
+                    continue
+                if name not in seen_calls and _is_valid_identifier(name, "cpp"):
+                    seen_calls.add(name)
+                    rels.append(
+                        Relationship(
+                            source=rel_path,
+                            target=name,
+                            relation_type="calls",
+                            metadata={"line": lineno, "lang": "cpp"},
+                        )
+                    )
+
+        return rels
+
+    def extract_from_directory(self, directory: Path) -> list[Relationship]:
+        found: list[Relationship] = []
+        for path in sorted(directory.rglob("*")):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in (".cpp", ".c", ".h"):
+                continue
+            if _should_exclude(path):
+                continue
+            try:
+                rel = path.relative_to(self.project_root)
+            except ValueError:
+                rel = path
+            print(f"  [C/C++] {rel}")
+            rels = self.extract_from_file(path)
+            self.relationships.extend(rels)
+            found.extend(rels)
+        return found
+
+    def save_to_file(self, output_path: Path) -> None:
+        data = {
+            "relationships": [r.to_dict() for r in self.relationships],
+            "entities": {k: asdict(v) for k, v in self.entities.items()},
+        }
+        with open(output_path, "w") as f:
+            json.dump(data, f, indent=2)
+        print(f"\n✅ Saved {len(self.relationships)} relationships → {output_path}")
+
+    def get_stats(self) -> dict:
+        type_counts: dict[str, int] = defaultdict(int)
+        for r in self.relationships:
+            type_counts[r.relation_type] += 1
+        return {
+            "total_relationships": len(self.relationships),
+            "total_entities": len(self.entities),
+            "by_type": dict(type_counts),
+            "by_language": {"cpp": len(self.relationships)},
+        }
+
+
+# ---------------------------------------------------------------------------
+# Astro extractor (regex-based, always available)
+# ---------------------------------------------------------------------------
+
+class AstroExtractor:
+    """Extract relationships from Astro files using regex patterns.
+
+    Handles:
+      - import/export statements  (imports_module, imports_from)
+      - component references  (calls)
+    """
+
+    # Match: import Foo from 'bar'  |  import { X } from 'bar'  |  import * as X from 'bar'
+    _RE_IMPORT = re.compile(
+        r"import\s+(?:([\w*{}\s,]+)\s+from\s+|)(['\"])([^'\"]+)\2"
+    )
+    _RE_EXPORT = re.compile(
+        r"export\s+(?:default\s+)?(?:const|let|var|function|class|enum)\s+(\w+)"
+    )
+    _RE_COMPONENT_TAG = re.compile(
+        r"<([A-Z]\w*)\s*[^>]*>"
+    )
+    _RE_JS_BLOCK = re.compile(
+        r"(?:import|export|const|let|var|function|class)\s+\w+"
+    )
+
+    def __init__(self, project_root: Path):
+        self.project_root = Path(project_root)
+        self.relationships: list[Relationship] = []
+        self.entities: dict[str, CodeEntity] = {}
+
+    def _rel(self, path: Path) -> str:
+        try:
+            return str(path.relative_to(self.project_root))
+        except ValueError:
+            return str(path)
+
+    def extract_from_file(self, file_path: Path) -> list[Relationship]:
+        if file_path.suffix.lower() != ".astro":
+            return []
+        try:
+            source = file_path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return []
+
+        rel_path = self._rel(file_path)
+        rels: list[Relationship] = []
+        lines = source.splitlines()
+        seen_imports: set[str] = set()
+        seen_calls: set[str] = set()
+        in_script = False
+        in_frontmatter = False
+
+        for lineno, line in enumerate(lines, start=1):
+            stripped = line.strip()
+
+            # Frontmatter fences
+            if stripped == "---":
+                in_frontmatter = not in_frontmatter
+                continue
+
+            # Track <script> blocks
+            if stripped.startswith("<script"):
+                in_script = True
+                continue
+            if stripped == "</script>":
+                in_script = False
+                continue
+
+            in_js_block = in_script or in_frontmatter
+
+            if in_js_block:
+                # Import statements inside script/frontmatter blocks
+                m = self._RE_IMPORT.match(stripped)
+                if m:
+                    names = m.group(1) or ""
+                    module = m.group(3) or ""
+                    # Clean up names: remove { }, * as, etc.
+                    names_clean = names.replace("{", "").replace("}", "").replace("* as ", "")
+                    for name in names_clean.split(","):
+                        name = name.strip().strip("*").strip()
+                        if name and not name.startswith("//"):
+                            target = f"{module}.{name}" if module else name
+                            rels.append(
+                                Relationship(
+                                    source=rel_path,
+                                    target=target,
+                                    relation_type="imports_from",
+                                    metadata={"line": lineno, "module": module, "name": name},
+                                )
+                            )
+                            seen_imports.add(module)
+                    continue
+
+                # Export statements
+                m = self._RE_EXPORT.match(stripped)
+                if m:
+                    name = m.group(1)
+                    self.entities[f"{rel_path}::{name}"] = CodeEntity(
+                        name=name,
+                        entity_type="function",
+                        file_path=rel_path,
+                        line_number=lineno,
+                        metadata={"lang": "astro"},
+                    )
+                    continue
+
+            else:
+                # Component usage outside script blocks
+                for m in self._RE_COMPONENT_TAG.finditer(stripped):
+                    name = m.group(1)
+                    if name not in seen_calls and _is_valid_identifier(name, "astro"):
+                        seen_calls.add(name)
+                        rels.append(
+                            Relationship(
+                                source=rel_path,
+                                target=name,
+                                relation_type="calls",
+                                metadata={"line": lineno, "lang": "astro"},
+                            )
+                        )
+
+        # Module-level imports (outside script blocks, rare but possible)
+        for lineno, line in enumerate(lines, start=1):
+            stripped = line.strip()
+            m = self._RE_IMPORT.match(stripped)
+            if m and not in_script:
+                module = m.group(3) or ""
+                if module and module not in seen_imports:
+                    seen_imports.add(module)
+                    rels.append(
+                        Relationship(
+                            source=rel_path,
+                            target=module,
+                            relation_type="imports_module",
+                            metadata={"line": lineno},
+                        )
+                    )
+
+        return rels
+
+    def extract_from_directory(self, directory: Path) -> list[Relationship]:
+        found: list[Relationship] = []
+        for path in sorted(directory.rglob("*")):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() != ".astro":
+                continue
+            if _should_exclude(path):
+                continue
+            try:
+                rel = path.relative_to(self.project_root)
+            except ValueError:
+                rel = path
+            print(f"  [ASTRO] {rel}")
+            rels = self.extract_from_file(path)
+            self.relationships.extend(rels)
+            found.extend(rels)
+        return found
+
+    def save_to_file(self, output_path: Path) -> None:
+        data = {
+            "relationships": [r.to_dict() for r in self.relationships],
+            "entities": {k: asdict(v) for k, v in self.entities.items()},
+        }
+        with open(output_path, "w") as f:
+            json.dump(data, f, indent=2)
+        print(f"\n✅ Saved {len(self.relationships)} relationships → {output_path}")
+
+    def get_stats(self) -> dict:
+        type_counts: dict[str, int] = defaultdict(int)
+        for r in self.relationships:
+            type_counts[r.relation_type] += 1
+        return {
+            "total_relationships": len(self.relationships),
+            "total_entities": len(self.entities),
+            "by_type": dict(type_counts),
+            "by_language": {"astro": len(self.relationships)},
+        }
+
+
+# ---------------------------------------------------------------------------
+# Combined extractor — Python via AST, tree-sitter if available, else regex
 # ---------------------------------------------------------------------------
 
 
 class CombinedExtractor:
-    """Routes .py to PythonASTExtractor, other languages to TreeSitterExtractor."""
+    """Routes each language to its best extractor (AST → tree-sitter → regex)."""
 
     def __init__(self, project_root: Path):
         self.project_root = Path(project_root)
         self._py = PythonASTExtractor(project_root)
         self._ts = TreeSitterExtractor(project_root)
+        self._cpp = CppExtractor(project_root)
+        self._astro = AstroExtractor(project_root)
 
     @property
     def relationships(self) -> list[Relationship]:
-        return self._py.relationships + self._ts.relationships
+        return (
+            self._py.relationships
+            + self._ts.relationships
+            + self._cpp.relationships
+            + self._astro.relationships
+        )
 
     @property
     def entities(self) -> dict[str, CodeEntity]:
-        return {**self._py.entities, **self._ts.entities}
+        return {
+            **self._py.entities,
+            **self._ts.entities,
+            **self._cpp.entities,
+            **self._astro.entities,
+        }
 
     def extract_from_file(self, file_path: Path) -> list[Relationship]:
-        if file_path.suffix.lower() == ".py":
+        suffix = file_path.suffix.lower()
+        if suffix == ".py":
             rels = self._py.extract_from_file(file_path)
             self._py.relationships.extend(rels)
+        elif suffix in (".cpp", ".c", ".h"):
+            rels = self._cpp.extract_from_file(file_path)
+            self._cpp.relationships.extend(rels)
+        elif suffix == ".astro":
+            rels = self._astro.extract_from_file(file_path)
+            self._astro.relationships.extend(rels)
         else:
             rels = self._ts.extract_from_file(file_path)
             self._ts.relationships.extend(rels)
@@ -1074,10 +1533,10 @@ def _make_extractor(
         return CombinedExtractor(project_root)
     else:
         print(
-            "🐍  Python-only extraction via ast\n"
+            "🐍  Python + C/C++/Astro extraction (tree-sitter not available)\n"
             "    Install tree-sitter-languages for TS/JS/Rust/Go support."
         )
-        return PythonASTExtractor(project_root)
+        return CombinedExtractor(project_root)
 
 
 # ---------------------------------------------------------------------------
@@ -1145,6 +1604,10 @@ def extract_code_relationships(
                         # ensure relationships are stored based on file type
                         if fp.suffix.lower() == ".py":
                             extractor._py.relationships.extend(rels)
+                        elif fp.suffix.lower() in (".cpp", ".c", ".h"):
+                            extractor._cpp.relationships.extend(rels)
+                        elif fp.suffix.lower() == ".astro":
+                            extractor._astro.relationships.extend(rels)
                         else:
                             extractor._ts.relationships.extend(rels)
     else:
@@ -1175,6 +1638,10 @@ def extract_code_relationships(
                     # ensure relationships are stored based on file type
                     if path.suffix.lower() == ".py":
                         extractor._py.relationships.extend(rels)
+                    elif path.suffix.lower() in (".cpp", ".c", ".h"):
+                        extractor._cpp.relationships.extend(rels)
+                    elif path.suffix.lower() == ".astro":
+                        extractor._astro.relationships.extend(rels)
                     else:
                         extractor._ts.relationships.extend(rels)
 

@@ -8,6 +8,7 @@ Savings: ~$0.0015 per query (LLM call) → ~$0.000001 (local inference)
 """
 
 import json
+import logging
 import pickle
 import re
 from pathlib import Path

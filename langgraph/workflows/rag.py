@@ -1,5 +1,6 @@
 from typing import Annotated, TypedDict
 
+import logging
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
@@ -8,6 +9,8 @@ from langgraph.graph.message import add_messages
 from src.mimir.token_callback import create_token_callback
 
 from .utils import create_llm, detect_project_root, get_mcp_client
+
+logger = logging.getLogger(__name__)
 
 
 class AgentState(TypedDict):
@@ -22,12 +25,16 @@ class AgentState(TypedDict):
 async def retrieve(state: AgentState) -> AgentState:
     last_message = state["messages"][-1].content
     project_root = detect_project_root()
+    logger.info("[RAG] Retrieving context for query: '%s'...", last_message[:60])
+    
     client = get_mcp_client(project_root)
+    logger.debug("[RAG] MCP client obtained")
 
     tools = client.get_tools()
     search_tool = next((t for t in tools if t.name == "search"), None)
 
     if search_tool:
+        logger.debug("[RAG] Using search tool")
         results = await search_tool.ainvoke({"query": last_message, "top_k": 5})
         context_items = []
         if isinstance(results, list):
@@ -38,12 +45,15 @@ async def retrieve(state: AgentState) -> AgentState:
                     context_items.append(str(item))
         else:
             context_items.append(str(results))
+        logger.info("[RAG] Retrieved %d context items", len(context_items))
         return {**state, "context": context_items, "query_text": last_message, "response_shape": state.get("response_shape")}
 
+    logger.warning("[RAG] No search tool found!")
     return {**state, "context": [], "query_text": last_message, "response_shape": state.get("response_shape")}
 
 
 async def generate(state: AgentState) -> AgentState:
+    logger.info("[RAG] Generating response from context...")
     # Create token callback to capture actual usage
     token_callback = create_token_callback()
     llm = create_llm(
@@ -57,6 +67,7 @@ async def generate(state: AgentState) -> AgentState:
     ]
     context = "\n\n".join(context_items)
     messages = state["messages"]
+    logger.debug("[RAG] Context length: %d chars, %d context items", len(context), len(context_items))
 
     system_msg = f"""You are the Librarian. Use the following context to answer the user's question.
 
@@ -68,6 +79,7 @@ Answer based on this context. If the context doesn't contain the answer, say so 
     # If response_shape is provided, modify the prompt to request structured output
     response_shape = state.get("response_shape")
     if response_shape:
+        logger.debug("[RAG] Using response_shape: %s", response_shape)
         system_msg += f"""
 
 IMPORTANT: Return your answer as a JSON object matching this schema:
@@ -76,12 +88,14 @@ IMPORTANT: Return your answer as a JSON object matching this schema:
 Return ONLY the JSON object, no other text."""
 
     response = await llm.ainvoke([HumanMessage(content=system_msg)] + messages)
+    logger.info("[RAG] Response generated: %d chars", len(response.content) if hasattr(response, 'content') else 0)
 
     # Store token usage in state for metrics tracking
     new_state = {**state, "messages": [AIMessage(content=response.content)]}
     token_usage = token_callback.get_usage()
     new_state["token_usage"] = token_usage
     new_state["token_usage"]["has_actual_data"] = token_callback.has_data
+    logger.debug("[RAG] Token usage: %s", token_usage)
 
     # Record metrics
     try:
@@ -89,6 +103,7 @@ Return ONLY the JSON object, no other text."""
 
         tracker = get_tracker()
         usage = token_callback.get_usage()
+        logger.debug("[RAG] Recording metrics...")
 
         # Convert to the format metrics.py expects
         actual_tokens = {
@@ -100,6 +115,7 @@ Return ONLY the JSON object, no other text."""
 
         # Get original query from state
         query_text = state.get("query_text", "unknown")
+        logger.debug("[RAG] Query: '%s'...", query_text[:60])
 
         tracker.record_query(
             query_type="rag",
@@ -107,14 +123,16 @@ Return ONLY the JSON object, no other text."""
             actual_tokens=actual_tokens if token_callback.has_data else None,
         )
         new_state["metrics_recorded"] = True
+        logger.info("[RAG] Metrics recorded successfully")
     except Exception as e:
-        print(f"[RAG Workflow] Warning: Failed to record metrics: {e}")
+        logger.warning("[RAG Workflow] Failed to record metrics: %s", e)
         new_state["metrics_recorded"] = False
 
     return new_state
 
 
 def create_graph():
+    logger.info("[RAG] Creating RAG workflow graph...")
     workflow = StateGraph(AgentState)
 
     workflow.add_node("retrieve", retrieve)
@@ -124,7 +142,9 @@ def create_graph():
     workflow.add_edge("retrieve", "generate")
     workflow.add_edge("generate", END)
 
-    return workflow.compile(checkpointer=MemorySaver())
+    graph = workflow.compile(checkpointer=MemorySaver())
+    logger.info("[RAG] Graph compiled successfully")
+    return graph
 
 
 graph = create_graph()

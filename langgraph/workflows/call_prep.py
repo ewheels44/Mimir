@@ -8,6 +8,7 @@ Usage:
     python langgraph/cli.py prep "payment integration" --customer acme-corp
 """
 
+import logging
 from typing import Annotated, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -18,6 +19,8 @@ from langgraph.graph.message import add_messages
 from src.mimir.token_callback import create_token_callback
 
 from .utils import create_llm, detect_project_root, get_mcp_client
+
+logger = logging.getLogger(__name__)
 
 
 class PrepState(TypedDict):
@@ -31,17 +34,20 @@ class PrepState(TypedDict):
 async def search_codebase(state: PrepState) -> PrepState:
     """Search the knowledge base for code relevant to the topic."""
     topic = state["topic"]
-    state.get("customer", "")
+    customer = state.get("customer", "")
+    logger.info("[CALL_PREP] Searching codebase for topic: '%s' (customer: %s)", topic, customer)
 
     project_root = detect_project_root()
     client = get_mcp_client(project_root)
     tools = await client.get_tools()
+    logger.debug("[CALL_PREP] MCP client tools: %s", [t.name for t in tools])
 
     context_items = []
 
     # Search for the topic
     search_tool = next((t for t in tools if t.name == "search"), None)
     if search_tool:
+        logger.debug("[CALL_PREP] Running search tool with top_k=8")
         results = await search_tool.ainvoke({"query": topic, "top_k": 8})
         if isinstance(results, list):
             for item in results:
@@ -51,26 +57,35 @@ async def search_codebase(state: PrepState) -> PrepState:
                     context_items.append(str(item))
         else:
             context_items.append(str(results))
+        logger.info("[CALL_PREP] Search returned %d context items", len(context_items))
+    else:
+        logger.warning("[CALL_PREP] No search tool found!")
 
     # Also search for integration patterns
     query_tool = next((t for t in tools if t.name == "query"), None)
     if query_tool:
         integration_query = f"How to integrate {topic} in this codebase? What are the key files and patterns?"
+        logger.debug("[CALL_PREP] Running query tool: '%s'", integration_query)
         result = await query_tool.ainvoke({"question": integration_query})
         if result:
             context_items.append(f"Integration analysis:\n{result}")
+            logger.debug("[CALL_PREP] Query tool returned result")
 
+    logger.info("[CALL_PREP] Total context items collected: %d", len(context_items))
     return {**state, "context": context_items}
 
 
 async def generate_briefing(state: PrepState) -> PrepState:
     """Generate a structured call briefing from the context."""
+    logger.info("[CALL_PREP] Generating call briefing...")
     token_callback = create_token_callback()
     llm = create_llm(temperature=0, callbacks=[token_callback])
 
     topic = state["topic"]
     customer = state.get("customer", "the customer")
     context = "\n\n---\n\n".join(state.get("context", []))
+    logger.debug("[CALL_PREP] Topic: '%s', Customer: %s, Context: %d chars", 
+                 topic, customer, len(context))
 
     prompt = f"""You are an FDE (Forward Deployed Engineer) preparing for a customer call.
 
@@ -109,7 +124,10 @@ What should you check during the call? What demos or proofs of concept would be 
 
 Be specific. Reference actual file names and function names from the context. This briefing should let you walk into the call confident and prepared."""
 
+    logger.debug("[CALL_PREP] Prompt length: %d chars", len(prompt))
     response = await llm.ainvoke([HumanMessage(content=prompt)])
+    logger.info("[CALL_PREP] Briefing generated: %d chars", 
+                 len(response.content) if hasattr(response, 'content') else 0)
 
     return {
         **state,
@@ -119,6 +137,7 @@ Be specific. Reference actual file names and function names from the context. Th
 
 
 def create_graph():
+    logger.info("[CALL_PREP] Creating call prep workflow graph...")
     workflow = StateGraph(PrepState)
 
     workflow.add_node("search", search_codebase)
@@ -128,7 +147,9 @@ def create_graph():
     workflow.add_edge("search", "brief")
     workflow.add_edge("brief", END)
 
-    return workflow.compile(checkpointer=MemorySaver())
+    graph = workflow.compile(checkpointer=MemorySaver())
+    logger.info("[CALL_PREP] Graph compiled successfully")
+    return graph
 
 
 graph = create_graph()

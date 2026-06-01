@@ -3,6 +3,12 @@ import argparse
 import asyncio
 import sys
 import time
+from pathlib import Path
+
+# Add project root to path so 'from src.mimir...' works
+PROJECT_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(1, str(PROJECT_ROOT / "src"))
 
 from src.mimir.logging_config import setup_logging
 

@@ -146,19 +146,31 @@ class MimirConfig:
             project_root: Project root directory. Auto-detected if None.
             mimir_root: Where Mimir is installed. Auto-detected if None.
         """
+        logger.info("[CONFIG] Loading configuration...")
+        
         # Detect roots
         actual_project_root = project_root or _detect_project_root()
         actual_mimir_root = mimir_root or _detect_mimir_root()
+        logger.debug("[CONFIG] Project root: %s", actual_project_root)
+        logger.debug("[CONFIG] Mimir root: %s", actual_mimir_root)
 
         # Load project config file
         file_config = _load_config_file(actual_project_root)
+        logger.debug("[CONFIG] Config file loaded: %d keys", len(file_config))
 
         # Resolve API key
+        logger.debug("[CONFIG] Resolving API key...")
         api_key, api_base = _resolve_api_key()
+        if api_key:
+            logger.info("[CONFIG] API key found (ends with: ...%s)", api_key[-4:] if len(api_key) > 4 else "***")
+        else:
+            logger.warning("[CONFIG] No API key found!")
         if api_key and not api_base:
             api_base = _env_or_default("OPENAI_BASE_URL", "api_base_url")
+            logger.debug("[CONFIG] API base (from env/config): %s", api_base)
 
         # Resolve directories
+        logger.debug("[CONFIG] Resolving directories...")
         docs_dir = _resolve_dir(
             actual_project_root,
             env_var="DOCS_DIR",
@@ -173,6 +185,8 @@ class MimirConfig:
             default_rel=DEFAULTS["knowledge_dir"],
             file_config=file_config,
         )
+        logger.info("[CONFIG] docs_dir: %s", docs_dir)
+        logger.info("[CONFIG] knowledge_dir: %s", knowledge_dir)
 
         # Code dirs
         code_dirs = _resolve_code_dirs(actual_project_root, file_config)
@@ -384,12 +398,17 @@ def _detect_mimir_root() -> Path:
 def _load_config_file(project_root: Path) -> dict:
     """Load .mimir/config.json if it exists."""
     config_path = project_root / ".mimir" / "config.json"
+    logger.debug("[CONFIG] Checking for config file: %s", config_path)
     if config_path.exists():
         try:
             with open(config_path) as f:
-                return json.load(f)
+                config = json.load(f)
+            logger.info("[CONFIG] Loaded config file: %s (%d keys)", config_path, len(config))
+            return config
         except (OSError, json.JSONDecodeError) as e:
-            logger.warning("Failed to load config file %s: %s", config_path, e)
+            logger.warning("[CONFIG] Failed to load config file %s: %s", config_path, e)
+    else:
+        logger.debug("[CONFIG] No config file found at %s", config_path)
     return {}
 
 
@@ -399,24 +418,33 @@ def _resolve_api_key() -> tuple[str, Optional[str]]:
     Returns (api_key, api_base) tuple.
     """
     # Check env vars first
+    logger.debug("[CONFIG] Checking env vars: OPENROUTER_API_KEY, OPENAI_API_KEY")
     api_key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get(
         "OPENAI_API_KEY", ""
     )
     if api_key:
+        source = "OPENROUTER_API_KEY" if os.environ.get("OPENROUTER_API_KEY") else "OPENAI_API_KEY"
+        logger.info("[CONFIG] API key found from env var: %s (ends with ...%s)", 
+                     source, api_key[-4:] if len(api_key) > 4 else "***")
         return api_key, os.environ.get("OPENAI_BASE_URL")
-
+    
+    logger.debug("[CONFIG] No API key in env vars, checking auth files...")
     # Try auth files
     for auth_path in _AUTH_FILE_PATHS:
+        logger.debug("[CONFIG] Checking auth file: %s (exists=%s)", auth_path, auth_path.exists())
         if auth_path.exists():
             try:
                 auth_data = json.loads(auth_path.read_text())
                 if openrouter := auth_data.get("openrouter"):
                     key = openrouter.get("key", "")
                     if key:
+                        logger.info("[CONFIG] API key found in auth file: %s (ends with ...%s)",
+                                     auth_path, key[-4:] if len(key) > 4 else "***")
                         return key, "https://openrouter.ai/api/v1"
             except (json.JSONDecodeError, KeyError):
                 continue
 
+    logger.warning("[CONFIG] [DECISION] No API key found anywhere!")
     return "", None
 
 

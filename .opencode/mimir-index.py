@@ -29,6 +29,10 @@ MIMIR_DIR = Path.home() / "Documents" / "Mimir"
 sys.path.insert(1, str(MIMIR_DIR))
 sys.path.insert(0, str(MIMIR_DIR / "src"))
 
+# Setup logging (must be after sys.path manipulation)
+from src.mimir.logging_config import setup_logging
+setup_logging()
+
 
 def setup_embeddings(config: dict) -> None:
     """Configure LlamaIndex embeddings to use OpenRouter."""

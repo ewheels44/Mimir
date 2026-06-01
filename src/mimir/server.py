@@ -138,13 +138,17 @@ class KnowledgeServer:
 
     def search(self, query: str, top_k: int = 5) -> str:
         start_time = time.time()
+        logger.info("[SERVER] [SEARCH] Starting search for query: '%s' (top_k=%d)", query[:80], top_k)
+        
         index = self.get_index()
         if index is None:
+            logger.warning("[SERVER] [SEARCH] No knowledge base found")
             return "No knowledge base found. Run with --index to create one."
 
         try:
             from llama_index.retrievers.bm25 import BM25Retriever
 
+            logger.debug("[SERVER] [SEARCH] Using hybrid search (vector + BM25)")
             vector_retriever = index.as_retriever(similarity_top_k=top_k * 2)
             bm25_retriever = BM25Retriever.from_defaults(
                 index=index, similarity_top_k=top_k
@@ -152,6 +156,10 @@ class KnowledgeServer:
 
             vector_nodes = vector_retriever.retrieve(query)
             bm25_nodes = bm25_retriever.retrieve(query)
+            logger.debug(
+                "[SERVER] [SEARCH] Retrieved %d vector nodes, %d BM25 nodes",
+                len(vector_nodes), len(bm25_nodes)
+            )
 
             seen_ids: set[str] = set()
             nodes = []
@@ -162,8 +170,10 @@ class KnowledgeServer:
                     nodes.append(node)
                 if len(nodes) >= top_k:
                     break
+            logger.debug("[SERVER] [SEARCH] After dedup: %d unique nodes (target: %d)", len(nodes), top_k)
         except ImportError:
             try:
+                logger.debug("[SERVER] [SEARCH] BM25 not available, using vector-only search")
                 nodes = index.as_retriever(similarity_top_k=top_k).retrieve(query)
             except Exception as e:
                 return self._format_search_error(e, "vector retriever")
@@ -180,10 +190,12 @@ class KnowledgeServer:
                 docs_retrieved=len(nodes),
                 duration_ms=duration_ms,
             )
+            logger.debug("[SERVER] [SEARCH] Query tracked (%dms)", duration_ms)
         except Exception:
             pass
 
         if not nodes:
+            logger.info("[SERVER] [SEARCH] No relevant documents found")
             return "No relevant documents found."
 
         results = []
@@ -198,6 +210,7 @@ class KnowledgeServer:
             import json as _json
             graph_path = self.project_root / ".knowledge" / "code_relationships.json"
             if graph_path.exists():
+                logger.debug("[SERVER] [SEARCH] Enhancing with knowledge graph context...")
                 with open(graph_path) as f:
                     kg = _json.load(f)
                 if kg and kg.get("relationships"):
@@ -209,6 +222,7 @@ class KnowledgeServer:
 
                     if matching_entities:
                         top_entity = matching_entities[0]
+                        logger.debug("[SERVER] [SEARCH] Found matching entity: %s", top_entity)
                         neighbors = self._get_graph_neighbors(kg, top_entity, depth=1)
                         if neighbors:
                             results.append("\n\n[Knowledge Graph Context]")
@@ -218,6 +232,7 @@ class KnowledgeServer:
         except Exception:
             pass
 
+        logger.info("[SERVER] [SEARCH] Returning %d results (%dms)", len(results), duration_ms)
         return "\n\n".join(results)
 
     def _get_graph_neighbors(self, kg: dict, node_id: str, depth: int = 1) -> list[str]:

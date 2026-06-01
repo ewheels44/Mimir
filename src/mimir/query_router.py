@@ -115,32 +115,54 @@ def _find_matching_artifact(task: str, project_root: Optional[Path] = None) -> O
     from mimir.artifacts import load_manifest, get_artifact
     
     task_lower = task.lower()
+    logger.debug("[ROUTER] [ARTIFACT] Checking task '%s' for artifact match", task[:60])
     
     best_match = None
     best_score = 0
     
     # First check static keyword mapping (fast path, no I/O)
+    logger.debug("[ROUTER] [ARTIFACT] Scanning %d static artifact keyword sets", len(ARTIFACT_KEYWORDS))
     for artifact_id, keywords in ARTIFACT_KEYWORDS.items():
-        score = sum(1 for kw in keywords if kw in task_lower)
+        matching_keywords = [kw for kw in keywords if kw in task_lower]
+        score = len(matching_keywords)
+        if score > 0:
+            logger.debug(
+                "[ROUTER] [ARTIFACT] '%s' matched keywords: %s (score=%d)",
+                artifact_id, matching_keywords, score
+            )
         if score > best_score:
             best_score = score
             best_match = artifact_id
     
     # If we got a good match from static mapping, use it
     if best_score > 0:
-        logger.info("[ROUTER] Task matches artifact '%s' (score=%d, static)", best_match, best_score)
+        logger.info(
+            "[ROUTER] [ARTIFACT] Task matches artifact '%s' (score=%d, static keywords matched: %d)",
+            best_match, best_score, best_score
+        )
+        logger.info("[ROUTER] [DECISION] Using artifact '%s' - zero token cost, instant response", best_match)
         return best_match
+    
+    logger.debug("[ROUTER] [ARTIFACT] No static match found, trying dynamic keywords from artifact content")
     
     # Fall back to dynamic keywords from artifact content
     try:
         manifest = load_manifest(project_root)
+        artifact_count = len(manifest.get("artifacts", {}))
+        logger.debug("[ROUTER] [ARTIFACT] Checking %d artifacts for dynamic keywords", artifact_count)
         for artifact_id in manifest.get("artifacts", {}):
             content = get_artifact(artifact_id, project_root)
             if content:
                 keywords = content.get("keywords", [])
                 if not keywords:
+                    logger.debug("[ROUTER] [ARTIFACT] '%s' has no keywords", artifact_id)
                     continue
                 score = sum(1 for kw in keywords if kw in task_lower)
+                if score > 0:
+                    logger.debug(
+                        "[ROUTER] [ARTIFACT] '%s' dynamic match score=%d (keywords: %s)",
+                        artifact_id, score, [kw for kw in keywords if kw in task_lower]
+                    )
                 if score > best_score:
                     best_score = score
                     best_match = artifact_id
@@ -148,24 +170,37 @@ def _find_matching_artifact(task: str, project_root: Optional[Path] = None) -> O
         logger.warning("[ROUTER] Failed to load dynamic artifact keywords: %s", e)
     
     if best_score > 0:
-        logger.info("[ROUTER] Task matches artifact '%s' (score=%d, dynamic)", best_match, best_score)
+        logger.info(
+            "[ROUTER] [ARTIFACT] Task matches artifact '%s' (score=%d, dynamic keywords matched)",
+            best_match, best_score
+        )
+        logger.info("[ROUTER] [DECISION] Using artifact '%s' - zero token cost, instant response", best_match)
+    else:
+        logger.debug("[ROUTER] [ARTIFACT] No artifact match found for task")
+    
     return best_match
 
 
 def _try_artifact(artifact_id: str, project_root: Path) -> Optional[RoutingResult]:
     """Try to retrieve and return an artifact. Returns RoutingResult if found and fresh."""
+    logger.debug("[ROUTER] [ARTIFACT] Attempting to load artifact '%s'", artifact_id)
     try:
         from mimir.artifacts import get_artifact
         
         content = get_artifact(artifact_id, project_root)
         if content is None:
-            logger.info("[ROUTER] Artifact '%s' not found", artifact_id)
+            logger.info("[ROUTER] [ARTIFACT] Artifact '%s' not found on disk", artifact_id)
             return None
         
         # Check if stale
         metadata = content.get("_metadata", {})
-        if metadata.get("stale"):
-            logger.info("[ROUTER] Artifact '%s' is stale, skipping", artifact_id)
+        is_stale = metadata.get("stale", False)
+        if is_stale:
+            logger.info(
+                "[ROUTER] [ARTIFACT] Artifact '%s' is STALE (metadata.stale=True), skipping. "
+                "Reason: %s",
+                artifact_id, metadata.get("stale_reason", "unknown")
+            )
             return None
         
         elapsed = 1  # Artifacts are essentially instant
@@ -179,11 +214,14 @@ def _try_artifact(artifact_id: str, project_root: Path) -> Optional[RoutingResul
             elapsed_ms=elapsed,
             status="ok",
         )
-        logger.info("[ROUTER] Served artifact '%s' (instant, zero tokens)", artifact_id)
+        logger.info(
+            "[ROUTER] [DECISION] Served artifact '%s' (instant, zero tokens, %d chars)",
+            artifact_id, len(context)
+        )
         return result
         
     except Exception as e:
-        logger.warning("[ROUTER] Artifact '%s' retrieval failed: %s", artifact_id, e)
+        logger.warning("[ROUTER] [ARTIFACT] Artifact '%s' retrieval failed: %s", artifact_id, e)
         return None
 
 logger = logging.getLogger(__name__)
@@ -311,7 +349,19 @@ class _SemanticCache:
 
     @staticmethod
     def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-        """Compute cosine similarity between two vectors."""
+        """Compute cosine similarity between two vectors.
+        
+        Returns 0.0 if dimensions don't match (embedding model changed).
+        """
+        # Guard against dimension mismatch (e.g. model changed)
+        if a.shape != b.shape:
+            logger.warning(
+                "[CACHE] Embedding dimension mismatch: %s vs %s. "
+                "Model may have changed. Skipping cache entry.",
+                a.shape, b.shape,
+            )
+            return 0.0
+        
         norm_a = np.linalg.norm(a)
         norm_b = np.linalg.norm(b)
         if norm_a < 1e-10 or norm_b < 1e-10:
@@ -337,12 +387,21 @@ class _SemanticCache:
 
         best_match = None
         best_sim = 0.0
+        stale_entries = []
         for entry in self._store:
             ts, qtext, qemb, result = entry
             if qemb is None:
                 continue
             if time.time() - ts > self._ttl:
-                self._store.remove(entry)
+                stale_entries.append(entry)
+                continue
+            # Check for dimension mismatch (model changed)
+            if qemb.shape != query_emb.shape:
+                stale_entries.append(entry)  # Remove stale cache entry
+                logger.info(
+                    "[CACHE] Removing stale cache entry (dimension mismatch: "
+                    "%s vs %s)", qemb.shape, query_emb.shape
+                )
                 continue
             sim = self._cosine_similarity(query_emb, qemb)
             if sim > best_sim and sim >= self._threshold:
@@ -738,16 +797,34 @@ def _classify_query(query: str) -> tuple[str, float]:
         (label, confidence) tuple where label is 'structural' or 'semantic'
         and confidence is 0.0-1.0.
     """
+    logger.debug("[ROUTER] [CLASSIFY] Starting classification for query: '%s'", query[:80])
+    
     # Normalize query for better classification
     norm_query = normalize_query(query)
+    if norm_query != query:
+        logger.debug("[ROUTER] [CLASSIFY] Normalized query: '%s' -> '%s'", query[:60], norm_query[:60])
 
     # 1. Quick keyword check with confidence
+    logger.debug("[ROUTER] [CLASSIFY] Step 1: Running keyword classification")
     label, confidence = _keyword_confidence(norm_query)
+    logger.debug(
+        "[ROUTER] [CLASSIFY] Keyword result: label='%s', confidence=%.2f",
+        label, confidence
+    )
 
     # If high confidence from keywords alone, return early
     if confidence >= 0.75:
-        logger.debug("[ROUTER] Keyword classification: %s (confidence=%.2f)", label, confidence)
+        logger.info(
+            "[ROUTER] [DECISION] Using keyword classification: '%s' (confidence=%.2f >= 0.75 threshold). "
+            "Skipping neural classifier.",
+            label, confidence
+        )
         return label, confidence
+
+    logger.debug(
+        "[ROUTER] [CLASSIFY] Low confidence (%.2f < 0.75), trying neural classifier",
+        confidence
+    )
 
     # 2. Try neural classifier for uncertain cases
     if confidence < 0.75:
@@ -756,21 +833,39 @@ def _classify_query(query: str) -> tuple[str, float]:
                 classify_query as _nn_classify,
             )
 
+            logger.debug("[ROUTER] [CLASSIFY] Step 2: Running neural classifier")
             nn_label = _nn_classify(norm_query, use_llm_fallback=False)
             # Neural classifier returns label; we assign moderate confidence
             nn_confidence = 0.70 if nn_label == label else 0.60
-            logger.info("[ROUTER] Neural classified as: %s", nn_label)
+            logger.info(
+                "[ROUTER] [CLASSIFY] Neural classifier result: label='%s', assigned_confidence=%.2f",
+                nn_label, nn_confidence
+            )
+            
             # If neural agrees with keyword, boost confidence
             if nn_label == label:
                 confidence = max(confidence, nn_confidence)
+                logger.info(
+                    "[ROUTER] [CLASSIFY] Neural AGREES with keyword -> boosting confidence to %.2f",
+                    confidence
+                )
             else:
                 # Neural disagrees — trust neural slightly more
+                logger.info(
+                    "[ROUTER] [CLASSIFY] Neural DISAGREES: keyword='%s'(%.2f) vs neural='%s'(%.2f). "
+                    "Using neural result.",
+                    label, confidence, nn_label, nn_confidence
+                )
                 label = nn_label
                 confidence = nn_confidence
             return label, confidence
-        except Exception:
-            logger.debug("[ROUTER] Neural classifier unavailable, using keyword confidence")
+        except Exception as e:
+            logger.debug("[ROUTER] [CLASSIFY] Neural classifier unavailable: %s. Using keyword confidence.", e)
 
+    logger.debug(
+        "[ROUTER] [CLASSIFY] Final classification: label='%s', confidence=%.2f",
+        label, confidence
+    )
     return label, confidence
 
 
@@ -929,29 +1024,48 @@ def route_task(
     Returns:
         RoutingResult with context ready for prompt injection
     """
+    logger.info("[ROUTER] [START] ========== NEW QUERY ==========")
+    logger.info("[ROUTER] [INPUT] Query: '%s'", task[:100])
+    
     from mimir.config import reset_config
 
     reset_config()
     config = get_config()
     rc = RouterConfig.from_mimir_config(config)
 
+    logger.debug("[ROUTER] [CONFIG] Router enabled: %s", rc.enabled)
+    logger.debug("[ROUTER] [CONFIG] Neural classifier enabled: %s", rc.neural_classifier_enabled)
+    logger.debug("[ROUTER] [CONFIG] Hybrid confidence range: [%.2f, %.2f]",
+                 rc.hybrid_confidence_min, rc.hybrid_confidence_max)
+    logger.debug("[ROUTER] [CONFIG] Top-k: %d, Max context tokens: %d",
+                 rc.top_k, rc.max_context_tokens)
+
     if not rc.enabled:
+        logger.warning("[ROUTER] [DECISION] Router is DISABLED in config")
         return RoutingResult(success=False, error="Router disabled", status="disabled")
 
     project_root = project_root or _detect_project_root()
     k = top_k or rc.top_k
+    logger.info("[ROUTER] [CONTEXT] Project root: %s", project_root)
+    logger.info("[ROUTER] [CONTEXT] Top-k: %d", k)
 
     # Apply query normalization (improves downstream cache + retrieval)
     if rc.query_normalization_enabled:
         task_normalized = normalize_query(task)
+        if task_normalized != task:
+            logger.info("[ROUTER] [NORMALIZE] '%s' -> '%s'", task[:60], task_normalized[:60])
+        else:
+            logger.debug("[ROUTER] [NORMALIZE] Query unchanged after normalization")
     else:
         task_normalized = task
+        logger.debug("[ROUTER] [NORMALIZE] Normalization DISABLED in config")
 
     # Per-project singleton circuit breaker + cache (stored on function object)
     if (
         not hasattr(route_task, "_circuit")
         or getattr(route_task, "_cache_root", None) != project_root
     ):
+        logger.info("[ROUTER] [INIT] Initializing circuit breaker and cache for project: %s", project_root)
         route_task._circuit = _CircuitBreakerState()  # type: ignore
         route_task._cache = _SemanticCache(  # type: ignore
             maxsize=rc.cache_maxsize,
@@ -959,28 +1073,49 @@ def route_task(
             similarity_threshold=rc.cache_similarity_threshold,
         )
         route_task._cache_root = project_root  # type: ignore
+        logger.debug("[ROUTER] [INIT] Cache maxsize=%d, TTL=%ds, similarity_threshold=%.2f",
+                     rc.cache_maxsize, rc.cache_ttl_seconds, rc.cache_similarity_threshold)
 
     circuit = route_task._circuit  # type: ignore
     cache = route_task._cache  # type: ignore
 
+    # Check circuit breaker state
     if circuit.check(rc.circuit_breaker_reset_seconds):
+        logger.warning(
+            "[ROUTER] [CIRCUIT] Circuit is OPEN (failures=%d, threshold=%d). Blocking request.",
+            circuit.failure_count, rc.circuit_breaker_threshold
+        )
         return RoutingResult(
             success=False, circuit_open=True,
             error="Circuit breaker open", status="circuit_open"
         )
+    logger.debug("[ROUTER] [CIRCUIT] Circuit is CLOSED (failures=%d, threshold=%d)",
+                 circuit.failure_count, rc.circuit_breaker_threshold)
 
     # ─── STEP 1: Try pre-compiled artifact first (instant, zero token cost) ───
+    logger.info("[ROUTER] [STEP 1] Checking for pre-compiled artifacts...")
     artifact_id = _find_matching_artifact(task, project_root)
     if artifact_id:
+        logger.info("[ROUTER] [STEP 1] Artifact '%s' matched, attempting to load...", artifact_id)
         artifact_result = _try_artifact(artifact_id, project_root)
         if artifact_result:
+            logger.info("[ROUTER] [STEP 1] Artifact loaded successfully, caching result")
             cache.put(task_normalized, k, _to_shim(artifact_result))
+            logger.info("[ROUTER] [SUCCESS] ========== RETURNING ARTIFACT ==========")
             return artifact_result
+        else:
+            logger.info("[ROUTER] [STEP 1] Artifact found but failed to load (stale or missing)")
 
     # ─── STEP 2: Semantic cache check ───
+    logger.info("[ROUTER] [STEP 2] Checking semantic cache (similarity_threshold=%.2f)...",
+                rc.cache_similarity_threshold)
     cached = cache.get(task_normalized, k)
     if cached is not None and hasattr(cached, "success"):
-        logger.info("[ROUTER] Semantic cache hit: %s", task[:50])
+        logger.info(
+            "[ROUTER] [DECISION] Semantic CACHE HIT for query: '%s' (zero token cost!)",
+            task[:50]
+        )
+        logger.info("[ROUTER] [SUCCESS] ========== RETURNING CACHED RESULT ==========")
         return RoutingResult(
             success=cached.success,
             context=cached.context,
@@ -993,19 +1128,31 @@ def route_task(
             routed_to=cached.routed_to,
         )
 
+    logger.info("[ROUTER] [STEP 2] Cache MISS - proceeding to classification")
+
     # ─── STEP 3: Classify with confidence ───
+    logger.info("[ROUTER] [STEP 3] Classifying query...")
     start = time.time()
     query_type, confidence = _classify_query(task) if rc.neural_classifier_enabled else ("semantic", 0.5)
+    classify_time = int((time.time() - start) * 1000)
+    
     logger.info(
-        "[ROUTER] Query classified as: %s (confidence=%.2f)", query_type, confidence
+        "[ROUTER] [DECISION] Query classified as: type='%s', confidence=%.2f (took %dms)",
+        query_type, confidence, classify_time
     )
 
     routed_to = "none"
 
     # ─── STEP 4: Route based on classification + confidence ───
+    logger.info("[ROUTER] [STEP 4] Routing based on classification...")
+    
     # Hybrid routing: if confidence is in the mid-range, try BOTH graph and vector
     if query_type == "structural" and confidence >= rc.hybrid_confidence_max:
         # High confidence structural → try graph only
+        logger.info(
+            "[ROUTER] [ROUTING] High confidence structural (%.2f >= %.2f) -> trying GRAPH ONLY",
+            confidence, rc.hybrid_confidence_max
+        )
         graph_context = _search_graph(task, project_root)
         if graph_context:
             elapsed = int((time.time() - start) * 1000)
@@ -1020,18 +1167,28 @@ def route_task(
             )
             circuit.record_success()
             cache.put(task_normalized, k, _to_shim(result))
-            logger.info("[ROUTER] Graph path found (%dms)", elapsed)
+            logger.info("[ROUTER] [SUCCESS] Graph path found (%dms) -> returning graph result", elapsed)
+            logger.info("[ROUTER] [SUCCESS] ========== RETURNING GRAPH RESULT ==========")
             return result
-        logger.info("[ROUTER] Graph search empty, falling to vector")
+        logger.info("[ROUTER] [ROUTING] Graph search returned empty, falling back to vector")
 
     elif query_type == "structural" and rc.hybrid_confidence_min <= confidence < rc.hybrid_confidence_max:
         # Mid-confidence structural → try BOTH graph and vector (hybrid)
-        logger.info("[ROUTER] Hybrid routing: mid-confidence structural query")
+        logger.info(
+            "[ROUTER] [ROUTING] Mid-confidence structural (%.2f in [%.2f, %.2f]) -> HYBRID routing",
+            confidence, rc.hybrid_confidence_min, rc.hybrid_confidence_max
+        )
+        logger.info("[ROUTER] [HYBRID] Searching graph...")
         graph_context = _search_graph(task, project_root)
+        logger.info("[ROUTER] [HYBRID] Searching vector store (top_k=%d)...", k)
         vector_results = _search_raw(task, project_root, k)
 
         if graph_context and vector_results:
             # Merge: graph context first, then vector results for additional context
+            logger.info(
+                "[ROUTER] [HYBRID] Merging graph result + %d vector results",
+                len(vector_results)
+            )
             max_chars = rc.max_context_tokens * 4 // max(k, 1) // 2
             chunks = [f"[Graph Context]\n{graph_context}"]
 
@@ -1039,6 +1196,7 @@ def route_task(
                 src = r.source
                 if _is_sensitive(r.text):
                     text = _filter_sensitive(r.text)
+                    logger.debug("[ROUTER] [HYBRID] Filtered sensitive content from %s", src)
                 else:
                     text = r.text
                 if len(text) > max_chars:
@@ -1059,11 +1217,13 @@ def route_task(
             )
             circuit.record_success()
             cache.put(task_normalized, k, _to_shim(result))
-            logger.info("[ROUTER] Hybrid result (%dms)", elapsed)
+            logger.info("[ROUTER] [SUCCESS] Hybrid result (%dms, %d chars)", elapsed, len(context))
+            logger.info("[ROUTER] [SUCCESS] ========== RETURNING HYBRID RESULT ==========")
             return result
 
         elif graph_context:
             # Graph only (vector returned nothing)
+            logger.info("[ROUTER] [HYBRID] Graph found but no vector results -> returning graph only")
             elapsed = int((time.time() - start) * 1000)
             result = RoutingResult(
                 success=True,
@@ -1079,16 +1239,23 @@ def route_task(
             return result
 
         # Graph failed, fall through to vector search below
-        logger.info("[ROUTER] Graph search empty in hybrid, using vector")
+        logger.info("[ROUTER] [HYBRID] Graph search empty in hybrid, using pure vector")
 
     # Vector search (also covers semantic queries and structural fallback)
+    logger.info("[ROUTER] [ROUTING] Using VECTOR search (query_type=%s, confidence=%.2f)",
+                 query_type, confidence)
     try:
+        logger.info("[ROUTER] [VECTOR] Searching vector store (top_k=%d)...", k)
         results = _search_raw(task, project_root, k)
         elapsed = int((time.time() - start) * 1000)
 
         if not results:
             knowledge_dir = project_root / ".knowledge" / "llamaindex"
             has_index = (knowledge_dir / "index_store.json").exists()
+            logger.warning(
+                "[ROUTER] [VECTOR] No results found (has_index=%s, index_path=%s)",
+                has_index, knowledge_dir
+            )
             result = RoutingResult(
                 success=has_index,
                 query_type=query_type,
@@ -1099,12 +1266,14 @@ def route_task(
                 error="No knowledge base index found." if not has_index else None,
             )
         else:
+            logger.info("[ROUTER] [VECTOR] Found %d results", len(results))
             max_chars = rc.max_context_tokens * 4 // max(k, 1) // 2
             chunks = []
             for r in results:
                 src = r.source
                 if _is_sensitive(r.text):
                     text = _filter_sensitive(r.text)
+                    logger.debug("[ROUTER] [VECTOR] Filtered sensitive content from %s", src)
                 else:
                     text = r.text
                 if len(text) > max_chars:
@@ -1125,12 +1294,14 @@ def route_task(
 
         circuit.record_success()
         cache.put(task_normalized, k, _to_shim(result))
+        logger.info("[ROUTER] [SUCCESS] Vector result (%dms, %d chars)", elapsed, len(context) if results else 0)
+        logger.info("[ROUTER] [SUCCESS] ========== RETURNING VECTOR RESULT ==========")
         return result
 
     except Exception as e:
         elapsed = int((time.time() - start) * 1000)
         circuit.record_failure(rc.circuit_breaker_threshold, rc.circuit_breaker_reset_seconds)
-        logger.error("[ROUTER] Search failed: %s", e)
+        logger.error("[ROUTER] [ERROR] Search failed after %dms: %s", elapsed, e)
         return RoutingResult(
             success=False, error=str(e), elapsed_ms=elapsed, status="error"
         )

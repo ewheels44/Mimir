@@ -15,6 +15,8 @@ from typing import Optional, Tuple
 
 import numpy as np
 
+logger = logging.getLogger(__name__)
+
 # ─── Training Data Generation ────────────────────────────────────────────
 
 # Structural keywords from the existing implementation
@@ -166,15 +168,23 @@ class SimpleQueryClassifier:
     
     def predict_with_confidence(self, query: str) -> Tuple[str, float]:
         """Classify with confidence score."""
+        logger.debug("[CLASSIFIER] Extracting features for query: '%s'", query[:60])
         features = extract_features(query, STRUCTURAL_KEYWORDS)
+        logger.debug("[CLASSIFIER] Feature vector (10 dims): %s", 
+                     [f"{x:.3f}" for x in features[:10]])
         probs = self.predict_proba(features)
         label = "structural" if probs[0] > probs[1] else "semantic"
         confidence = max(probs)
+        logger.debug(
+            "[CLASSIFIER] Prediction: probs=[%.4f, %.4f], label='%s', confidence=%.4f",
+            probs[0], probs[1], label, confidence
+        )
         return label, confidence
     
     def train(self, epochs: int = 100, learning_rate: float = 0.1):
         """Train the classifier on the built-in training data."""
-        print(f"Training SimpleQueryClassifier for {epochs} epochs...")
+        logger.info("[CLASSIFIER] [TRAINING] Starting training for %d epochs (lr=%.3f)...",
+                     epochs, learning_rate)
         
         # Prepare training data
         X = []
@@ -187,6 +197,10 @@ class SimpleQueryClassifier:
         
         X = np.array(X)
         y = np.array(y)
+        logger.info("[CLASSIFIER] [TRAINING] Loaded %d training examples (structural=%d, semantic=%d)",
+                     len(TRAINING_EXAMPLES),
+                     sum(1 for _, l in TRAINING_EXAMPLES if l == 0),
+                     sum(1 for _, l in TRAINING_EXAMPLES if l == 1))
         
         # Training loop (simple gradient descent)
         for epoch in range(epochs):
@@ -218,11 +232,12 @@ class SimpleQueryClassifier:
                 self.W1 -= learning_rate * d_W1
                 self.b1 -= learning_rate * d_b1
             
-            if epoch % 20 == 0:
-                avg_loss = total_loss / len(X)
-                print(f"  Epoch {epoch+1}/{epochs} - Loss: {avg_loss:.4f}")
+            avg_loss = total_loss / len(X)
+            if epoch % 20 == 0 or epoch == epochs - 1:
+                logger.info("[CLASSIFIER] [TRAINING] Epoch %d/%d - Loss: %.4f",
+                            epoch + 1, epochs, avg_loss)
         
-        print("Training complete!")
+        logger.info("[CLASSIFIER] [TRAINING] Training complete!")
         
         # Evaluate on training data
         correct = 0
@@ -233,7 +248,8 @@ class SimpleQueryClassifier:
                 correct += 1
         
         accuracy = correct / len(TRAINING_EXAMPLES)
-        print(f"Training accuracy: {accuracy*100:.1f}%")
+        logger.info("[CLASSIFIER] [TRAINING] Training accuracy: %.1f%% (%d/%d correct)",
+                    accuracy * 100, correct, len(TRAINING_EXAMPLES))
         
         return accuracy
 
@@ -244,6 +260,7 @@ MODEL_PATH = Path(__file__).parent / "query_classifier_model.pkl"
 
 def save_model(classifier: SimpleQueryClassifier, path: Path = MODEL_PATH):
     """Save the trained model weights to disk."""
+    logger.info("[CLASSIFIER] Saving model to %s", path)
     model_data = {
         'W1': classifier.W1,
         'b1': classifier.b1,
@@ -254,13 +271,16 @@ def save_model(classifier: SimpleQueryClassifier, path: Path = MODEL_PATH):
     }
     with open(path, 'wb') as f:
         pickle.dump(model_data, f)
-    print(f"Model saved to {path}")
+    logger.info("[CLASSIFIER] Model saved successfully (input_dim=%d, hidden_dim=%d)",
+                classifier.input_dim, classifier.hidden_dim)
 
 def load_model(path: Path = MODEL_PATH) -> Optional[SimpleQueryClassifier]:
     """Load a trained model from disk."""
     if not path.exists():
+        logger.debug("[CLASSIFIER] No saved model found at %s", path)
         return None
     try:
+        logger.info("[CLASSIFIER] Loading model from %s", path)
         with open(path, 'rb') as f:
             model_data = pickle.load(f)
         
@@ -274,9 +294,15 @@ def load_model(path: Path = MODEL_PATH) -> Optional[SimpleQueryClassifier]:
         classifier.W2 = model_data['W2']
         classifier.b2 = model_data['b2']
         
+        logger.info(
+            "[CLASSIFIER] Model loaded successfully (input_dim=%d, hidden_dim=%d, "
+            "W1_shape=%s, W2_shape=%s)",
+            classifier.input_dim, classifier.hidden_dim,
+            classifier.W1.shape, classifier.W2.shape
+        )
         return classifier
     except Exception as e:
-        print(f"Error loading model: {e}")
+        logger.error("[CLASSIFIER] Error loading model: %s", e)
         return None
 
         # ─── Cost Tracking ────────────────────────────────────────────────
@@ -288,6 +314,8 @@ _tracking_file = Path(__file__).parent / "classification_tracking.json"
 
 def track_classification(method: str, query: str, confidence: float = None):
     """Track classification method used and calculate savings."""
+    logger.debug("[CLASSIFIER] [TRACKING] Recording classification: method=%s, query='%s'",
+                 method, query[:60])
     try:
         if _tracking_file.exists():
             with open(_tracking_file, 'r') as f:
@@ -305,12 +333,15 @@ def track_classification(method: str, query: str, confidence: float = None):
         if method == "neural":
             data["neural_calls"] += 1
             saved = LLM_COST_USD - TRY_COST_USD
+            logger.debug("[CLASSIFIER] [TRACKING] Neural call: saved $%.6f", saved)
         elif method == "llm":
             data["llm_calls"] += 1
             saved = 0.0
+            logger.debug("[CLASSIFIER] [TRACKING] LLM call: no savings")
         else:
             data["keyword_calls"] += 1
             saved = LLM_COST_USD - 0.0  # Keyword is free
+            logger.debug("[CLASSIFIER] [TRACKING] Keyword call: saved $%.6f", saved)
         
         data["total_saved_usd"] += saved
         
@@ -326,14 +357,24 @@ def track_classification(method: str, query: str, confidence: float = None):
         
         with open(_tracking_file, 'w') as f:
             json.dump(data, f, indent=2)
+        
+        total_calls = data["neural_calls"] + data["llm_calls"] + data["keyword_calls"]
+        logger.info(
+            "[CLASSIFIER] [TRACKING] Stats: total=%d, neural=%d(%.1f%%), llm=%d, keyword=%d, saved=$%.4f",
+            total_calls, data["neural_calls"], 
+            (data["neural_calls"] / total_calls * 100) if total_calls > 0 else 0,
+            data["llm_calls"], data["keyword_calls"], data["total_saved_usd"]
+        )
     except Exception as e:
-        print(f"Tracking error: {e}")
+        logger.error("[CLASSIFIER] [TRACKING] Error: %s", e)
 
 
 def get_savings_report() -> dict:
     """Get a report of cost savings from using neural classifier."""
+    logger.debug("[CLASSIFIER] [TRACKING] Generating savings report...")
     try:
         if not _tracking_file.exists():
+            logger.debug("[CLASSIFIER] [TRACKING] No tracking data yet")
             return {"error": "No tracking data yet"}
         
         with open(_tracking_file, 'r') as f:
@@ -342,7 +383,7 @@ def get_savings_report() -> dict:
         total_calls = data["neural_calls"] + data["llm_calls"] + data["keyword_calls"]
         neural_pct = (data["neural_calls"] / total_calls * 100) if total_calls > 0 else 0
         
-        return {
+        report = {
             "total_queries": total_calls,
             "neural_classifications": data["neural_calls"],
             "llm_fallbacks": data["llm_calls"],
@@ -351,7 +392,14 @@ def get_savings_report() -> dict:
             "total_saved_usd": round(data["total_saved_usd"], 4),
             "estimated_annual_savings": round(data["total_saved_usd"] * (365 * 100 / max(total_calls, 1)), 2)
         }
+        
+        logger.info(
+            "[CLASSIFIER] [TRACKING] Savings report: %d queries, $%.4f saved (%.1f%% neural)",
+            report["total_queries"], report["total_saved_usd"], report["neural_usage_pct"]
+        )
+        return report
     except Exception as e:
+        logger.error("[CLASSIFIER] [TRACKING] Error generating report: %s", e)
         return {"error": str(e)}
 
 
@@ -363,24 +411,43 @@ def classify_query(query: str, use_llm_fallback: bool = True) -> str:
     Falls back to LLM if model not available (and fallback enabled).
     Falls back to keyword check if model available but uncertain.
     """
+    logger.debug("[CLASSIFIER] Classifying query: '%s'", query[:80])
+    
     # Try loading the model
+    logger.debug("[CLASSIFIER] Attempting to load neural model...")
     classifier = load_model()
     
     if classifier is None:
+        logger.info("[CLASSIFIER] [DECISION] No neural model found, using keyword fallback")
         # Model not trained yet - use keyword fallback
         if use_llm_fallback:
             # Would call LLM here in production
+            logger.debug("[CLASSIFIER] LLM fallback is enabled but not implemented")
             pass
         # Use simple keyword check
-        return _keyword_fallback(query)
+        result = _keyword_fallback(query)
+        logger.info("[CLASSIFIER] [DECISION] Keyword fallback result: '%s'", result)
+        return result
     
     # Use the model
+    logger.debug("[CLASSIFIER] Neural model loaded, running prediction...")
     label, confidence = classifier.predict_with_confidence(query)
+    logger.info(
+        "[CLASSIFIER] Neural prediction: label='%s', confidence=%.3f",
+        label, confidence
+    )
     
     # If uncertain, use keyword fallback
     if confidence < 0.6:
-        return _keyword_fallback(query)
+        logger.info(
+            "[CLASSIFIER] [DECISION] Low confidence (%.3f < 0.6), using keyword fallback",
+            confidence
+        )
+        result = _keyword_fallback(query)
+        logger.info("[CLASSIFIER] [DECISION] Final result (keyword): '%s'", result)
+        return result
     
+    logger.info("[CLASSIFIER] [DECISION] Final result (neural): '%s' (confidence=%.3f)", label, confidence)
     return label
 
 

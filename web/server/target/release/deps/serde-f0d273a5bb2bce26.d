@@ -1,0 +1,14 @@
+/Users/ethanwheeler/Documents/Mimir/web/server/target/release/deps/serde-f0d273a5bb2bce26.d: /Users/ethanwheeler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/ethanwheeler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/ethanwheeler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/ethanwheeler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/ethanwheeler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/ethanwheeler/Documents/Mimir/web/server/target/release/build/serde-bff05568f762bd28/out/private.rs
+
+/Users/ethanwheeler/Documents/Mimir/web/server/target/release/deps/libserde-f0d273a5bb2bce26.rlib: /Users/ethanwheeler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/ethanwheeler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/ethanwheeler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/ethanwheeler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/ethanwheeler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/ethanwheeler/Documents/Mimir/web/server/target/release/build/serde-bff05568f762bd28/out/private.rs
+
+/Users/ethanwheeler/Documents/Mimir/web/server/target/release/deps/libserde-f0d273a5bb2bce26.rmeta: /Users/ethanwheeler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/ethanwheeler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/ethanwheeler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/ethanwheeler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/ethanwheeler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/ethanwheeler/Documents/Mimir/web/server/target/release/build/serde-bff05568f762bd28/out/private.rs
+
+/Users/ethanwheeler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/Users/ethanwheeler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/Users/ethanwheeler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/Users/ethanwheeler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/Users/ethanwheeler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/Users/ethanwheeler/Documents/Mimir/web/server/target/release/build/serde-bff05568f762bd28/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/ethanwheeler/Documents/Mimir/web/server/target/release/build/serde-bff05568f762bd28/out

@@ -8,12 +8,15 @@ used by both the CLI (mimir-index.py) and the MCP server.
 
 import hashlib
 import json
+import logging
 import os
 import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from mimir.utils import EXCLUDE_PATTERNS
 from mimir.utils import should_exclude as _should_exclude
@@ -256,19 +259,23 @@ def compute_file_hash(file_path: Path) -> Optional[str]:
     try:
         file_size = file_path.stat().st_size
         if file_size > MAX_FILE_SIZE_FOR_HASHING:
-            print(
-                f"   Warning: Skipping large file {file_path.name} ({file_size / 1024 / 1024:.1f}MB > 50MB)"
+            logger.warning(
+                "Skipping large file %s (%.1fMB > 50MB)",
+                file_path.name, file_size / 1024 / 1024
             )
             return None
 
+        logger.debug("Hashing file: %s (%.1fKB)", file_path, file_size / 1024)
         sha256_hash = hashlib.sha256()
         with open(file_path, "rb") as f:
             # Read in chunks to handle large files efficiently
             for chunk in iter(lambda: f.read(8192), b""):
                 sha256_hash.update(chunk)
-        return sha256_hash.hexdigest()
+        file_hash = sha256_hash.hexdigest()
+        logger.debug("Hash computed: %s -> %s...", file_path.name, file_hash[:16])
+        return file_hash
     except OSError as e:
-        print(f"   Warning: Could not hash {file_path}: {e}")
+        logger.warning("Could not hash %s: %s", file_path, e)
         return None
 
 
@@ -325,9 +332,14 @@ def detect_changed_files(
     update_state: bool = True,
     custom_exclude_patterns: Optional[list[str]] = None,
 ) -> dict:
+    logger.debug("[INDEX] [CHANGE_DETECT] Starting change detection for %d watched dirs",
+                 len(watched_dirs))
     previous_state = load_hash_state(project_root)
     previous_hashes = previous_state.get("file_hashes", {})
     previous_mtime = previous_state.get("last_mtime_check", 0)
+    logger.debug("[INDEX] [CHANGE_DETECT] Previous state: %d files hashed, mtime=%s",
+                 len(previous_hashes), 
+                 datetime.fromtimestamp(previous_mtime).isoformat() if previous_mtime > 0 else "never")
 
     # ── Quick mtime check ──────────────────────────────────────────────
     # If no watched directory has been modified since last check AND we
@@ -338,9 +350,23 @@ def detect_changed_files(
             default=0,
         )
         if current_mtime <= previous_mtime and previous_hashes:
+            logger.info(
+                "[INDEX] [CHANGE_DETECT] [DECISION] Skipping full scan - "
+                "no mtime change (current=%s <= previous=%s)",
+                datetime.fromtimestamp(current_mtime).isoformat(),
+                datetime.fromtimestamp(previous_mtime).isoformat()
+            )
             return {"added": [], "modified": [], "deleted": []}
-    except OSError:
-        pass
+        else:
+            logger.debug(
+                "[INDEX] [CHANGE_DETECT] mtime changed or no previous hashes: "
+                "current=%s, previous=%s, hashes=%d",
+                datetime.fromtimestamp(current_mtime).isoformat() if current_mtime > 0 else "none",
+                datetime.fromtimestamp(previous_mtime).isoformat() if previous_mtime > 0 else "none",
+                len(previous_hashes)
+            )
+    except OSError as e:
+        logger.warning("[INDEX] [CHANGE_DETECT] Error checking mtime: %s", e)
 
     current_hashes = {}
     all_files = []
@@ -349,10 +375,14 @@ def detect_changed_files(
     all_patterns = EXCLUDE_PATTERNS[:]
     if custom_exclude_patterns:
         all_patterns.extend(custom_exclude_patterns)
+        logger.debug("[INDEX] [CHANGE_DETECT] Using %d exclude patterns (%d custom)",
+                     len(all_patterns), len(custom_exclude_patterns))
 
     for watched_dir in watched_dirs:
         if not watched_dir.exists():
+            logger.debug("[INDEX] [CHANGE_DETECT] Watched dir not found: %s", watched_dir)
             continue
+        file_count = 0
         for file_path in watched_dir.rglob("*"):
             if file_path.is_file() and not _should_exclude(
                 file_path, custom_exclude_patterns
@@ -362,6 +392,8 @@ def detect_changed_files(
                 file_hash = compute_file_hash(file_path)
                 if file_hash is not None:
                     current_hashes[rel_path] = file_hash
+                    file_count += 1
+        logger.debug("[INDEX] [CHANGE_DETECT] Scanned %s: %d files", watched_dir, file_count)
 
     previous_files = set(previous_hashes.keys())
     current_files = set(current_hashes.keys())
@@ -373,6 +405,18 @@ def detect_changed_files(
     for path in current_files & previous_files:
         if current_hashes[path] != previous_hashes[path]:
             modified.append(Path(path))
+            logger.debug("[INDEX] [CHANGE_DETECT] Modified: %s (hash changed)", path)
+
+    logger.info(
+        "[INDEX] [CHANGE_DETECT] Results: +%d added, ~%d modified, -%d deleted",
+        len(added), len(modified), len(deleted)
+    )
+    if added:
+        logger.debug("[INDEX] [CHANGE_DETECT] Added files: %s", [str(p) for p in added[:5]])
+    if modified:
+        logger.debug("[INDEX] [CHANGE_DETECT] Modified files: %s", [str(p) for p in modified[:5]])
+    if deleted:
+        logger.debug("[INDEX] [CHANGE_DETECT] Deleted files: %s", [str(p) for p in deleted[:5]])
 
     if update_state:
         new_mtime = max(
@@ -381,6 +425,9 @@ def detect_changed_files(
         )
         state = {"file_hashes": current_hashes, "last_mtime_check": new_mtime}
         save_hash_state(project_root, state)
+        logger.debug("[INDEX] [CHANGE_DETECT] State updated (mtime=%s, %d hashes)",
+                     datetime.fromtimestamp(new_mtime).isoformat() if new_mtime > 0 else "none",
+                     len(current_hashes))
 
     return {
         "added": added,
@@ -1148,10 +1195,6 @@ def incremental_reindex(
     knowledge_dir: Path,
     verbose: bool = False,
 ) -> dict:
-    import logging
-
-    logger = logging.getLogger(__name__)
-
     result = {
         "added_count": 0,
         "modified_count": 0,
@@ -1159,8 +1202,12 @@ def incremental_reindex(
         "success": False,
     }
 
+    logger.info("[INDEX] [INCREMENTAL] Starting incremental reindex...")
+    logger.debug("[INDEX] [INCREMENTAL] Project root: %s, knowledge_dir: %s",
+                 project_root, knowledge_dir)
+
     if not (knowledge_dir / "index_store.json").exists():
-        logger.warning("No existing index found. Run full index first.")
+        logger.warning("[INDEX] [INCREMENTAL] No existing index found. Run full index first.")
         return result
 
     try:
@@ -1170,30 +1217,33 @@ def incremental_reindex(
             load_index_from_storage,
         )
     except ImportError as e:
-        logger.error(f"Missing dependency: {e}")
+        logger.error("[INDEX] [INCREMENTAL] Missing dependency: %s", e)
         return result
 
+    logger.info("[INDEX] [INCREMENTAL] Detecting changed files...")
     changes = detect_changed_files(project_root, watched_dirs, update_state=True)
     added = changes["added"]
     modified = changes["modified"]
     deleted = changes["deleted"]
 
     if len(added) + len(modified) + len(deleted) == 0:
-        logger.debug("No changes detected, skipping reindex")
+        logger.info("[INDEX] [INCREMENTAL] [DECISION] No changes detected, skipping reindex")
         result["success"] = True
         return result
 
     logger.info(
-        f"Incremental reindex: +{len(added)} modified:{len(modified)} -{len(deleted)}"
+        "[INDEX] [INCREMENTAL] Changes: +%d added, ~%d modified, -%d deleted",
+        len(added), len(modified), len(deleted)
     )
 
     try:
         storage_context = StorageContext.from_defaults(persist_dir=str(knowledge_dir))
         index = load_index_from_storage(storage_context)
+        logger.info("[INDEX] [INCREMENTAL] Index loaded, processing changes...")
 
         for file_path in added + modified:
             if _should_exclude(file_path):
-                logger.debug(f"Skipping excluded file: {file_path}")
+                logger.debug("[INDEX] [INCREMENTAL] Skipping excluded file: %s", file_path)
                 continue
             try:
                 content = file_path.read_text(encoding="utf-8")
@@ -1209,13 +1259,14 @@ def incremental_reindex(
                 _refresh_or_insert_doc(index, doc, verbose=verbose)
                 if file_path in added:
                     result["added_count"] += 1
+                    logger.debug("[INDEX] [INCREMENTAL] Added: %s", file_path)
                 else:
                     result["modified_count"] += 1
-                logger.debug(f"Indexed: {file_path}")
+                    logger.debug("[INDEX] [INCREMENTAL] Modified: %s", file_path)
             except UnicodeDecodeError:
-                logger.debug(f"Skipping binary file: {file_path}")
+                logger.debug("[INDEX] [INCREMENTAL] Skipping binary file: %s", file_path)
             except Exception as e:
-                logger.warning(f"Failed to index {file_path}: {e}")
+                logger.warning("[INDEX] [INCREMENTAL] Failed to index %s: %s", file_path, e)
 
         for file_path in deleted:
             try:
@@ -1224,17 +1275,17 @@ def incremental_reindex(
                 if doc_id in docstore.docs:
                     index.delete_ref_doc(doc_id, delete_from_docstore=True)
                     result["deleted_count"] += 1
-                    logger.debug(f"Removed from index: {file_path}")
+                    logger.debug("[INDEX] [INCREMENTAL] Removed from index: %s", file_path)
             except Exception as e:
-                logger.warning(f"Failed to remove {file_path} from index: {e}")
+                logger.warning("[INDEX] [INCREMENTAL] Failed to remove %s from index: %s", file_path, e)
 
         index.storage_context.persist(persist_dir=str(knowledge_dir))
         result["success"] = True
         result["timestamp"] = datetime.now().isoformat()
 
         logger.info(
-            f"Incremental reindex complete: "
-            f"+{result['added_count']} ~{result['modified_count']} -{result['deleted_count']}"
+            "[INDEX] [INCREMENTAL] Complete: +%d added, ~%d modified, -%d deleted",
+            result["added_count"], result["modified_count"], result["deleted_count"]
         )
 
     except Exception as e:

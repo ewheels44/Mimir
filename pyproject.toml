@@ -51,4 +51,4 @@ default_embedding_model = "text-embedding-3-large"
 default_llm_model = "o3-mini"
 default_docs_dir = "docs"
 default_knowledge_dir = ".knowledge/llamaindex"
-default_code_dirs = ["langgraph", "src", "tests", "scripts", "workflows", "web"]
+default_code_dirs = ["src", "tests", "scripts", "workflows", "web"]

@@ -18,6 +18,7 @@ Environment:
 """
 
 import json
+import logging
 import os
 import sys
 import time
@@ -40,6 +41,8 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(1, str(SCRIPT_DIR))
 
 from mimir.utils import detect_project_root
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_project_root(cli_override: str | None = None) -> Path:
@@ -78,6 +81,8 @@ def handle_init(params: dict, project_root: Path) -> dict:
     docs_dir = project_root / "docs"
     mimir_config_dir = project_root / ".mimir"
 
+    logger.info("[BRIDGE] [INIT] Initializing project: %s (force=%s)", project_root, force)
+
     # Create directories
     knowledge_dir.mkdir(parents=True, exist_ok=True)
     docs_dir.mkdir(exist_ok=True)
@@ -86,6 +91,7 @@ def handle_init(params: dict, project_root: Path) -> dict:
     # Create default config if missing or forced
     config_path = mimir_config_dir / "config.json"
     if force or not config_path.exists():
+        logger.info("[BRIDGE] [INIT] Creating default config: %s", config_path)
         default_config = {
             "docs_dir": "docs",
             "code_dirs": [],
@@ -97,6 +103,7 @@ def handle_init(params: dict, project_root: Path) -> dict:
             _json.dump(default_config, f, indent=2)
         return {"status": "ok", "message": f"Created default config: {config_path}"}
 
+    logger.info("[BRIDGE] [INIT] Config already exists: %s", config_path)
     return {"status": "ok", "message": f"Config already exists: {config_path}"}
 
 
@@ -104,13 +111,13 @@ def handle_search(params: dict, project_root: Path) -> dict:
     """Semantic search over the knowledge base."""
     from mimir.config import get_config, reset_config
 
-    reset_config()
-    config = get_config(project_root=project_root)
-
     query = params.get("query", "")
     top_k = params.get("top_k", 5)
 
+    logger.info("[BRIDGE] [SEARCH] query='%s', top_k=%d", query[:50], top_k)
+
     if not query:
+        logger.warning("[BRIDGE] [SEARCH] Missing query parameter")
         return {"error": "Missing required parameter: query"}
 
     # Initialize LlamaIndex settings
@@ -149,8 +156,10 @@ def handle_search(params: dict, project_root: Path) -> dict:
             nodes = index.as_retriever(similarity_top_k=top_k).retrieve(query)
 
         if not nodes:
+            logger.info("[BRIDGE] [SEARCH] No results found for query: '%s'", query[:50])
             return {"status": "no_results", "results": []}
 
+        logger.info("[BRIDGE] [SEARCH] Found %d results for query: '%s'", len(nodes), query[:50])
         results = []
         for node in nodes:
             source = node.metadata.get("file_name", "unknown")
@@ -161,6 +170,7 @@ def handle_search(params: dict, project_root: Path) -> dict:
         return {"status": "ok", "results": results}
 
     except Exception as e:
+        logger.error("[BRIDGE] [SEARCH] Error during search: %s", e)
         return {"error": str(e), "status": "error"}
 
 
@@ -171,7 +181,10 @@ def handle_enrich_task(params: dict, project_root: Path) -> dict:
     task = params.get("task", "")
     top_k = params.get("top_k", 5)
 
+    logger.info("[BRIDGE] [ENRICH] task='%s', top_k=%d", task[:50], top_k)
+
     if not task:
+        logger.warning("[BRIDGE] [ENRICH] Missing task parameter")
         return {"error": "Missing required parameter: task"}
 
     try:
@@ -179,15 +192,20 @@ def handle_enrich_task(params: dict, project_root: Path) -> dict:
         d = result.to_dict()
 
         if not d.get("success", False):
+            logger.warning("[BRIDGE] [ENRICH] Task routing failed for: '%s'", task[:50])
             d["status"] = "error"
         elif d.get("result_count", 0) == 0:
+            logger.info("[BRIDGE] [ENRICH] No results for task: '%s'", task[:50])
             d["status"] = "no_results"
             d["suggestion"] = "Try a broader query or check if the index has been built"
         else:
+            logger.info("[BRIDGE] [ENRICH] Found %d results for task: '%s'",
+                        d.get("result_count", 0), task[:50])
             d["status"] = "ok"
 
         return d
     except Exception as e:
+        logger.error("[BRIDGE] [ENRICH] Error: %s", e)
         return {"error": str(e), "status": "error"}
 
 
@@ -200,7 +218,10 @@ def handle_query(params: dict, project_root: Path) -> dict:
 
     question = params.get("question", "")
 
+    logger.info("[BRIDGE] [QUERY] question='%s'", question[:50])
+
     if not question:
+        logger.warning("[BRIDGE] [QUERY] Missing question parameter")
         return {"error": "Missing required parameter: question"}
 
     _setup_llama_index(config)
@@ -216,8 +237,11 @@ def handle_query(params: dict, project_root: Path) -> dict:
         index = load_index_from_storage(storage_context)
         query_engine = index.as_query_engine()
         response = query_engine.query(question)
-        return {"status": "ok", "answer": str(response)}
+        answer = str(response)
+        logger.info("[BRIDGE] [QUERY] Completed. Answer length: %d chars", len(answer))
+        return {"status": "ok", "answer": answer}
     except Exception as e:
+        logger.error("[BRIDGE] [QUERY] Error: %s", e)
         return {"error": str(e), "status": "error"}
 
 
@@ -227,12 +251,16 @@ def handle_rag_workflow(params: dict, project_root: Path) -> dict:
         from langchain_core.messages import HumanMessage
         from langgraph.workflows.rag import graph as rag_graph
     except ImportError as e:
+        logger.error("[BRIDGE] [RAG] LangGraph not available: %s", e)
         return {"error": f"LangGraph not available: {e}", "status": "import_error"}
 
     query = params.get("query", "")
     response_shape = params.get("response_shape")
 
+    logger.info("[BRIDGE] [RAG] query='%s', response_shape=%s", query[:50], response_shape)
+
     if not query:
+        logger.warning("[BRIDGE] [RAG] Missing query parameter")
         return {"error": "Missing required parameter: query"}
 
     try:
@@ -247,8 +275,10 @@ def handle_rag_workflow(params: dict, project_root: Path) -> dict:
             return result["messages"][-1].content
 
         answer = asyncio.run(_run())
+        logger.info("[BRIDGE] [RAG] Completed. Answer length: %d chars", len(answer))
         return {"status": "ok", "answer": answer}
     except Exception as e:
+        logger.error("[BRIDGE] [RAG] Error: %s", e)
         return {"error": str(e), "status": "error"}
 
 
@@ -258,11 +288,15 @@ def handle_knowledge_agent(params: dict, project_root: Path) -> dict:
         from langchain_core.messages import HumanMessage
         from langgraph.workflows.knowledge_agent import graph as agent_graph
     except ImportError as e:
+        logger.error("[BRIDGE] [AGENT] LangGraph not available: %s", e)
         return {"error": f"LangGraph not available: {e}", "status": "import_error"}
 
     question = params.get("question", "")
 
+    logger.info("[BRIDGE] [AGENT] question='%s'", question[:50])
+
     if not question:
+        logger.warning("[BRIDGE] [AGENT] Missing question parameter")
         return {"error": "Missing required parameter: question"}
 
     try:
@@ -276,8 +310,10 @@ def handle_knowledge_agent(params: dict, project_root: Path) -> dict:
             return result["messages"][-1].content
 
         answer = asyncio.run(_run())
+        logger.info("[BRIDGE] [AGENT] Completed. Answer length: %d chars", len(answer))
         return {"status": "ok", "answer": answer}
     except Exception as e:
+        logger.error("[BRIDGE] [AGENT] Error: %s", e)
         return {"error": str(e), "status": "error"}
 
 
@@ -293,6 +329,9 @@ def handle_reindex(params: dict, project_root: Path) -> dict:
 
     custom_patterns = list(config.exclude_patterns) if config.exclude_patterns else None
 
+    logger.info("[BRIDGE] [REINDEX] Starting reindex for project: %s", project_root)
+    logger.debug("[BRIDGE] [REINDEX] docs_dir=%s, code_dirs=%s", config.docs_dir, config.code_dirs)
+
     try:
         success = index_with_progress(
             project_root=config.project_root,
@@ -304,6 +343,7 @@ def handle_reindex(params: dict, project_root: Path) -> dict:
             custom_exclude_patterns=custom_patterns,
         )
         if not success:
+            logger.error("[BRIDGE] [REINDEX] Indexing failed for %s", project_root)
             return {"error": "Indexing failed", "status": "error"}
 
         # Extract knowledge graph
@@ -314,15 +354,20 @@ def handle_reindex(params: dict, project_root: Path) -> dict:
                 config.project_root, from_index=True
             )
             stats = extractor.get_stats()
-        except Exception:
+            logger.info("[BRIDGE] [REINDEX] Knowledge graph: %d relationships, %d entities",
+                        stats.get("total_relationships", 0), stats.get("total_entities", 0))
+        except Exception as e:
+            logger.warning("[BRIDGE] [REINDEX] Knowledge graph extraction failed: %s", e)
             stats = {"total_relationships": 0, "total_entities": 0}
 
+        logger.info("[BRIDGE] [REINDEX] Completed successfully for %s", project_root)
         return {
             "status": "ok",
             "message": f"Indexed {config.docs_dir}",
             "knowledge_graph": stats,
         }
     except Exception as e:
+        logger.error("[BRIDGE] [REINDEX] Error: %s", e)
         return {"error": str(e), "status": "error"}
 
 
@@ -336,11 +381,14 @@ def handle_remove_file(params: dict, project_root: Path) -> dict:
 
     file_path = params.get("file_path", "")
     if not file_path:
+        logger.warning("[BRIDGE] [REMOVE] Missing file_path parameter")
         return {"error": "Missing required parameter: file_path"}
 
     resolved = Path(file_path)
     if not resolved.is_absolute():
         resolved = project_root / resolved
+
+    logger.info("[BRIDGE] [REMOVE] Removing file: %s", resolved)
 
     try:
         success = remove_file_from_index(
@@ -349,9 +397,12 @@ def handle_remove_file(params: dict, project_root: Path) -> dict:
             verbose=False,
         )
         if success:
+            logger.info("[BRIDGE] [REMOVE] Successfully removed: %s", resolved)
             return {"status": "ok", "message": f"Removed {resolved} from index"}
+        logger.warning("[BRIDGE] [REMOVE] File not found in index: %s", resolved)
         return {"error": f"File not found in index: {resolved}", "status": "not_found"}
     except Exception as e:
+        logger.error("[BRIDGE] [REMOVE] Error: %s", e)
         return {"error": str(e), "status": "error"}
 
 
@@ -361,6 +412,8 @@ def handle_stats(params: dict, project_root: Path) -> dict:
 
     reset_config()
     config = get_config(project_root=project_root)
+
+    logger.info("[BRIDGE] [STATS] Getting stats for project: %s", project_root)
 
     knowledge_dir = config.knowledge_dir
     has_index = (knowledge_dir / "index_store.json").exists()
@@ -379,8 +432,11 @@ def handle_stats(params: dict, project_root: Path) -> dict:
 
             storage_context = StorageContext.from_defaults(persist_dir=str(knowledge_dir))
             index = load_index_from_storage(storage_context)
-            stats["document_count"] = len(index.storage_context.docstore.docs)
-        except Exception:
+            doc_count = len(index.storage_context.docstore.docs)
+            stats["document_count"] = doc_count
+            logger.info("[BRIDGE] [STATS] Index has %d documents", doc_count)
+        except Exception as e:
+            logger.warning("[BRIDGE] [STATS] Could not get document count: %s", e)
             stats["document_count"] = "unknown"
 
     total_source_files = 0
@@ -391,6 +447,8 @@ def handle_stats(params: dict, project_root: Path) -> dict:
             total_source_files += len([f for f in code_dir.rglob("*") if f.is_file()])
     stats["source_files"] = total_source_files
 
+    logger.info("[BRIDGE] [STATS] Returning stats: %d docs, %d source files",
+                stats.get("document_count", 0), total_source_files)
     return {"status": "ok", "stats": stats}
 
 
@@ -402,6 +460,8 @@ def handle_task_health(params: dict, project_root: Path) -> dict:
     reset_config()
     config = get_config(project_root=project_root)
     rc = RouterConfig.from_mimir_config(config)
+
+    logger.info("[BRIDGE] [HEALTH] Checking health for project: %s", project_root)
 
     knowledge_dir = config.knowledge_dir
     has_index = (knowledge_dir / "index_store.json").exists()
@@ -431,20 +491,26 @@ def handle_sdk_cache_get(params: dict, project_root: Path) -> dict:
     library = params.get("library", "")
     topic = params.get("topic", "general")
 
+    logger.info("[BRIDGE] [SDK] Getting cache: library=%s, topic=%s", library, topic)
+
     if not library:
+        logger.warning("[BRIDGE] [SDK] Missing library parameter")
         return {"error": "Missing required parameter: library"}
 
     try:
         cache = SDKCache(project_root)
         docs = cache.get(library, topic)
         if docs:
+            logger.info("[BRIDGE] [SDK] Found cache for %s/%s", library, topic)
             return {"status": "ok", "library": library, "topic": topic, "docs": docs}
+        logger.info("[BRIDGE] [SDK] No docs found for %s/%s", library, topic)
         return {
             "error": f"No docs found for {library}/{topic}",
             "status": "not_found",
             "suggestion": "Try a different topic or check the library name",
         }
     except Exception as e:
+        logger.error("[BRIDGE] [SDK] Error: %s", e)
         return {"error": str(e), "status": "error"}
 
 
@@ -452,11 +518,15 @@ def handle_sdk_cache_list(params: dict, project_root: Path) -> dict:
     """List cached SDK documentation."""
     from mimir.sdk_cache import SDKCache
 
+    logger.info("[BRIDGE] [SDK_LIST] Listing cached SDK docs")
+
     try:
         cache = SDKCache(project_root)
         cached = cache.list_cached()
+        logger.info("[BRIDGE] [SDK_LIST] Found %d cached items", len(cached))
         return {"status": "ok", "cached": cached}
     except Exception as e:
+        logger.error("[BRIDGE] [SDK_LIST] Error: %s", e)
         return {"error": str(e), "status": "error"}
 
 
@@ -466,8 +536,11 @@ def handle_cache_stats(params: dict, project_root: Path) -> dict:
         from mimir.query_cache import QueryCache
 
         cache = QueryCache(project_root)
-        return {"status": "ok", "cache_stats": cache.stats()}
+        stats = cache.stats()
+        logger.info("[BRIDGE] [CACHE_STATS] Cache stats: %d entries", stats.get("total_entries", 0))
+        return {"status": "ok", "cache_stats": stats}
     except Exception as e:
+        logger.error("[BRIDGE] [CACHE_STATS] Error: %s", e)
         return {"error": str(e), "status": "error"}
 
 
@@ -476,10 +549,13 @@ def handle_cache_clear(params: dict, project_root: Path) -> dict:
     try:
         from mimir.query_cache import QueryCache
 
+        logger.info("[BRIDGE] [CACHE_CLEAR] Clearing query cache")
         cache = QueryCache(project_root)
         count = cache.invalidate()
+        logger.info("[BRIDGE] [CACHE_CLEAR] Cleared %d cached entries", count)
         return {"status": "ok", "message": f"Cleared {count} cached entries"}
     except Exception as e:
+        logger.error("[BRIDGE] [CACHE_CLEAR] Error: %s", e)
         return {"error": str(e), "status": "error"}
 
 
@@ -488,10 +564,13 @@ def handle_cache_cleanup(params: dict, project_root: Path) -> dict:
     try:
         from mimir.query_cache import QueryCache
 
+        logger.info("[BRIDGE] [CACHE_CLEANUP] Cleaning up expired cache entries")
         cache = QueryCache(project_root)
         count = cache.cleanup()
+        logger.info("[BRIDGE] [CACHE_CLEANUP] Cleaned up %d expired entries", count)
         return {"status": "ok", "message": f"Cleaned up {count} expired entries"}
     except Exception as e:
+        logger.error("[BRIDGE] [CACHE_CLEANUP] Error: %s", e)
         return {"error": str(e), "status": "error"}
 
 
@@ -543,6 +622,12 @@ HANDLERS = {
 
 
 def main():
+    """Main entry point for the bridge CLI."""
+    from src.mimir.logging_config import setup_logging
+
+    setup_logging()
+    logger.info("[BRIDGE] Starting mimir_bridge.py")
+
     # Read JSON from stdin
     try:
         raw = sys.stdin.read().strip()
@@ -581,6 +666,7 @@ def main():
 
     # Execute handler
     start = time.time()
+    logger.info("[BRIDGE] Action: %s, Project: %s", action, project_root)
     try:
         result = HANDLERS[action](params, project_root)
         elapsed_ms = int((time.time() - start) * 1000)
@@ -589,9 +675,11 @@ def main():
             "elapsed_ms": elapsed_ms,
             "project_root": str(project_root),
         }
+        logger.info("[BRIDGE] Action '%s' completed in %dms", action, elapsed_ms)
         _output(result)
     except Exception as e:
         elapsed_ms = int((time.time() - start) * 1000)
+        logger.error("[BRIDGE] Action '%s' failed after %dms: %s", action, elapsed_ms, e)
         _output({
             "error": str(e),
             "status": "error",

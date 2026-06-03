@@ -87,6 +87,41 @@ def get_stats(**kwargs) -> str:
     return json.dumps(stats)
 
 
+def read_file(file_path: str) -> str:
+    """Read a file from the project.
+
+    Use this to read the contents of specific files (like README.md, config files, etc.)
+    when you need to analyze or update them. This is more reliable than searching for filenames.
+
+    Args:
+        file_path: Path relative to project root (e.g., "README.md", "docs/setup.md")
+    """
+    server = _get_server()
+    from pathlib import Path
+
+    project_root = Path(server.project_root)
+    full_path = project_root / file_path
+
+    # Security check: ensure the file is within the project
+    try:
+        full_path = full_path.resolve()
+        if not str(full_path).startswith(str(project_root.resolve())):
+            return f"Error: Access denied. File must be within the project directory."
+    except Exception:
+        return f"Error: Invalid file path."
+
+    if not full_path.exists():
+        return f"Error: File not found: {file_path}"
+
+    try:
+        content = full_path.read_text(encoding="utf-8")
+        return f"[File: {file_path}]\n\n{content}"
+    except UnicodeDecodeError:
+        return f"Error: File appears to be binary: {file_path}"
+    except Exception as e:
+        return f"Error reading file: {e}"
+
+
 # ── Tool registry ───────────────────────────────────────────────────────────
 
 
@@ -107,5 +142,10 @@ def get_tools() -> list:
             name="stats",
             func=get_stats,
             description="Get knowledge base statistics.",
+        ),
+        StructuredTool.from_function(
+            name="read_file",
+            func=read_file,
+            description="Read a file from the project. Use this to read README.md, config files, or any specific file. Args: file_path (relative to project root).",
         ),
     ]

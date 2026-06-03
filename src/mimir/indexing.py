@@ -832,10 +832,13 @@ def add_file_to_index(
         True if successful, False otherwise
     """
     try:
+        import os
         from llama_index.core import (
+            Settings,
             StorageContext,
             load_index_from_storage,
         )
+        from llama_index.embeddings.openai import OpenAIEmbedding
     except ImportError as e:
         print(f"❌ Missing dependency: {e}")
         return False
@@ -847,6 +850,17 @@ def add_file_to_index(
 
     if verbose:
         print(f"\n📄 Adding file: {source_file}")
+
+    # Load config and configure embedding model (critical for OpenRouter)
+    from mimir.config import MimirConfig
+    config = MimirConfig.load(project_root=project_root)
+
+    embed_kwargs = {"model": config.embedding_model, "api_key": config.api_key}
+    if config.api_base:
+        embed_kwargs["api_base"] = config.api_base
+        os.environ["OPENAI_BASE_URL"] = config.api_base
+    os.environ["OPENAI_API_KEY"] = config.api_key
+    Settings.embed_model = OpenAIEmbedding(**embed_kwargs)
 
     storage_context = StorageContext.from_defaults(persist_dir=str(knowledge_dir))
     index = load_index_from_storage(storage_context)

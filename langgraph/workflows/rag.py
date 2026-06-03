@@ -37,12 +37,27 @@ async def retrieve(state: AgentState) -> AgentState:
         logger.debug("[RAG] Using search tool")
         results = await search_tool.ainvoke({"query": last_message, "top_k": 5})
         context_items = []
+        # Handle both list return (MCP dicts) and string return (formatted text)
         if isinstance(results, list):
             for item in results:
                 if isinstance(item, dict) and "text" in item:
                     context_items.append(item["text"])
                 else:
                     context_items.append(str(item))
+        elif isinstance(results, str):
+            # Parse formatted string: "[1] source (score: 0.123)..."
+            # Split by result markers and extract text
+            import re
+            parts = re.split(r'(?=\[\d+\]\s)', results)
+            for part in parts:
+                part = part.strip()
+                if part and not part.startswith("[Knowledge Graph"):
+                    # Extract text after the score line
+                    lines = part.split("\n", 1)
+                    if len(lines) > 1:
+                        context_items.append(lines[1].strip())
+                    else:
+                        context_items.append(part)
         else:
             context_items.append(str(results))
         logger.info("[RAG] Retrieved %d context items", len(context_items))

@@ -1,14 +1,13 @@
 {
   "docs_dir": "docs",
   "code_dirs": [
-    "RavenEye/docs",
-    "RavenEye/hardware/esp32-capture/src",
-    "RavenEye/hardware/esp32-cam/src",
-    "RavenEye/garmin-widget/source",
-    "marketing-site/src",
-    "scripts"
+    "scripts",
+    "src/mimir",
+    "docs",
+    "langgraph/workflows",
+    "web"
   ],
-  "knowledge_dir": "/Users/ethanwheeler/Documents/Project_Rouge_Sailing/.knowledge/llamaindex",
+  "knowledge_dir": ".knowledge/llamaindex",
   "embedding_model": "text-embedding-3-small",
   "llm_model": "gpt-4.1-mini",
   "exclude_patterns": [
@@ -16,10 +15,18 @@
     "*.egg-info/*",
     "node_modules",
     "node_modules/*",
+    ".next",
+    ".next/*",
+    "build",
+    "build/*",
+    "dist",
+    "dist/*",
     ".git",
     "__pycache__",
-    "*.pyc",
-    "dist",
-    "build"
+    "*.pyc"
+  ],
+  "files": [
+    "README.md",
+    "mimir_bridge.py"
   ]
 }

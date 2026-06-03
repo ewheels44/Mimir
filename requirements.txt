@@ -6,6 +6,7 @@ mcp>=1.0.0
 # LlamaIndex
 llama-index>=0.11.0
 llama-index-embeddings-openai>=0.2.0
+llama-index-retrievers-bm25>=0.1.0
 
 # LangGraph
 langgraph>=0.2.0

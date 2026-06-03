@@ -42,7 +42,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from mimir.utils import detect_project_root
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("mimir_bridge")
 
 
 def resolve_project_root(cli_override: str | None = None) -> Path:

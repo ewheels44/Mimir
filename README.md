@@ -75,6 +75,60 @@ bash uninstall.sh --purge      # Remove all data (knowledge bases, etc.)
 
 Mimir combines three layers to give AI agents persistent, intelligent context:
 
+### Entry Points
+
+Mimir provides two ways to interact with the system:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Entry Points                                           │
+│  mimir_bridge.py (JSON stdin/stdout) │ langgraph/cli.py│
+└──────────────────────┬──────────────────────────────────┘
+                       │ both use
+                       ▼
+┌─────────────────────────────────────────────────────────┐
+│  LangGraph Workflows (langgraph/workflows/)             │
+│  • rag.py → RAG workflow                               │
+│  • knowledge_agent.py → Multi-step agentic research     │
+│  • call_prep.py → Customer call briefing               │
+│  • session_diff.py → Session comparison                │
+└──────────────────────┬──────────────────────────────────┘
+                       │
+                       ▼
+              (see Hybrid RAG below)
+```
+
+**`mimir_bridge.py`** - Thin JSON bridge for ecode/jcode integration:
+- Reads JSON from stdin, outputs JSON to stdout
+- Used by ecode/jcode editor integrations
+- Actions: `search`, `query`, `rag_workflow`, `knowledge_agent`, `reindex`, `stats`, `enrich_task`, `task_health`, `sdk_cache_get/list`, `cache_stats/clear/cleanup`
+- No MCP protocol, no JSON-RPC, no process lifecycle management
+
+**`langgraph/cli.py`** - Standalone CLI for terminal usage:
+- Subcommands: `rag`, `agent`, `prep`, `session-diff`, `test`, `metrics`
+- Useful for development, testing, and unique commands not in the bridge
+- Direct terminal output (not JSON)
+
+### Bridge vs CLI Comparison
+
+| Feature | `mimir_bridge.py` | `langgraph/cli.py` |
+|---------|---------------------|---------------------|
+| **Communication** | JSON stdin/stdout | Terminal CLI arguments |
+| **Used by** | ecode/jcode (automatic) | Developers (manual) |
+| **Output format** | Structured JSON | Human-readable text |
+| **`rag` workflow** | `action="rag_workflow"` | `python langgraph/cli.py rag "query"` |
+| **`agent` workflow** | `action="knowledge_agent"` | `python langgraph/cli.py agent "query"` |
+| **`prep` workflow** | ❌ Not available | ✅ `python langgraph/cli.py prep "topic"` |
+| **`session-diff`** | ❌ Not available | ✅ `python langgraph/cli.py session-diff` |
+| **`test` command** | ❌ Not available | ✅ `python langgraph/cli.py test` |
+| **`metrics` command** | ❌ Not available | ✅ `python langgraph/cli.py metrics` |
+| **Query router** | ✅ `action="enrich_task"` | ❌ Not available |
+| **Index management** | ✅ `action="reindex"` | ❌ Not available |
+| **SDK cache** | ✅ `action="sdk_cache_get"` | ❌ Not available |
+| **Health checks** | ✅ `action="stats"`, `action="task_health"` | ❌ Not available |
+
+**Summary**: Use `mimir_bridge.py` for ecode/jcode integration (automatic). Use `langgraph/cli.py` for terminal-based testing, or if you need `prep`, `session-diff`, `test`, or `metrics` commands.
+
 ### Hybrid RAG (Retrieval-Augmented Generation)
 
 Mimir uses **hybrid retrieval** (vector + sparse) with LangGraph orchestration:
@@ -202,29 +256,69 @@ Code → AST + tree-sitter → Relationships → Rust Graph Server (Weighted Dij
 Mimir is now **embedded directly into ecode**, a fork of Jcode. This means:
 - No MCP server setup required
 - Mimir tools are native to ecode
-- Direct function calls instead of MCP transport
+- ecode calls `mimir_bridge.py` via JSON stdin/stdout (not HTTP/MCP transport)
 - Simplified architecture with better performance
+
+### How It Works
+
+```
+ecode agent needs context
+    │
+    ▼
+ecode invokes mimir_bridge.py
+    │
+    ▼ (JSON on stdin)
+{"action": "search", "params": {"query": "auth patterns"}}
+    │
+    ▼ (JSON on stdout)
+{"status": "ok", "results": [...]}
+    │
+    ▼
+ecode agent receives structured data
+```
 
 ### Using Mimir Tools in ecode
 
-Once your project is indexed, ecode agents can call Mimir tools directly:
+Once your project is indexed, ecode agents call `mimir_bridge.py` directly:
 
 ```
-# In ecode conversation:
-mimir(action="enrich_task", params={"task": "Implement JWT auth"})
-mimir(action="search", params={"query": "database connection pooling"})
-mimir(action="query", params={"question": "How does the caching layer work?"})
-mimir(action="graph_query", params={"source": "auth middleware", "target": "database pool"})
-mimir(action="sdk_cache_get", params={"library": "stripe", "topic": "checkout sessions"})
+# In ecode conversation, agents automatically use the bridge:
+# (ecode handles this internally via JSON bridge calls)
+
+# Example of what ecode sends to the bridge:
+echo '{"action":"enrich_task","params":{"task":"Implement JWT auth"}}' | python3 mimir_bridge.py
+echo '{"action":"search","params":{"query":"database connection pooling"}}' | python3 mimir_bridge.py
+echo '{"action":"rag_workflow","params":{"query":"How does the caching layer work?"}}' | python3 mimir_bridge.py
 ```
 
 ### ecode-Specific Features
 
 Since Mimir is embedded in ecode, you get:
-- **Native tool access** — No MCP bridge overhead
-- **Direct function calls** — `mimir(action=..., params=...)` instead of HTTP/MCP transport
+- **JSON bridge communication** — ecode sends JSON to `mimir_bridge.py` via stdin, receives JSON on stdout
+- **No MCP overhead** — Direct process invocation instead of MCP transport
 - **Tighter integration** — ecode's agent system has direct access to Mimir's internals
-- **Better performance** — No serialization/deserialization overhead
+- **Better performance** — No serialization/deserialization overhead beyond JSON
+
+### Available Bridge Actions
+
+The `mimir_bridge.py` supports these actions via JSON:
+
+| Action | Purpose | When to Use |
+|--------|---------|-------------|
+| `search` | Semantic search (vector + BM25) | Finding files by concept |
+| `query` | Natural language Q&A | Understanding architecture |
+| `rag_workflow` | Structured reasoning (2-step) | Complex analysis with sources |
+| `knowledge_agent` | Agentic exploration | Deep research tasks |
+| `enrich_task` | Project context for tasks | Before executing any task |
+| `reindex` | Rebuild index | After major changes |
+| `remove_file` | Remove file from index | When files are deleted |
+| `stats` | Index statistics | Checking coverage |
+| `task_health` | Check query router + config | Before depending on enrich_task |
+| `sdk_cache_get` | Get SDK docs | Fetching library documentation |
+| `sdk_cache_list` | List cached SDKs | Checking what's cached |
+| `cache_stats` | Query cache statistics | Monitoring cache usage |
+| `cache_clear` | Clear query cache | Reset cached results |
+| `cache_cleanup` | Remove expired cache | Maintenance |
 
 ---
 
@@ -788,13 +882,22 @@ Agent: [Calls mimir with action="rag_workflow"] → Structured analysis with sou
 
 ### How It Works
 
-Since Mimir is embedded in ecode, the integration is straightforward:
+Since Mimir is embedded in ecode, the integration uses JSON bridge communication:
 
-```python
-# ecode calls Mimir tools directly (no MCP overhead)
-mimir(action="search", params={"query": "authentication patterns"})
-mimir(action="enrich_task", params={"task": "Implement JWT auth"})
-mimir(action="graph_query", params={"source": "auth.py", "target": "database.py"})
+```bash
+# ecode sends JSON to mimir_bridge.py via stdin:
+echo '{"action":"search","params":{"query":"authentication patterns"}}' | python3 mimir_bridge.py
+
+# mimir_bridge.py returns JSON on stdout:
+# {"status": "ok", "results": [{"source": "auth.py", "score": 0.95, "text": "..."}]}
+
+# ecode agents use these actions:
+# - search: Semantic search
+# - enrich_task: Get project context
+# - rag_workflow: Structured analysis
+# - knowledge_agent: Deep research
+# - graph_query: Find code relationships
+# - sdk_cache_get: Fetch SDK docs
 ```
 
 ---
@@ -807,7 +910,8 @@ Here's a complete working setup with ecode:
 
 ```
 /path/to/Mimir/           # Central installation
-├── mimir                   # Unified CLI (all commands)
+├── mimir_bridge.py           # JSON bridge for ecode/jcode integration
+├── mimir                      # Unified CLI (all commands)
 ├── src/mimir/               # Core modules
 │   ├── config.py                 # Unified configuration (MimirConfig)
 │   ├── utils.py                  # Shared utilities
@@ -837,7 +941,7 @@ Here's a complete working setup with ecode:
 │   └── install-git-hooks.sh      # Hook installer
 └── web/                     # Rust web server + React UI
     ├── server/                    # Rust graph server
-    └── sidecar/                   # Python sidecar for ecode integration
+    └── client/                    # React UI
 
 ~/Projects/AnyProject/       # Any project using Mimir
 ├── docs/
@@ -923,9 +1027,23 @@ Shared indices are configured in `.mimir/config.json` (not env vars):
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Entry Points                                           │
-│  mimir │ langgraph/cli.py │ ecode (embedded)    │
+│  ┌──────────────────┐  ┌──────────────────────────┐   │
+│  │ mimir_bridge.py  │  │ langgraph/cli.py         │   │
+│  │ (JSON stdin/stdout│  │ (Terminal CLI            │   │
+│  │  for ecode/jcode)│  │  rag, agent, prep, diff)│   │
+│  └─────────┬────────┘  └───────────┬──────────────┘   │
+│            │ all use              │                    │
+└────────────┼──────────────────────┼────────────────────┘
+             │                      │
+             ▼                      ▼
+┌─────────────────────────────────────────────────────────┐
+│  LangGraph Workflows (langgraph/workflows/)             │
+│  • rag.py → RAG workflow (2-step)                      │
+│  • knowledge_agent.py → Multi-step agentic research     │
+│  • call_prep.py → Customer call briefing               │
+│  • session_diff.py → Session comparison                │
 └──────────────────────┬──────────────────────────────────┘
-                       │ all use
+                       │
                        ▼
 ┌─────────────────────────────────────────────────────────┐
 │  MimirConfig (src/mimir/config.py)                      │
@@ -936,13 +1054,14 @@ Shared indices are configured in `.mimir/config.json` (not env vars):
            ┌───────────┼───────────┐
            ▼           ▼           ▼
     ┌────────────┐ ┌────────┐ ┌──────────┐
-    │ ecode      │ │Query   │ │ LangGraph│
-    │ (embedded) │ │Router  │ │(RAG,     │
-    │            │ │(standalone)│ │ agent)   │
-    └─────┬──────┘ └───┬────┘ └────┬─────┘
-          │            │           │
-          └────────────┼───────────┘
-                       ▼
+    │ Query      │ │ecode   │ │LlamaIndex│
+    │ Router     │ │(embedded│ │(Vector   │
+    │(standalone)│ │ via     │ │ Store)   │
+    │            │ │bridge)  │ │          │
+    └─────┬─────┘ └────────┘ └────┬─────┘
+          │                       │
+          └───────────┬───────────┘
+                      ▼
               ┌─────────────────┐
               │   LlamaIndex    │
               │  (Vector Store) │
@@ -957,8 +1076,9 @@ Shared indices are configured in `.mimir/config.json` (not env vars):
 ```
 
 **Key Components**:
+- **mimir_bridge.py**: JSON bridge for ecode/jcode — stdin/stdout communication, no MCP overhead
+- **langgraph/cli.py**: Standalone CLI for terminal usage — subcommands for rag, agent, prep, diff, test, metrics
 - **MimirConfig**: Unified configuration — one class, all settings, all entry points
-- **ecode Integration**: Mimir is embedded directly in ecode (no MCP server needed)
 - **Query Router** (`src/mimir/query_router.py`): Standalone routing — classification, graph/vector search, circuit breaker, caching, content filtering
 - **Rust Web Server**: Graph query engine with weighted Dijkstra path-finding, serves the React UI
 - **LlamaIndex**: Document ingestion, chunking, embeddings, vector storage
@@ -1142,9 +1262,9 @@ Notable changes in the current version:
 | Change | Impact |
 |--------|--------|
 | **Embedded in ecode** | Mimir is now embedded directly in ecode (jcode fork) — no MCP server needed |
-| **CLI renamed** | `mimir.py` → `mimir` to clarify CLI-only role |
+| **JSON bridge** | `mimir_bridge.py` provides stdin/stdout JSON communication for ecode/jcode |
+| **CLI tools** | `mimir` CLI for users + `langgraph/cli.py` for terminal workflow testing |
 | **Removed MCP dependencies** | Dropped `langchain-mcp-adapters` and MCP server code |
-| **Direct function calls** | ecode calls Mimir tools directly instead of via MCP transport |
 | **Simplified architecture** | Better performance, less overhead, tighter integration |
 | **LangGraph token tracking** | `TokenUsageCallbackHandler` captures actual token usage from API calls in all workflows |
 | **Batch indexing** | Documents indexed in batches to reduce API calls and memory usage |
